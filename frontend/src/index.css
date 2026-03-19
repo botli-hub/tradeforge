@@ -126,6 +126,30 @@ h2 {
   overflow: hidden;
 }
 
+.chart-warning {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 183, 77, 0.12);
+  border: 1px solid rgba(255, 183, 77, 0.35);
+  color: #ffd38a;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.error-boundary-card {
+  border: 1px solid rgba(233, 69, 96, 0.35);
+}
+
+.error-boundary-message {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(233, 69, 96, 0.12);
+  border: 1px solid rgba(233, 69, 96, 0.25);
+  color: #ffc2cc;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
 .chart-controls {
   display: flex;
   gap: 8px;
@@ -249,6 +273,22 @@ h2 {
   padding: 4px 10px;
   border-radius: 4px;
   font-size: 12px;
+}
+
+.refresh-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tag-select {
+  background: rgba(15, 52, 96, 0.9);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  min-width: 78px;
 }
 
 .tag.draft {

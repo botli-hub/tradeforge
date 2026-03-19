@@ -20,6 +20,7 @@ export interface AppSettings {
   tradingPort: number
   defaultOrderQuantity: number
   confirmSignals: boolean
+  refreshIntervalSec: number
 }
 
 export interface TradingStatus {
@@ -50,6 +51,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   tradingPort: 11111,
   defaultOrderQuantity: 100,
   confirmSignals: true,
+  refreshIntervalSec: 0,
 }
 
 function parseJson<T>(text: string): T | null {

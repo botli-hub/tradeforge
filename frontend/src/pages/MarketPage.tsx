@@ -16,6 +16,7 @@ import {
   getTradingStatus,
   placeOrder,
   previewHistorySource,
+  saveAppSettings,
   searchStocks,
   setHistorySubscriptionEnabled,
   subscribeSettings,
@@ -50,6 +51,7 @@ export default function MarketPage() {
   const [signalText, setSignalText] = useState('')
   const [lastSignalAt, setLastSignalAt] = useState('')
   const [lastRefreshAt, setLastRefreshAt] = useState('')
+  const [chartWarning, setChartWarning] = useState('')
 
   const chartContainerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -63,7 +65,22 @@ export default function MarketPage() {
     return 'US'
   }
 
-  const pollMs = inferMarket(symbol) === 'US' ? 10000 : 3000
+  const refreshOptions = [
+    { label: '手动', value: 0 },
+    { label: '10s', value: 10 },
+    { label: '30s', value: 30 },
+    { label: '1分钟', value: 60 },
+    { label: '5分钟', value: 300 },
+  ]
+
+  const pollMs = Math.max(0, Number(settings.refreshIntervalSec || 0) * 1000)
+
+  const toChartTime = (value?: string) => {
+    if (!value) return null
+    const ms = new Date(value).getTime()
+    if (Number.isNaN(ms)) return null
+    return Math.floor(ms / 1000) as any
+  }
 
   useEffect(() => {
     const unsubscribe = subscribeSettings(next => {
@@ -96,6 +113,10 @@ export default function MarketPage() {
   }, [selectedStrategyId])
 
   useEffect(() => {
+    if (!pollMs) {
+      return
+    }
+
     const timer = window.setInterval(() => {
       void fetchMarketData(true)
       void refreshTradingPanels(true)
@@ -106,45 +127,75 @@ export default function MarketPage() {
   useEffect(() => {
     if (!chartContainerRef.current) return
 
-    chartRef.current = createChart(chartContainerRef.current, {
-      layout: {
-        background: { color: '#0f3460' },
-        textColor: '#888',
-      },
-      grid: {
-        vertLines: { color: '#1a1a2e' },
-        horzLines: { color: '#1a1a2e' },
-      },
-      width: chartContainerRef.current.clientWidth,
-      height: 360,
-    })
+    try {
+      chartRef.current = createChart(chartContainerRef.current, {
+        layout: {
+          background: { color: '#0f3460' },
+          textColor: '#888',
+        },
+        grid: {
+          vertLines: { color: '#1a1a2e' },
+          horzLines: { color: '#1a1a2e' },
+        },
+        width: chartContainerRef.current.clientWidth,
+        height: 360,
+      })
 
-    candleSeriesRef.current = chartRef.current.addCandlestickSeries({
-      upColor: '#4cc9f0',
-      downColor: '#e94560',
-      borderUpColor: '#4cc9f0',
-      borderDownColor: '#e94560',
-      wickUpColor: '#4cc9f0',
-      wickDownColor: '#e94560',
-    })
+      candleSeriesRef.current = chartRef.current.addCandlestickSeries({
+        upColor: '#4cc9f0',
+        downColor: '#e94560',
+        borderUpColor: '#4cc9f0',
+        borderDownColor: '#e94560',
+        wickUpColor: '#4cc9f0',
+        wickDownColor: '#e94560',
+      })
+      setChartWarning('')
+    } catch (e: any) {
+      setChartWarning(e?.message || '图表初始化失败，已降级为数据模式')
+      chartRef.current = null
+      candleSeriesRef.current = null
+    }
 
     return () => {
-      chartRef.current?.remove()
+      try {
+        chartRef.current?.remove()
+      } catch {
+        // noop
+      }
     }
   }, [])
 
   useEffect(() => {
     if (!candleSeriesRef.current || klines.length === 0) return
 
-    const data: CandlestickData[] = klines.map(k => ({
-      time: k.timestamp.split('T')[0] as any,
-      open: k.open,
-      high: k.high,
-      low: k.low,
-      close: k.close,
-    }))
+    try {
+      const deduped = new Map<any, CandlestickData>()
+      klines.forEach(k => {
+        const ts = toChartTime(k.timestamp)
+        if (ts === null) return
+        deduped.set(ts, {
+          time: ts,
+          open: Number(k.open),
+          high: Number(k.high),
+          low: Number(k.low),
+          close: Number(k.close),
+        })
+      })
 
-    candleSeriesRef.current.setData(data)
+      const data = Array.from(deduped.entries())
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map(([, item]) => item)
+
+      if (data.length === 0) {
+        setChartWarning('当前没有可渲染的图表数据，已保留文字数据展示')
+        return
+      }
+
+      candleSeriesRef.current.setData(data)
+      setChartWarning('')
+    } catch (e: any) {
+      setChartWarning(e?.message || '图表渲染失败，已降级为文字数据展示')
+    }
   }, [klines])
 
   async function loadStrategiesList() {
@@ -246,42 +297,65 @@ export default function MarketPage() {
       ])
 
       let latestPrice = 0
-      let errorMessages: string[] = []
+      const errorMessages: string[] = []
+      let latestKlines = klines
 
       if (klineRes.status === 'fulfilled') {
-        setKlines(klineRes.value)
-        latestPrice = Number(klineRes.value[klineRes.value.length - 1]?.close || 0)
-      } else if (!silent) {
+        latestKlines = Array.isArray(klineRes.value) ? klineRes.value : []
+        setKlines(latestKlines)
+        latestPrice = Number(latestKlines[latestKlines.length - 1]?.close || 0)
+      } else {
         errorMessages.push(`K线失败: ${klineRes.reason?.message || 'unknown error'}`)
       }
 
       if (quoteRes.status === 'fulfilled') {
         setQuote(quoteRes.value)
         latestPrice = Number(quoteRes.value?.price || latestPrice)
-      } else if (!silent) {
-        errorMessages.push(`报价失败: ${quoteRes.reason?.message || 'unknown error'}`)
+      } else {
+        errorMessages.push(`实时行情失败: ${quoteRes.reason?.message || 'unknown error'}`)
+
+        const fallbackBar = latestKlines[latestKlines.length - 1]
+        if (fallbackBar) {
+          setQuote(prev => ({
+            symbol,
+            name: prev?.name || symbol,
+            price: Number(fallbackBar.close || prev?.price || 0),
+            change: prev?.change || 0,
+            change_pct: prev?.change_pct || 0,
+            volume: Number(fallbackBar.volume || prev?.volume || 0),
+            amount: prev?.amount || 0,
+            bid: Number(fallbackBar.close || prev?.bid || 0),
+            ask: Number(fallbackBar.close || prev?.ask || 0),
+            high: Number(fallbackBar.high || prev?.high || 0),
+            low: Number(fallbackBar.low || prev?.low || 0),
+            open: Number(fallbackBar.open || prev?.open || 0),
+            pre_close: Number(prev?.pre_close || fallbackBar.close || 0),
+            adapter: fallbackBar.adapter || fallbackBar.source || prev?.adapter || 'local',
+            storage: 'local-fallback',
+          }))
+          if (!silent) {
+            setNotice('实时行情获取失败，已自动降级到本地最近K线数据展示')
+          }
+        }
       }
 
       if (latestPrice > 0) {
         setOrderPrice(latestPrice)
       }
 
-      if (klineRes.status === 'rejected' && quoteRes.status === 'rejected' && !silent) {
-        setKlines([])
-        setQuote(null)
-      }
-
-      if (errorMessages.length > 0 && !silent) {
+      if (klineRes.status === 'rejected' && quoteRes.status === 'rejected') {
+        if (!silent) {
+          setError(`${errorMessages.join(' | ')}，已保留当前页面已有数据`)
+        }
+      } else if (errorMessages.length > 0 && !silent) {
         setError(errorMessages.join(' | '))
       }
 
       setLastRefreshAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
       await fetchStrategySignal(true)
     } catch (e: any) {
-      setError(e.message || '行情加载失败')
       if (!silent) {
-        setKlines([])
-        setQuote(null)
+        setError(`${e.message || '行情加载失败'}，已保留当前页面已有数据`)
       }
     } finally {
       if (!silent) {
@@ -298,6 +372,11 @@ export default function MarketPage() {
     } catch (e: any) {
       setError(e.message || '搜索失败')
     }
+  }
+
+  function handleRefreshIntervalChange(value: number) {
+    const next = saveAppSettings({ refreshIntervalSec: value })
+    setSettings(next)
   }
 
   async function handleSubscribeCurrent() {
@@ -407,7 +486,20 @@ export default function MarketPage() {
           <span className={`tag ${tradingConnected ? 'ready' : 'draft'}`}>
             交易：{tradingConnected ? `${adapterLabel} / ${envLabel}` : '未连接'}
           </span>
-          <span className="tag ready">实时刷新：{pollMs / 1000}s</span>
+          <span className="tag ready refresh-tag">
+            <span>实时刷新</span>
+            <select
+              className="tag-select"
+              value={String(settings.refreshIntervalSec || 0)}
+              onChange={e => handleRefreshIntervalChange(Number(e.target.value))}
+            >
+              {refreshOptions.map(option => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </span>
           {lastRefreshAt && <span className="tag draft">最近刷新：{lastRefreshAt}</span>}
         </div>
       </div>
@@ -533,6 +625,12 @@ export default function MarketPage() {
         </div>
 
         <div ref={chartContainerRef} className="chart-area" />
+
+        {chartWarning && (
+          <div className="chart-warning">
+            图表提示：{chartWarning}
+          </div>
+        )}
 
         <div className="data-source-strip">
           <span>当前报价：<strong>{quoteSource}</strong></span>

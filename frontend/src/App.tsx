@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import PageErrorBoundary from './components/PageErrorBoundary'
 import MarketPage from './pages/MarketPage'
 import StrategyPage from './pages/StrategyPage'
 import BacktestPage from './pages/BacktestPage'
@@ -53,7 +54,9 @@ function App() {
         </div>
       </div>
 
-      {pages[currentPage]}
+      <PageErrorBoundary resetKey={currentPage} pageName={currentPage}>
+        {pages[currentPage]}
+      </PageErrorBoundary>
     </div>
   )
 }
