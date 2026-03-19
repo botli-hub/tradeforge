@@ -145,6 +145,39 @@ npm run build
 
 ---
 
+## 健康守护 / 自愈重启
+
+当你怀疑出现“端口还在，但服务已经卡死”的情况，可以直接运行：
+
+```bash
+cd /Users/alibot/.openclaw/workspace/forge/projects/tradeforge
+python3 scripts/health_guard.py ensure
+```
+
+常用命令：
+
+```bash
+# 查看当前健康状态
+python3 scripts/health_guard.py status
+
+# 发现异常时自动重启前后端
+python3 scripts/health_guard.py ensure
+
+# 强制重启前后端
+python3 scripts/health_guard.py restart
+```
+
+脚本会真正探活这些接口，而不是只看端口：
+- `/health`
+- `/api/strategies`
+- `/api/history/subscriptions`
+
+日志位置：
+- `./.runtime/backend-dev.log`
+- `./.runtime/frontend-dev.log`
+
+---
+
 ## 配置原则
 
 ### 敏感配置只从本地读取
