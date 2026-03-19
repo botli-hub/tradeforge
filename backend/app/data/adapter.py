@@ -1,12 +1,12 @@
 """行情适配器 - Futu / Finnhub / Mock"""
 import json
-import os
 import urllib.parse
 import urllib.request
-from pathlib import Path
 from typing import List, Protocol, Optional
 from dataclasses import dataclass
 from datetime import datetime
+
+from app.core.config import get_settings
 
 
 @dataclass
@@ -331,8 +331,8 @@ class FinnhubAdapter:
     """Finnhub 行情适配器（美股/ETF 优先）"""
 
     def __init__(self, api_key: Optional[str] = None, base_url: str = "https://finnhub.io/api/v1", **kwargs):
-        _load_env_file_once()
-        self.api_key = api_key or os.getenv("FINNHUB_API_KEY")
+        settings = get_settings()
+        self.api_key = api_key or settings["finnhub_api_key"]
         self.base_url = base_url.rstrip('/')
         self._connected = False
         self._quote_callback = None

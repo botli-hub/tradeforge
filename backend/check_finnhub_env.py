@@ -1,2 +1,3 @@
-import os
-print(bool(os.getenv('FINNHUB_API_KEY')))
+from app.core.config import get_settings
+
+print(bool(get_settings()["finnhub_api_key"]))

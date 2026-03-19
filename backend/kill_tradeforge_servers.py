@@ -1,8 +1,9 @@
 import os
 import signal
 import subprocess
+from pathlib import Path
 
-TARGET = '/Users/alibot/.openclaw/workspace/forge/projects/tradeforge/backend'
+TARGET = str(Path(__file__).resolve().parent)
 SELF = os.getpid()
 
 result = subprocess.run(['ps', '-ax', '-o', 'pid=,command='], capture_output=True, text=True, check=True)
