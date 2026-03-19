@@ -316,7 +316,7 @@ export default function MarketPage() {
 
         const fallbackBar = latestKlines[latestKlines.length - 1]
         if (fallbackBar) {
-          setQuote(prev => ({
+          setQuote((prev: any) => ({
             symbol,
             name: prev?.name || symbol,
             price: Number(fallbackBar.close || prev?.price || 0),
