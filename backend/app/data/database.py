@@ -180,10 +180,26 @@ def init_db():
         )
     """)
 
+    # 风险事件记录
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS risk_events (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            order_value REAL NOT NULL,
+            risk_score REAL NOT NULL,
+            details TEXT,
+            blocked INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_kline_symbol_tf_ts ON kline_bars(symbol, timeframe, ts)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_kline_jobs_status ON kline_backfill_jobs(status, created_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_enabled ON data_subscriptions(enabled, updated_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_target ON history_scheduler_runs(target_date, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_events_symbol ON risk_events(symbol, created_at)")
 
     conn.commit()
     conn.close()

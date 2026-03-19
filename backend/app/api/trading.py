@@ -70,11 +70,35 @@ async def get_status():
 
 @router.post("/order")
 async def place_order(req: OrderRequest):
-    """下单"""
+    """下单（带风控检查）"""
     global _trading_adapter
     
     if _trading_adapter is None or not _trading_adapter.is_connected():
         raise HTTPException(status_code=400, detail="未连接交易账户")
+    
+    # 风控检查
+    from app.core.risk_engine import check_order_risk
+    risk_result = check_order_risk(
+        symbol=req.symbol,
+        side=req.side,
+        quantity=req.quantity,
+        price=req.price,
+        order_type=req.order_type,
+    )
+    
+    # 如果被完全阻止，返回错误
+    if not risk_result.allowed and risk_result.result == "BLOCK":
+        return {
+            "order_id": None,
+            "status": "rejected",
+            "risk_check": risk_result.to_dict(),
+            "message": f"风控拦截: {risk_result.reason}",
+        }
+    
+    # 如果有警告，记录但继续执行
+    warning_msg = ""
+    if risk_result.warnings:
+        warning_msg = f" (警告: {', '.join(risk_result.warnings)})"
     
     side = OrderSide.BUY if req.side == "BUY" else OrderSide.SELL
     order_type = OrderType.MARKET if req.order_type == "MARKET" else OrderType.LIMIT
