@@ -22,7 +22,8 @@ import {
 } from '../services/api'
 
 export default function MarketPage() {
-  const [settings, setSettings] = useState<AppSettings>(getAppSettings())
+  const initialSettings = getAppSettings()
+  const [settings, setSettings] = useState<AppSettings>(initialSettings)
   const [symbol, setSymbol] = useState('AAPL')
   const [timeframe, setTimeframe] = useState('1d')
   const [klines, setKlines] = useState<any[]>([])
@@ -43,7 +44,7 @@ export default function MarketPage() {
   const [showModal, setShowModal] = useState(false)
   const [signalSide, setSignalSide] = useState<'BUY' | 'SELL'>('BUY')
   const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET'>('LIMIT')
-  const [orderQuantity, setOrderQuantity] = useState(settings.defaultOrderQuantity)
+  const [orderQuantity, setOrderQuantity] = useState(initialSettings.defaultOrderQuantity || 100)
   const [orderPrice, setOrderPrice] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const [signalText, setSignalText] = useState('')
