@@ -1,0 +1,143 @@
+TradeForge 技术文档 v0.6
+========================================
+
+一、系统架构
+----------------------------------------
+1.1 整体架构
+  前端(Tauri) <-> 后端(Python FastAPI)
+  React+TypeScript+Zustand   FastAPI+SQLite
+  lightweight-charts         回测引擎
+  react-flow                 Mock数据生成
+
+1.2 技术栈
+  桌面:Tauri 2.0
+  前端:React 18.x/TypeScript 5.x/Zustand 4.x
+  图表:lightweight-charts 4.x
+  可视化:react-flow 11.x
+  后端:FastAPI 0.109.x
+  数据:SQLite 3.x
+  计算:Python 3.10+/NumPy/Numba
+
+
+二、前端架构
+----------------------------------------
+2.1 项目结构
+  frontend/src/
+    components/   # UI组件(Chart/Strategy/Backtest/Common)
+    stores/       # Zustand状态(app/strategy/backtest/market)
+    pages/        # 页面(Market/Strategy/Backtest/Settings)
+    services/     # Tauri IPC调用
+    utils/        # 工具函数
+
+2.2 状态管理
+  useAppStore: theme/language/loading/toast
+  useStrategyStore: 策略列表/当前编辑/校验状态
+  useBacktestStore: 任务状态/进度/结果
+  useMarketStore: 标的搜索/K线缓存
+
+2.3 Tauri IPC
+  createStrategy/config -> invoke('create_strategy')
+  runBacktest/params   -> invoke('run_backtest')
+  getKlines/symbol/timeframe -> invoke('get_klines')
+
+
+三、后端架构
+----------------------------------------
+3.1 项目结构
+  backend/app/
+    api/          # 路由(strategies/backtest/market)
+    core/         # 核心引擎(engine/ir_parser/indicators/risk)
+    models/       # Pydantic模型
+    services/     # 业务服务
+    data/         # 数据层(database/mock/repository)
+    utils/        # 工具
+
+3.2 FastAPI入口
+  CORS中间件
+  注册路由: strategies/backtest/market
+  /health 健康检查
+
+
+四、核心引擎
+----------------------------------------
+4.1 回测引擎 BacktestEngine
+  初始化: 加载IR配置 + 数据
+  执行: 预热期 -> 遍历K线 -> 检查入场/出场/风控 -> 记录
+  输出: BacktestResult
+
+4.2 指标计算
+  ma(series,period)      移动平均
+  ema(series,period)     指数移动平均
+  rsi(series,period)     RSI指标
+  bollinger_bands        布林带
+  cross_above/below      上穿/下穿
+
+
+五、数据模型
+----------------------------------------
+5.1 SQLite表
+  strategies: id/name/mode/config/status/version/时间戳
+  strategy_versions: id/strategy_id/version/config/时间戳
+  backtest_runs: id/strategy_id/symbol/timeframe/参数/metrics/status
+  trades: id/backtest_id/symbol/direction/entry/exit/quantity/pnl
+  bars: id/symbol/timeframe/timestamp/ohlcv (带索引)
+
+5.2 Pydantic模型
+  IndicatorConfig: name/type/period
+  ConditionRule: id/indicator/type/op/ref/value
+  Conditions: entry[]/exit[]
+  PositionSizing: type/value
+  RiskRules: initial_capital/fee_rate/slippage/止损/止盈
+  StrategyConfig: 完整IR配置
+
+
+六、API接口
+----------------------------------------
+6.1 策略
+  POST   /api/strategies      创建
+  GET    /api/strategies      列表
+  GET    /api/strategies/{id} 详情
+  PUT    /api/strategies/{id} 更新
+  DELETE /api/strategies/{id} 删除
+
+6.2 回测
+  POST   /api/backtest/run   执行
+  GET    /api/backtest/{id}  结果
+  GET    /api/backtest/{id}/trades 成交明细
+
+6.3 行情
+  GET /api/market/search 搜索
+  GET /api/market/klines K线
+  GET /api/market/quote 报价
+
+
+七、IR格式
+----------------------------------------
+{
+  version, strategy_id, name,
+  symbols:[], timeframe,
+  indicators:[{name,type,period}],
+  conditions:{entry:{type, rules:[]}, exit:{type, rules:[]}},
+  position_sizing:{type, value},
+  risk_rules:{initial_capital,fee_rate,slippage,max_position_pct},
+  data_requirements:{warmup_period,timeframes}
+}
+
+
+八、部署
+----------------------------------------
+开发:
+  前端: npm run dev
+  后端: python run.py
+
+生产:
+  npm run tauri build
+
+
+九、性能优化
+----------------------------------------
+回测: NumPy向量化 + Numba JIT + 索引缓存
+前端: Canvas渲染 + Zustand轻量 + Vite打包
+
+
+版本:v0.6 | 2026.03.18

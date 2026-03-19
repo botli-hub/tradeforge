@@ -1,0 +1,38 @@
+# macOS
+.DS_Store
+
+# Environment / local secrets
+backend/.env
+.env
+*.env.local
+
+# Database
+tradeforge.db
+backend/app/tradeforge.db
+backend/**/tradeforge.db
+*.db
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Frontend
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Local temp / scratch test scripts
+*test-local*
+*local-test*
+*tmp-test*
+*scratch*
+/tmp/
+tmp/
+
+# Logs
+*.log

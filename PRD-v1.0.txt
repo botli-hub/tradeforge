@@ -1,0 +1,101 @@
+TradeForge PRD v1.0 三期功能
+========================================
+
+一、产品定位
+----------------------------------------
+v1.0 = 专业量化交易系统
+目标用户: 专业用户
+数据源: Mock + 富途实盘
+
+
+二、版本范围
+----------------------------------------
+v0.6: 入门 - Visual + Mock + 单标的
+v0.8: 进阶 - Formula + 多标的
+v1.0: 专业 - Script + 富途实盘
+
+
+三、新增功能
+----------------------------------------
+3.1 Script模式
+  Python SDK,完全自由,支持任意复杂策略
+
+3.1.1 核心特性
+  - 完整Python语法支持
+  - 内置量化函数库
+  - 沙盒安全执行
+  - 策略模板库
+
+3.1.2 SDK示例
+  from tradeforge import Strategy, indicators as ta
+  
+  class MACrossStrategy(Strategy):
+      params = {"fast": 5, "slow": 20}
+      
+      def on_init(self):
+          self.ma_fast = ta.EMA(self.data.close, self.params["fast"])
+          self.ma_slow = ta.EMA(self.data.close, self.params["slow"])
+      
+      def on_bar(self, bar):
+          if ta.cross_above(self.ma_fast, self.ma_slow):
+              self.buy(size=100, tag="金叉")
+          if ta.cross_below(self.ma_fast, self.ma_slow):
+              self.sell_all(tag="死叉")
+
+3.1.3 内置模块
+  - indicators: MA/EMA/RSI/MACD/ATR/KDJ
+  - data: open/high/low/close/volume
+  - portfolio: equity/position/cash
+  - order: buy/sell/stop/target
+
+3.1.4 沙盒安全
+  - restrictedpython
+  - AST白名单检查
+  - 超时控制(30秒)
+  - 禁止:网络/文件/系统调用
+
+
+3.2 富途实盘
+  3.2.1 功能
+  - 实时行情
+  - 模拟交易
+  - 实盘交易(需要API)
+  - 持仓同步
+
+  3.2.2 模式切换
+  设置页:
+  [Mock模式] <-> [富途模拟] <-> [富途实盘]
+
+  3.2.3 信号处理
+  信号 -> 确认弹窗 -> 发送订单 -> 成交回报
+
+
+四、技术架构
+----------------------------------------
+4.1 沙盒执行
+  Pyodide或restrictedpython
+  自定义globals/builtins白名单
+
+4.2 富途对接
+  富途OpenAPI
+  WebSocket实时行情
+  REST委托下单
+
+
+五、里程碑
+----------------------------------------
+M1(5天): Script引擎+沙盒
+M2(4天): 富途API对接
+M3(4天): 信号->订单流程
+M4(3天): 持仓同步
+M5(3天): 测试优化
+
+预计: ~19天
+
+
+六、待确认
+----------------------------------------
+1. 富途API认证信息?
+2. 是否需要做市商/期权?
+
+版本:v1.0 | 2026.03.19

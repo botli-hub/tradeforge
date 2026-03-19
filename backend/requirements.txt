@@ -1,0 +1,7 @@
+fastapi==0.115.12
+uvicorn==0.34.0
+sqlalchemy==2.0.38
+pydantic==2.10.6
+numpy==2.2.4
+pandas==2.2.3
+futu-api==10.0.6008

@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeForge 产品原型</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; }
+        
+        /* 导航 */
+        .nav { background: #16213e; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #0f3460; }
+        .nav-item { color: #888; cursor: pointer; padding: 8px 16px; border-radius: 6px; transition: 0.2s; }
+        .nav-item:hover { color: #fff; }
+        .nav-item.active { background: #0f3460; color: #4cc9f0; }
+        
+        /* 页面容器 */
+        .page { display: none; padding: 24px; }
+        .page.active { display: block; }
+        
+        /* 通用组件 */
+        .card { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+        .btn { background: #4cc9f0; color: #000; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .btn:hover { opacity: 0.9; }
+        .btn-outline { background: transparent; border: 1px solid #4cc9f0; color: #4cc9f0; }
+        .btn-danger { background: #e94560; color: #fff; }
+        
+        input, select { background: #0f3460; border: 1px solid #333; color: #fff; padding: 8px 12px; border-radius: 6px; }
+        
+        /* 行情页 */
+        .search-bar { display: flex; gap: 12px; margin-bottom: 16px; }
+        .search-bar input { flex: 1; }
+        .chart-area { height: 400px; background: #0f3460; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #666; font-size: 14px; position: relative; overflow: hidden; }
+        .chart-candle { position: absolute; bottom: 60px; left: 20px; right: 20px; height: 280px; display: flex; align-items: flex-end; gap: 4px; padding: 10px; }
+        .candle { width: 12px; background: #e94560; border-radius: 2px; }
+        .candle.up { background: #4cc9f0; }
+        .chart-controls { display: flex; gap: 8px; margin-top: 12px; }
+        .chart-controls button { padding: 6px 12px; font-size: 12px; }
+        .chart-controls button.active { background: #4cc9f0; color: #000; }
+        
+        /* 策略页 */
+        .strategy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .strategy-card { background: #0f3460; border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center; }
+        .strategy-info h3 { color: #4cc9f0; margin-bottom: 8px; }
+        .strategy-info p { color: #888; font-size: 14px; }
+        .strategy-actions { display: flex; gap: 8px; }
+        
+        /* 策略编辑器 */
+        .editor-section { margin-bottom: 20px; }
+        .editor-section h4 { color: #4cc9f0; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #333; }
+        .condition-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+        .condition-row select, .condition-row input { flex: 1; }
+        .condition-row .delete { color: #e94560; cursor: pointer; padding: 8px; }
+        
+        /* 回测页 */
+        .backtest-config { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+        .backtest-config .field label { display: block; color: #888; font-size: 12px; margin-bottom: 6px; }
+        .backtest-config .field input, .backtest-config .field select { width: 100%; }
+        
+        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+        .metric-card { background: #0f3460; padding: 16px; border-radius: 8px; text-align: center; }
+        .metric-card .value { font-size: 24px; font-weight: bold; color: #4cc9f0; }
+        .metric-card .value.positive { color: #4cc9f0; }
+        .metric-card .value.negative { color: #e94560; }
+        .metric-card .label { color: #888; font-size: 12px; margin-top: 4px; }
+        
+        .progress-bar { height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #4cc9f0, #4361ee); width: 0%; transition: 0.3s; }
+        
+        .equity-curve { height: 200px; background: #0f3460; border-radius: 8px; position: relative; overflow: hidden; }
+        .curve-line { position: absolute; bottom: 40px; left: 20px; right: 20px; height: 120px; }
+        
+        .trade-table { width: 100%; border-collapse: collapse; }
+        .trade-table th, .trade-table td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
+        .trade-table th { color: #888; font-size: 12px; }
+        .trade-table td.positive { color: #4cc9f0; }
+        .trade-table td.negative { color: #e94560; }
+        
+        /* 设置页 */
+        .settings-section { margin-bottom: 24px; }
+        .settings-section h4 { color: #4cc9f0; margin-bottom: 16px; }
+        .settings-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #333; }
+        .settings-row label { color: #ccc; }
+        
+        /* 空状态 */
+        .empty-state { text-align: center; padding: 60px; color: #666; }
+        .empty-state h3 { color: #888; margin-bottom: 8px; }
+        
+        /* 标签 */
+        .tag { padding: 4px 10px; border-radius: 4px; font-size: 12px; }
+        .tag.draft { background: #333; color: #888; }
+        .tag.ready { background: #4361ee; color: #fff; }
+        .tag.positive { background: rgba(76, 201, 240, 0.2); color: #4cc9f0; }
+        .tag.negative { background: rgba(233, 69, 96, 0.2); color: #e94560; }
+        
+        /* 快捷操作 */
+        .quick-actions { display: flex; gap: 12px; margin-top: 16px; }
+        
+        h2 { margin-bottom: 20px; color: #fff; }
+    </style>
+</head>
+<body>
+
+<!-- 导航 -->
+<div class="nav">
+    <div class="nav-item active" onclick="showPage('market')">📊 行情</div>
+    <div class="nav-item" onclick="showPage('strategy')">📈 策略</div>
+    <div class="nav-item" onclick="showPage('backtest')">🎯 回测</div>
+    <div class="nav-item" onclick="showPage('settings')">⚙️ 设置</div>
+</div>
+
+<!-- 行情页 -->
+<div id="market" class="page active">
+    <h2>行情</h2>
+    
+    <div class="search-bar">
+        <input type="text" placeholder="输入股票代码，如 AAPL、TSLA" value="AAPL">
+        <button class="btn">搜索</button>
+    </div>
+    
+    <div class="card">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+            <div>
+                <span style="font-size: 24px; font-weight: bold;">AAPL</span>
+                <span style="color: #4cc9f0; margin-left: 12px;">Apple Inc.</span>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-size: 24px;">$185.50</div>
+                <div style="color: #4cc9f0;">+2.35 (+1.28%)</div>
+            </div>
+        </div>
+        
+        <div class="chart-area">
+            <div class="chart-candle">
+                <!-- 模拟K线 -->
+                <div class="candle up" style="height: 40px;"></div>
+                <div class="candle" style="height: 55px;"></div>
+                <div class="candle up" style="height: 70px;"></div>
+                <div class="candle" style="height: 45px;"></div>
+                <div class="candle up" style="height: 90px;"></div>
+                <div class="candle" style="height: 65px;"></div>
+                <div class="candle up" style="height: 80px;"></div>
+                <div class="candle" style="height: 55px;"></div>
+                <div class="candle up" style="height: 100px;"></div>
+                <div class="candle" style="height: 75px;"></div>
+                <div class="candle up" style="height: 85px;"></div>
+                <div class="candle" style="height: 60px;"></div>
+                <div class="candle up" style="height: 95px;"></div>
+                <div class="candle" style="height: 50px;"></div>
+                <div class="candle up" style="height: 110px;"></div>
+            </div>
+            <div style="position: absolute; top: 10px; right: 10px; color: #666; font-size: 12px;">K线区域</div>
+        </div>
+        
+        <div class="chart-controls">
+            <button class="btn-outline active">1m</button>
+            <button class="btn-outline">5m</button>
+            <button class="btn-outline">15m</button>
+            <button class="btn-outline">1h</button>
+            <button class="btn-outline active">1D</button>
+        </div>
+        
+        <div class="quick-actions">
+            <button class="btn">+ 新建策略</button>
+            <button class="btn-outline">加入自选</button>
+        </div>
+    </div>
+</div>
+
+<!-- 策略页 -->
+<div id="strategy" class="page">
+    <div class="strategy-header">
+        <h2>我的策略</h2>
+        <button class="btn" onclick="showEditor()">+ 新建策略</button>
+    </div>
+    
+    <div class="card">
+        <div class="strategy-card">
+            <div class="strategy-info">
+                <h3>📈 MA双均线策略</h3>
+                <p>标的: AAPL, TSLA | 周期: 1D | <span class="tag ready">就绪</span></p>
+                <p style="margin-top: 8px;">最近回测: <span class="tag positive">+15.2%</span></p>
+            </div>
+            <div class="strategy-actions">
+                <button class="btn-outline">编辑</button>
+                <button class="btn-outline">回测</button>
+                <button class="btn-outline" style="color: #e94560; border-color: #e94560;">删除</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="strategy-card">
+            <div class="strategy-info">
+                <h3>📈 RSI超卖策略</h3>
+                <p>标的: NVDA | 周期: 1h | <span class="tag draft">草稿</span></p>
+            </div>
+            <div class="strategy-actions">
+                <button class="btn-outline">编辑</button>
+                <button class="btn-outline">回测</button>
+                <button class="btn-outline" style="color: #e94560; border-color: #e94560;">删除</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 策略编辑器弹窗 -->
+    <div id="editor" class="card" style="display: none; margin-top: 20px; border: 2px solid #4cc9f0;">
+        <h3 style="color: #4cc9f0; margin-bottom: 16px;">策略编辑器</h3>
+        
+        <div class="editor-section">
+            <h4>基础配置</h4>
+            <div class="condition-row">
+                <input type="text" placeholder="策略名称" value="MA双均线策略" style="flex: 1;">
+                <select style="flex: 1;">
+                    <option>1D</option>
+                    <option>1h</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="editor-section">
+            <h4>入场条件 (AND)</h4>
+            <div class="condition-row">
+                <select style="flex: 1;"><option>MA(20)</option><option>MA(50)</option></select>
+                <select style="flex: 1;"><option>cross_above</option><option>cross_below</option></select>
+                <select style="flex: 1;"><option>MA(50)</option><option>MA(20)</option></select>
+                <span class="delete">✕</span>
+            </div>
+            <button class="btn-outline" style="font-size: 12px;">+ 添加条件</button>
+        </div>
+        
+        <div class="editor-section">
+            <h4>出场条件 (OR)</h4>
+            <div class="condition-row">
+                <select style="flex: 1;"><option>MA(20)</option></select>
+                <select style="flex: 1;"><option>cross_below</option></select>
+                <select style="flex: 1;"><option>MA(50)</option></select>
+                <span class="delete">✕</span>
+            </div>
+            <button class="btn-outline" style="font-size: 12px;">+ 添加条件</button>
+        </div>
+        
+        <div class="editor-section">
+            <h4>风控设置</h4>
+            <div class="condition-row">
+                <span>止损:</span>
+                <input type="number" value="5" style="width: 80px;">%
+                <span style="margin-left: 20px;">止盈:</span>
+                <input type="number" value="15" style="width: 80px;">%
+            </div>
+        </div>
+        
+        <div class="editor-section">
+            <h4>资金设置</h4>
+            <div class="condition-row">
+                <span>初始资金:</span>
+                <input type="number" value="100000" style="width: 120px;">
+                <span>手续费:</span>
+                <input type="number" value="0.03" step="0.01" style="width: 80px;">%
+                <span>滑点:</span>
+                <input type="number" value="0.1" step="0.01" style="width: 80px;">%
+            </div>
+        </div>
+        
+        <div style="display: flex; gap: 12px; justify-content: flex-end;">
+            <button class="btn-outline" onclick="hideEditor()">取消</button>
+            <button class="btn">保存策略</button>
+        </div>
+    </div>
+</div>
+
+<!-- 回测页 -->
+<div id="backtest" class="page">
+    <h2>回测</h2>
+    
+    <div class="card">
+        <div class="backtest-config">
+            <div class="field">
+                <label>选择策略</label>
+                <select><option>MA双均线策略</option><option>RSI超卖策略</option></select>
+            </div>
+            <div class="field">
+                <label>标的</label>
+                <input type="text" value="AAPL">
+            </div>
+            <div class="field">
+                <label>时间区间</label>
+                <input type="text" value="2024-01-01 ~ 2025-01-01">
+            </div>
+        </div>
+        
+        <div style="display: flex; gap: 12px; align-items: flex-end;">
+            <div class="field">
+                <label>初始资金</label>
+                <input type="number" value="100000" style="width: 120px;">
+            </div>
+            <div class="field">
+                <label>手续费</label>
+                <input type="number" value="0.03" step="0.01" style="width: 80px;">%
+            </div>
+            <div class="field">
+                <label>滑点</label>
+                <input type="number" value="0.1" step="0.01" style="width: 80px;">%
+            </div>
+            <button class="btn" style="margin-left: auto;">开始回测</button>
+        </div>
+    </div>
+    
+    <!-- 回测结果 -->
+    <div class="card">
+        <h4 style="margin-bottom: 12px;">回测报告</h4>
+        
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="value positive">+15.2%</div>
+                <div class="label">总收益率</div>
+            </div>
+            <div class="metric-card">
+                <div class="value positive">+8.5%</div>
+                <div class="label">年化收益</div>
+            </div>
+            <div class="metric-card">
+                <div class="value">1.32</div>
+                <div class="label">夏普比率</div>
+            </div>
+            <div class="metric-card">
+                <div class="value negative">-8.5%</div>
+                <div class="label">最大回撤</div>
+            </div>
+            <div class="metric-card">
+                <div class="value">58%</div>
+                <div class="label">胜率</div>
+            </div>
+            <div class="metric-card">
+                <div class="value">1.85</div>
+                <div class="label">盈亏比</div>
+            </div>
+            <div class="metric-card">
+                <div class="value">42</div>
+                <div class="label">交易次数</div>
+            </div>
+            <div class="metric-card">
+                <div class="value">5.2天</div>
+                <div class="label">平均持仓</div>
+            </div>
+        </div>
+        
+        <div class="equity-curve">
+            <div style="position: absolute; top: 10px; left: 10px; color: #888; font-size: 12px;">资金曲线</div>
+            <svg class="curve-line" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <polyline fill="none" stroke="#4cc9f0" stroke-width="2" points="0,80 10,75 20,78 30,60 40,55 50,50 60,45 70,40 80,35 90,30 100,25"/>
+            </svg>
+        </div>
+    </div>
+    
+    <!-- 交易明细 -->
+    <div class="card">
+        <h4 style="margin-bottom: 12px;">交易明细</h4>
+        <table class="trade-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>入场时间</th>
+                    <th>入场价</th>
+                    <th>出场时间</th>
+                    <th>出场价</th>
+                    <th>盈亏</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>1</td>
+                    <td>2024-03-15</td>
+                    <td>$120.50</td>
+                    <td>2024-03-22</td>
+                    <td>$125.30</td>
+                    <td class="positive">+$380</td>
+                </tr>
+                <tr>
+                    <td>2</td>
+                    <td>2024-04-02</td>
+                    <td>$130.00</td>
+                    <td>2024-04-10</td>
+                    <td>$128.50</td>
+                    <td class="negative">-$150</td>
+                </tr>
+                <tr>
+                    <td>3</td>
+                    <td>2024-04-15</td>
+                    <td>$125.00</td>
+                    <td>2024-04-28</td>
+                    <td>$132.80</td>
+                    <td class="positive">+$780</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 设置页 -->
+<div id="settings" class="page">
+    <h2>设置</h2>
+    
+    <div class="card">
+        <div class="settings-section">
+            <h4>回测参数</h4>
+            <div class="settings-row">
+                <label>初始资金</label>
+                <input type="number" value="100000">
+            </div>
+            <div class="settings-row">
+                <label>手续费率</label>
+                <input type="number" value="0.03" step="0.01">%
+            </div>
+            <div class="settings-row">
+                <label>滑点</label>
+                <input type="number" value="0.1" step="0.01">%
+            </div>
+        </div>
+        
+        <div class="settings-section">
+            <h4>数据</h4>
+            <div class="settings-row">
+                <label>数据源</label>
+                <select><option>Mock模式</option></select>
+            </div>
+        </div>
+        
+        <div class="settings-section">
+            <h4>显示</h4>
+            <div class="settings-row">
+                <label>主题</label>
+                <select><option>深色</option><option>浅色</option></select>
+            </div>
+            <div class="settings-row">
+                <label>语言</label>
+                <select><option>简体中文</option><option>English</option></select>
+            </div>
+        </div>
+        
+        <div style="text-align: right;">
+            <button class="btn">保存设置</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    function showPage(pageId) {
+        // 隐藏所有页面
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        
+        // 显示选中页面
+        document.getElementById(pageId).classList.add('active');
+        event.target.classList.add('active');
+    }
+    
+    function showEditor() {
+        document.getElementById('editor').style.display = 'block';
+    }
+    
+    function hideEditor() {
+        document.getElementById('editor').style.display = 'none';
+    }
+</script>
+
+</body>
+</html>

@@ -1,0 +1,78 @@
+TradeForge v0.8 技术设计文档
+========================================
+
+一、系统架构
+----------------------------------------
+新增模块:
+- Formula Parser - DSL语法解析
+- Formula Transpiler - Formula转IR
+- MultiSymbol Engine - 多标的回测
+
+
+二、Formula Parser设计
+----------------------------------------
+2.1 词法分析
+  Token类: type/value/line/col
+  Lexer类: 正则匹配关键词/标识符/数字/运算符
+
+2.2 语法分析
+  AST节点: StrategyNode/ParamNode/AssignmentNode/IfNode
+  Parser类: 递归下降解析
+
+
+三、Formula Transpiler
+----------------------------------------
+流程: 代码->Lexer->Parser->AST->Transformer->IR
+
+转译器:
+- 处理param()生成参数面板
+- 处理MA/RSI/ATR生成indicators
+- 处理if/buy/sell生成conditions
+
+
+四、多标的回测引擎
+----------------------------------------
+MultiSymbolEngine类:
+- 支持shared(共享资金池)/independent(独立)模式
+- 并行执行各标的回测
+- 合并资金曲线
+
+
+五、前端Editor
+----------------------------------------
+Monaco Editor集成:
+- Python语法高亮
+- 自定义自动补全(MA/EMA/RSI/cross_above/param/buy/sell)
+- 实时错误提示
+
+参数面板:
+- Range滑块
+- 实时预览
+
+
+六、数据模型
+----------------------------------------
+SQLite扩展:
+- symbol_groups表: 标的组合
+- strategy_versions: source_code/parameters
+
+IR扩展:
+- mode: formula
+- source_code
+- parameters[]
+- symbols[]
+
+
+七、API扩展
+----------------------------------------
+POST /api/strategies/validate - 验证代码
+POST /api/strategies/parse - 解析获取参数
+GET/POST /api/symbol-groups - 标的组合
+
+
+八、性能优化
+----------------------------------------
+多标的并行: ThreadPoolExecutor
+
+
+版本:v0.8 | 2026.03.19

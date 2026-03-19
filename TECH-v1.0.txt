@@ -1,0 +1,224 @@
+TradeForge v1.0 技术设计文档 - 富途实盘
+========================================
+
+一、系统架构
+----------------------------------------
+┌─────────────────────────────────────────────────────┐
+│                   TradeForge v1.0                   │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│   前端(Tauri)  ←WebSocket/HTTP→  后端(Python)    │
+│                                                      │
+│   Signal ←──────────────┬─────────────→ Order      │
+│                         │                              │
+│                    富途OpenD                          │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+
+技术栈:
+- 富途SDK: futu-api (pip install futu-api)
+- 协议: WebSocket(行情) + HTTP(委托)
+- 端口: 11111(模拟) / 11112(真实)
+
+
+二、富途API接口设计
+----------------------------------------
+2.1 连接管理
+  class FutuClient:
+      host: str = "127.0.0.1"
+      port: int = 11111  # 模拟盘
+      def connect() -> bool
+      def disconnect()
+      def is_connected() -> bool
+      def get_trd_env() -> TrdEnv  # SIM/REAL
+
+2.2 行情接口
+  class MarketAPI:
+      # 实时行情
+      def subscribe(self, codes: List[str]) -> bool
+      def unsubscribe(self, codes: List[str]) -> bool
+      def on_recv的市场行情(self, recv) -> MarketSnapshot
+      
+      # 历史K线
+      def get_kline(
+          code: str,
+          start: str,  # 2024-01-01
+          end: str,
+          ktype: KType,  # K_1M/K_5M/K_15M/K_30M/K_60M/K_1D/K_1W
+          autype: AutoType  # QFQ/HFQ/NORMAL
+      ) -> List[KLine]
+      
+      # 股票基本信息
+      def get_stock_basic(
+          market: Market,  # HK/US
+          stock_type: StockType  # QZSI/ETF/LOENG
+      ) -> List[StockBasic]
+      
+      # 期权链
+      def get_option_chain(
+          code: str,
+          expiry: str  # 240531
+      ) -> List[OptionInfo]
+
+2.3 交易接口
+  class TradeAPI:
+      # 账户
+      def accinfo_query() -> AccInfo
+      
+      # 下单
+      def place_order(
+          code: str,
+          price: float,
+          qty: float,
+          side: TrdSide,  # BUY/SELL
+          order_type: OrderType  # MARKET/LIMIT/STOP
+      ) -> OrderId
+      
+      # 撤单
+      def cancel_order(order_id: str) -> bool
+      
+      # 订单列表
+      def order_list_query(
+          status: OrderStatus  # SUBMITTED/FILLED/PARTIAL/CANCELLED
+      ) -> List[Order]
+      
+      # 持仓列表
+      def position_list_query() -> List[Position]
+
+
+三、数据适配器设计
+----------------------------------------
+3.1 接口定义
+  class MarketDataAdapter(Protocol):
+      def get_klines(self, code, timeframe, start, end) -> List[Bar]
+      def subscribe(self, codes: List[str]) -> None
+      def on_quote(self, callback) -> None
+
+3.2 富途适配器
+  class FutuAdapter implements MarketDataAdapter:
+      def __init__(self, host="127.0.0.1", port=11111, trd_env=TrdEnv.SIM):
+          self.client = OpenDCluster(host, port)
+          self.market_api = self.client.market
+          self.trade_api = self.client.trade
+          
+      def get_klines(self, code, timeframe, start, end) -> List[Bar]:
+          # 转换为富途格式
+          ktype = self._to_futu_ktype(timeframe)
+          klines = self.market_api.get_kline(
+              code, start, end, ktype, AutoType.QFQ
+          )
+          return [self._to_bar(k) for k in klines]
+      
+      def subscribe(self, codes):
+          for code in codes:
+              self.market_api.subscribe([code], [SubType.QUOTE])
+      
+      def _to_bar(self, kline) -> Bar:
+          return Bar(
+              timestamp=kline.time,
+              open=kline.open,
+              high=kline.high,
+              low=kline.low,
+              close=kline.close,
+              volume=kline.volume
+          )
+
+3.3 切换配置
+  # settings.yaml
+  data_source:
+    adapter: "futu"  # 切换此处
+    futu:
+      host: "127.0.0.1"
+      port: 11111
+      trd_env: "sim"  # sim/real
+
+
+四、信号->订单流程
+----------------------------------------
+4.1 信号检测
+  Strategy Engine → 触发信号
+
+4.2 用户确认
+  前端弹窗:
+  ┌─────────────────────┐
+  │ 买入 AAPL 100股    │
+  │ 价格: $185.50      │
+  │ [取消] [确认下单] │
+  └─────────────────────┘
+
+4.3 发送委托
+  trade_api.place_order(
+      code="US.AAPL",
+      price=185.50,
+      qty=100,
+      side=TrdSide.BUY,
+      order_type=OrderType.LIMIT
+  )
+
+4.4 回报处理
+  状态: 已提交 → 部分成交 → 全部成交 / 已撤单
+  前端实时更新订单状态
+
+
+五、富途行情数据结构
+----------------------------------------
+5.1 K线
+  {
+    "code": "US.AAPL",
+    "time": "2024-01-01 09:30:00",
+    "open": 185.00,
+    "high": 186.00,
+    "low": 184.50,
+    "close": 185.50,
+    "volume": 1234567
+  }
+
+5.2 实时报价
+  {
+    "code": "US.AAPL",
+    "price": 185.50,
+    "change": 2.35,
+    "change_pct": 1.28,
+    "volume": 12345678,
+    "amount": 2345678900,
+    "bid": 185.45,
+    "ask": 185.55,
+    "high": 186.00,
+    "low": 184.00,
+    "open": 185.00,
+    "pre_close": 183.15
+  }
+
+5.3 订单回报
+  {
+    "order_id": "12345678",
+    "code": "US.AAPL",
+    "price": 185.50,
+    "qty": 100,
+    "filled_qty": 100,
+    "status": "FILLED",
+    "side": "BUY",
+    "msg": "全部成交"
+  }
+
+
+六、Mock vs 富途对比
+----------------------------------------
+功能          Mock            富途
+────────────────────────────────
+数据          程序生成        futuD实时
+延迟          无             实时
+资金          虚拟           真实(模拟)
+交易          模拟           模拟/真实
+成本          无             手续费
+API限制       无             100次/分
+
+
+七、待确认
+----------------------------------------
+1. 富途OpenD是否已安装?(端口11111/11112)
+2. 使用模拟盘还是实盘?
+3. 交易费率如何计算?
+
+
+版本:v1.0 | 2026.03.19
