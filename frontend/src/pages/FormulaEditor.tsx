@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { API_BASE } from '../services/api'
 
 const DEFAULT_CODE = `strategy("MA Cross", capital=100000, fee=0.0003)
 
@@ -28,21 +29,42 @@ type ParamItem = {
 
 type FormulaEditorProps = {
   onSave?: (ir: any) => void
+  onCodeChange?: (code: string) => void
   initialCode?: string
+  saveLabel?: string
 }
 
-export default function FormulaEditor({ onSave, initialCode = '' }: FormulaEditorProps) {
+export default function FormulaEditor({
+  onSave,
+  onCodeChange,
+  initialCode = '',
+  saveLabel = '保存并转译',
+}: FormulaEditorProps) {
   const [code, setCode] = useState(initialCode || DEFAULT_CODE)
   const [params, setParams] = useState<ParamItem[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [validating, setValidating] = useState(false)
+  const [transpiling, setTranspiling] = useState(false)
+
+  useEffect(() => {
+    const nextCode = initialCode || DEFAULT_CODE
+    setCode(nextCode)
+    onCodeChange?.(nextCode)
+    setParams([])
+    setErrors([])
+  }, [initialCode])
+
+  function updateCode(nextCode: string) {
+    setCode(nextCode)
+    onCodeChange?.(nextCode)
+  }
 
   async function validate() {
     setValidating(true)
     setErrors([])
 
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/formula/validate', {
+      const res = await fetch(`${API_BASE}/api/formula/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code })
@@ -63,7 +85,7 @@ export default function FormulaEditor({ onSave, initialCode = '' }: FormulaEdito
 
   async function parseParams() {
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/formula/parse', {
+      const res = await fetch(`${API_BASE}/api/formula/parse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code })
@@ -78,20 +100,24 @@ export default function FormulaEditor({ onSave, initialCode = '' }: FormulaEdito
   }
 
   async function transpile() {
+    setTranspiling(true)
+    setErrors([])
     try {
-      const res = await fetch('http://127.0.0.1:8000/api/formula/transpile', {
+      const res = await fetch(`${API_BASE}/api/formula/transpile`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code })
       })
       const data = await res.json()
       if (data.success) {
-        onSave?.(data.ir)
+        onSave?.({ ...data.ir, source_code: code })
       } else {
-        setErrors(['转译失败'])
+        setErrors([data.detail || '转译失败'])
       }
     } catch {
       setErrors(['转译失败'])
+    } finally {
+      setTranspiling(false)
     }
   }
 
@@ -101,10 +127,12 @@ export default function FormulaEditor({ onSave, initialCode = '' }: FormulaEdito
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ color: '#4cc9f0', fontWeight: 'bold' }}>Formula 编辑器</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-outline" onClick={validate} disabled={validating}>
+            <button className="btn-outline" onClick={validate} disabled={validating || transpiling}>
               {validating ? '验证中...' : '验证'}
             </button>
-            <button className="btn" onClick={transpile}>保存并转译</button>
+            <button className="btn" onClick={transpile} disabled={transpiling || validating}>
+              {transpiling ? '转译中...' : saveLabel}
+            </button>
           </div>
         </div>
 
@@ -125,7 +153,7 @@ export default function FormulaEditor({ onSave, initialCode = '' }: FormulaEdito
 
         <textarea
           value={code}
-          onChange={(e) => setCode(e.target.value)}
+          onChange={(e) => updateCode(e.target.value)}
           style={{
             width: '100%',
             minHeight: 420,

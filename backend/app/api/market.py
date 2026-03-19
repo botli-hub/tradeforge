@@ -5,56 +5,15 @@ from datetime import datetime, timedelta
 from app.data.mock import search_stocks, get_stock_info
 from app.data.adapter import get_adapter
 from app.data.history_backfill import ensure_local_kline_range
+from app.data.source_router import (
+    normalize_symbol,
+    is_cn_symbol,
+    is_hk_symbol,
+    resolve_quote_source,
+    resolve_kline_source,
+)
 
 router = APIRouter()
-
-
-def _normalize_cn_symbol(symbol: str) -> str:
-    symbol = symbol.strip().upper()
-    if symbol.endswith('.SH') or symbol.endswith('.SZ'):
-        return symbol
-    if symbol.isdigit() and len(symbol) == 6:
-        return f"{symbol}.SH" if symbol.startswith(('5', '6', '9')) else f"{symbol}.SZ"
-    return symbol
-
-
-def _normalize_hk_symbol(symbol: str) -> str:
-    symbol = symbol.strip().upper()
-    if symbol.endswith('.HK'):
-        return f"{symbol[:-3].zfill(5)}.HK"
-    if symbol.isdigit() and len(symbol) <= 5:
-        return f"{symbol.zfill(5)}.HK"
-    return symbol
-
-
-def _is_cn_symbol(symbol: str) -> bool:
-    symbol = symbol.strip().upper()
-    return symbol.endswith('.SH') or symbol.endswith('.SZ') or (symbol.isdigit() and len(symbol) == 6)
-
-
-def _is_hk_symbol(symbol: str) -> bool:
-    symbol = symbol.strip().upper()
-    return symbol.endswith('.HK') or (symbol.isdigit() and len(symbol) <= 5)
-
-
-def _is_us_symbol(symbol: str) -> bool:
-    symbol = symbol.strip().upper()
-    return symbol.startswith('US.') or ('.' not in symbol and not symbol.isdigit())
-
-
-def _normalize_symbol(symbol: str) -> str:
-    if _is_cn_symbol(symbol):
-        return _normalize_cn_symbol(symbol)
-    if _is_hk_symbol(symbol):
-        return _normalize_hk_symbol(symbol)
-    return symbol.strip().upper()
-
-
-def _resolve_market_adapter(adapter: str, symbol: Optional[str] = None) -> str:
-    if symbol and adapter == 'finnhub' and (_is_cn_symbol(symbol) or _is_hk_symbol(symbol)):
-        return 'futu'
-    return adapter
-
 
 def _create_adapter(adapter_type: str, host: str, port: int):
     adapter = get_adapter(adapter_type=adapter_type, host=host, port=port)
@@ -101,8 +60,8 @@ async def market_search(
     adapter: str = Query("mock", description="数据源类型：mock/futu/finnhub"),
 ):
     """搜索股票"""
-    if _is_cn_symbol(q) or _is_hk_symbol(q):
-        normalized = _normalize_symbol(q)
+    if is_cn_symbol(q) or is_hk_symbol(q):
+        normalized = normalize_symbol(q)
         info = get_stock_info(normalized)
         return [{
             "symbol": normalized,
@@ -154,8 +113,8 @@ async def market_quote(
     """获取实时报价"""
     market_adapter = None
     try:
-        normalized_symbol = _normalize_symbol(symbol)
-        resolved_adapter = _resolve_market_adapter(adapter, normalized_symbol)
+        normalized_symbol = normalize_symbol(symbol)
+        resolved_adapter = resolve_quote_source(normalized_symbol, adapter)
         info = get_stock_info(normalized_symbol)
         market_adapter = _create_adapter(resolved_adapter, host, port)
         quote = market_adapter.get_quote(normalized_symbol) if hasattr(market_adapter, 'get_quote') else None
@@ -222,8 +181,8 @@ async def market_klines(
     if not start_date:
         start_date = (datetime.now() - timedelta(days=365)).isoformat()
 
-    normalized_symbol = _normalize_symbol(symbol)
-    resolved_adapter = _resolve_market_adapter(adapter, normalized_symbol)
+    normalized_symbol = normalize_symbol(symbol)
+    resolved_adapter = resolve_kline_source(normalized_symbol, adapter)
 
     try:
         result = ensure_local_kline_range(

@@ -8,7 +8,6 @@ from app.data.adapter import Bar, get_adapter
 from app.data.history_repository import (
     create_backfill_job,
     get_kline_bars,
-    infer_market,
     is_kline_range_covered,
     list_backfill_jobs,
     normalize_ts,
@@ -18,24 +17,12 @@ from app.data.history_repository import (
     upsert_subscription,
     upsert_sync_state,
 )
+from app.data.source_router import normalize_symbol, resolve_kline_source
 
 
 def resolve_history_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:
-    symbol = symbol.strip().upper()
-    market = infer_market(symbol)
-
-    if preferred_adapter == 'futu':
-        return 'futu'
-    if preferred_adapter == 'yahoo':
-        return 'yahoo'
-    if preferred_adapter == 'finnhub':
-        return 'yahoo' if market == 'US' else 'futu'
-    if preferred_adapter == 'mock':
-        return 'yahoo' if market == 'US' else 'futu'
-
-    if market in ('SH', 'SZ', 'HK'):
-        return 'futu'
-    return 'yahoo'
+    """历史 K 线统一跟随自动路由。"""
+    return resolve_kline_source(normalize_symbol(symbol), preferred_adapter)
 
 
 def _bar_to_row(bar: Bar) -> Dict[str, Any]:
@@ -51,6 +38,7 @@ def _bar_to_row(bar: Bar) -> Dict[str, Any]:
 
 
 def backfill_kline_range(symbol: str, timeframe: str, start_date: str, end_date: str, host: str = '127.0.0.1', port: int = 11111, source: Optional[str] = None) -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
     start_date = normalize_ts(start_date)
     end_date = normalize_ts(end_date)
     source = resolve_history_source(symbol, source)
@@ -97,6 +85,7 @@ def backfill_kline_range(symbol: str, timeframe: str, start_date: str, end_date:
 
 
 def ensure_local_kline_range(symbol: str, timeframe: str, start_date: str, end_date: str, host: str = '127.0.0.1', port: int = 11111, preferred_adapter: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+    symbol = normalize_symbol(symbol)
     start_date = normalize_ts(start_date)
     end_date = normalize_ts(end_date)
     source = resolve_history_source(symbol, preferred_adapter)

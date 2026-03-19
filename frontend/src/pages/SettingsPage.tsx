@@ -144,8 +144,11 @@ export default function SettingsPage() {
 
         <div className="editor-section">
           <h4>行情数据源</h4>
+          <div style={{ marginBottom: 8, color: '#9fb2d0', fontSize: 12 }}>
+            行情页/策略实时信号默认按资产自动路由：美股 quote→Finnhub，A股/港股 quote→Futu，美股 K 线→Yahoo，A股/港股 K 线→Futu。下面这个选项主要作为调试/兼容入口保留。
+          </div>
           <div className="settings-row">
-            <label>数据源</label>
+            <label>默认入口（调试）</label>
             <select value={settings.marketDataSource} onChange={e => updateField('marketDataSource', e.target.value as AppSettings['marketDataSource'])}>
               <option value="mock">Mock</option>
               <option value="futu">Futu OpenD</option>

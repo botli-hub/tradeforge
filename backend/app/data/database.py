@@ -1,6 +1,10 @@
 """数据库模块"""
+import json
 import sqlite3
+import uuid
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List
 
 DB_PATH = Path(__file__).parent.parent / "tradeforge.db"
 
@@ -9,6 +13,156 @@ def get_db():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def _build_visual_demo() -> Dict[str, Any]:
+    return {
+        "version": "1.0",
+        "strategy_id": "",
+        "mode": "visual",
+        "name": "MA Volume Demo",
+        "symbols": ["AAPL"],
+        "timeframe": "1d",
+        "indicators": [
+            {"name": "ma_fast", "type": "MA", "period": 5, "source": "close"},
+            {"name": "ma_slow", "type": "MA", "period": 20, "source": "close"},
+            {"name": "vol_ma", "type": "MA", "period": 20, "source": "volume"},
+        ],
+        "variables": {
+            "vol_ratio": {
+                "op": "/",
+                "left": "volume",
+                "right": "vol_ma",
+            }
+        },
+        "conditions": {
+            "entry": {
+                "type": "AND",
+                "rules": [
+                    {"id": "entry_1", "type": "crossover", "op": "cross_above", "left": "ma_fast", "right": "ma_slow"},
+                    {"id": "entry_2", "type": "binary", "op": ">", "left": "vol_ratio", "right": 1.5},
+                ],
+            },
+            "exit": {
+                "type": "OR",
+                "rules": [
+                    {"id": "exit_1", "type": "crossover", "op": "cross_below", "left": "ma_fast", "right": "ma_slow"}
+                ],
+            },
+        },
+        "position_sizing": {"type": "fixed_amount", "value": 10000},
+        "risk_rules": {
+            "initial_capital": 100000,
+            "fee_rate": 0.0003,
+            "slippage": 0.001,
+            "max_position_pct": 0.5,
+        },
+    }
+
+
+def _build_formula_demo() -> Dict[str, Any]:
+    source_code = '''strategy("Formula Demo", capital=100000, fee=0.0003)
+
+fast = param("快线周期", 5, 2, 50)
+slow = param("慢线周期", 20, 5, 200)
+
+ma_fast = MA(close, fast)
+ma_slow = MA(close, slow)
+vol_ratio = volume / MA(volume, 20)
+
+entry = cross_above(ma_fast, ma_slow) and vol_ratio > 1.2
+exit = cross_below(ma_fast, ma_slow)
+
+if entry:
+    buy(100)
+
+if exit:
+    sell_all()
+'''
+    return {
+        "version": "1.0",
+        "strategy_id": "",
+        "mode": "formula",
+        "name": "Formula Demo",
+        "symbols": ["TSLA"],
+        "timeframe": "1d",
+        "source_code": source_code,
+        "parameters": [
+            {"name": "fast", "label": "快线周期", "default": 5, "min": 2, "max": 50},
+            {"name": "slow", "label": "慢线周期", "default": 20, "min": 5, "max": 200},
+        ],
+        "indicators": [
+            {"name": "ma_fast", "type": "MA", "source": "close", "period_ref": "fast"},
+            {"name": "ma_slow", "type": "MA", "source": "close", "period_ref": "slow"},
+            {"name": "vol_ma", "type": "MA", "source": "volume", "period": 20},
+        ],
+        "variables": {
+            "vol_ratio": {"op": "/", "left": "volume", "right": "vol_ma"}
+        },
+        "conditions": {
+            "entry": {
+                "type": "AND",
+                "rules": [
+                    {"id": "entry_1", "type": "crossover", "op": "cross_above", "left": "ma_fast", "right": "ma_slow"},
+                    {"id": "entry_2", "type": "binary", "op": ">", "left": "vol_ratio", "right": 1.2},
+                ],
+            },
+            "exit": {
+                "type": "OR",
+                "rules": [
+                    {"id": "exit_1", "type": "crossover", "op": "cross_below", "left": "ma_fast", "right": "ma_slow"}
+                ],
+            },
+        },
+        "position_sizing": {"type": "fixed_amount", "value": 10000},
+        "risk_rules": {
+            "initial_capital": 100000,
+            "fee_rate": 0.0003,
+            "slippage": 0.001,
+            "max_position_pct": 0.5,
+        },
+    }
+
+
+def seed_demo_strategies(conn: sqlite3.Connection):
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(1) AS cnt FROM strategies")
+    row = cursor.fetchone()
+    if row and row["cnt"]:
+        return
+
+    now = _now_iso()
+    demos: List[Dict[str, Any]] = [
+        {"name": "MA Volume Demo", "mode": "visual", "config": _build_visual_demo()},
+        {"name": "Formula Demo", "mode": "formula", "config": _build_formula_demo()},
+    ]
+
+    for demo in demos:
+        strategy_id = str(uuid.uuid4())
+        config = dict(demo["config"])
+        config["strategy_id"] = strategy_id
+        cursor.execute(
+            """
+            INSERT INTO strategies (id, name, mode, config, status, version, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                strategy_id,
+                demo["name"],
+                demo["mode"],
+                json.dumps(config, ensure_ascii=False),
+                "ready",
+                1,
+                now,
+                now,
+            ),
+        )
+
+    conn.commit()
 
 
 def init_db():
@@ -201,5 +355,6 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_target ON history_scheduler_runs(target_date, status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_events_symbol ON risk_events(symbol, created_at)")
 
+    seed_demo_strategies(conn)
     conn.commit()
     conn.close()

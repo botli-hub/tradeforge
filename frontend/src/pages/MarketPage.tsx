@@ -55,7 +55,14 @@ export default function MarketPage() {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const lastSignalKeyRef = useRef('')
 
-  const pollMs = settings.marketDataSource === 'futu' ? 3000 : 10000
+  const inferMarket = (value: string) => {
+    const text = value.trim().toUpperCase()
+    if (text.endsWith('.SH') || text.endsWith('.SZ') || (/^\d{6}$/.test(text))) return 'CN'
+    if (text.endsWith('.HK') || (/^\d{1,5}$/.test(text))) return 'HK'
+    return 'US'
+  }
+
+  const pollMs = inferMarket(symbol) === 'US' ? 10000 : 3000
 
   useEffect(() => {
     const unsubscribe = subscribeSettings(next => {
@@ -368,11 +375,7 @@ export default function MarketPage() {
   const lastPrice = quote?.price ?? klines[klines.length - 1]?.close
   const adapterLabel = settings.tradingAdapter === 'futu' ? 'Futu' : 'Mock'
   const envLabel = settings.tradingEnv === 'REAL' ? '实盘' : '模拟盘'
-  const dataLabel = settings.marketDataSource === 'futu'
-    ? `Futu ${settings.marketHost}:${settings.marketPort}`
-    : settings.marketDataSource === 'finnhub'
-      ? 'Finnhub'
-      : 'Mock'
+  const routeModeLabel = '自动路由'
 
   const formatSourceLabel = (source?: string) => {
     if (!source) return '--'
@@ -383,8 +386,10 @@ export default function MarketPage() {
     return source
   }
 
-  const quoteSource = formatSourceLabel(quote?.adapter || settings.marketDataSource)
-  const klineSource = formatSourceLabel(klines[klines.length - 1]?.adapter || settings.marketDataSource)
+  const expectedQuoteSource = inferMarket(symbol) === 'US' ? 'finnhub' : 'futu'
+  const expectedKlineSource = inferMarket(symbol) === 'US' ? 'yahoo' : 'futu'
+  const quoteSource = formatSourceLabel(quote?.adapter || expectedQuoteSource)
+  const klineSource = formatSourceLabel(klines[klines.length - 1]?.adapter || expectedKlineSource)
   const enabledWatchlist = watchlist.filter(item => item.enabled)
   const currentSubscription = watchlist.find(item => item.symbol === symbol)
   const isCurrentSubscribed = Boolean(currentSubscription?.enabled)
@@ -395,11 +400,9 @@ export default function MarketPage() {
 
       <div className="card compact-card">
         <div className="status-line">
-          <span className={`tag ${settings.marketDataSource === 'futu' ? 'ready' : 'draft'}`}>
-            主数据源：{dataLabel}
-          </span>
-          <span className="tag ready">报价源：{quoteSource}</span>
-          <span className="tag ready">K线源：{klineSource}</span>
+          <span className="tag ready">路由模式：{routeModeLabel}</span>
+          <span className="tag ready">报价实际来源：{quoteSource}</span>
+          <span className="tag ready">K线实际来源：{klineSource}</span>
           <span className={`tag ${tradingConnected ? 'ready' : 'draft'}`}>
             交易：{tradingConnected ? `${adapterLabel} / ${envLabel}` : '未连接'}
           </span>

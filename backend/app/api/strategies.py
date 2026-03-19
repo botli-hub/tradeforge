@@ -1,16 +1,15 @@
 """策略API"""
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, Optional
 
-import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.core.signal_engine import StrategySignalEngine
-from app.data.adapter import get_adapter
+from app.core.strategy_runtime import evaluate_strategy
 from app.data.database import get_db
+from app.data.source_router import resolve_kline_source, resolve_runtime_source
 
 router = APIRouter()
 
@@ -37,6 +36,38 @@ def _parse_config(raw: Any) -> Dict[str, Any]:
     return {}
 
 
+def _serialize_strategy_row(row) -> Dict[str, Any]:
+    config = _parse_config(row["config"])
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "version": row["version"],
+        "symbols": config.get("symbols", []),
+        "timeframe": config.get("timeframe"),
+        "config": config,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _save_strategy_version(cursor, strategy_id: str, version: int, config: Dict[str, Any], created_at: str):
+    cursor.execute(
+        """
+        INSERT INTO strategy_versions (id, strategy_id, version, config, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            strategy_id,
+            version,
+            json.dumps(config, ensure_ascii=False),
+            created_at,
+        ),
+    )
+
+
 @router.get("")
 async def get_strategies():
     """获取策略列表"""
@@ -45,23 +76,7 @@ async def get_strategies():
     cursor.execute("SELECT * FROM strategies ORDER BY updated_at DESC")
     rows = cursor.fetchall()
     conn.close()
-
-    strategies = []
-    for row in rows:
-        config = _parse_config(row["config"])
-        strategies.append({
-            "id": row["id"],
-            "name": row["name"],
-            "mode": row["mode"],
-            "status": row["status"],
-            "version": row["version"],
-            "symbols": config.get("symbols", []),
-            "timeframe": config.get("timeframe"),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"]
-        })
-
-    return strategies
+    return [_serialize_strategy_row(row) for row in rows]
 
 
 @router.get("/{strategy_id}")
@@ -70,17 +85,7 @@ async def get_strategy(strategy_id: str):
     row = _load_strategy_row(strategy_id)
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
-
-    return {
-        "id": row["id"],
-        "name": row["name"],
-        "mode": row["mode"],
-        "config": _parse_config(row["config"]),
-        "status": row["status"],
-        "version": row["version"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"]
-    }
+    return _serialize_strategy_row(row)
 
 
 @router.post("")
@@ -94,6 +99,8 @@ async def create_strategy(data: StrategyCreate):
     if not config.get("name"):
         config["name"] = data.name
 
+    mode = config.get("mode", "visual")
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
@@ -104,7 +111,7 @@ async def create_strategy(data: StrategyCreate):
         (
             strategy_id,
             data.name,
-            config.get("mode", "visual"),
+            mode,
             json.dumps(config, ensure_ascii=False),
             "ready",
             1,
@@ -112,6 +119,7 @@ async def create_strategy(data: StrategyCreate):
             now,
         )
     )
+    _save_strategy_version(cursor, strategy_id, 1, config, now)
     conn.commit()
     conn.close()
 
@@ -137,14 +145,16 @@ async def update_strategy(strategy_id: str, data: StrategyCreate):
         config["name"] = data.name
 
     new_version = row["version"] + 1
+    mode = config.get("mode", "visual")
     cursor.execute(
         """
         UPDATE strategies
-        SET name = ?, config = ?, updated_at = ?, version = ?, status = ?
+        SET name = ?, mode = ?, config = ?, updated_at = ?, version = ?, status = ?
         WHERE id = ?
         """,
-        (data.name, json.dumps(config, ensure_ascii=False), now, new_version, "ready", strategy_id)
+        (data.name, mode, json.dumps(config, ensure_ascii=False), now, new_version, "ready", strategy_id)
     )
+    _save_strategy_version(cursor, strategy_id, new_version, config, now)
 
     conn.commit()
     conn.close()
@@ -157,6 +167,7 @@ async def delete_strategy(strategy_id: str):
     """删除策略"""
     conn = get_db()
     cursor = conn.cursor()
+    cursor.execute("DELETE FROM strategy_versions WHERE strategy_id = ?", (strategy_id,))
     cursor.execute("DELETE FROM strategies WHERE id = ?", (strategy_id,))
     conn.commit()
     conn.close()
@@ -168,11 +179,11 @@ async def delete_strategy(strategy_id: str):
 async def evaluate_strategy_signal(
     strategy_id: str,
     symbol: Optional[str] = Query(None, description="标的代码，不传则取策略首个symbol"),
-    adapter: str = Query("mock", description="数据源：mock/futu"),
+    adapter: str = Query("mock", description="前端传入的首选入口（实际会走自动路由）"),
     host: str = Query("127.0.0.1", description="行情地址"),
     port: int = Query(11111, description="行情端口"),
 ):
-    """实时评估策略信号"""
+    """实时评估策略信号（统一走 Strategy Runtime 自动路由）"""
     row = _load_strategy_row(strategy_id)
     if not row:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -180,55 +191,25 @@ async def evaluate_strategy_signal(
     config = _parse_config(row["config"])
     symbols = config.get("symbols") or []
     target_symbol = symbol or (symbols[0] if symbols else None)
-    timeframe = config.get("timeframe", "1d")
 
     if not target_symbol:
         raise HTTPException(status_code=400, detail="策略未配置symbol")
 
-    adapter_instance = None
     try:
-        adapter_instance = get_adapter(adapter_type=adapter, host=host, port=port)
-        if hasattr(adapter_instance, 'connect') and not adapter_instance.connect():
-            raise HTTPException(status_code=502, detail=f"连接{adapter}行情源失败")
-
-        end_date = datetime.now().isoformat()
-        start_date = (datetime.now() - timedelta(days=420)).isoformat()
-        bars = adapter_instance.get_klines(target_symbol, timeframe, start_date, end_date)
-        if not bars:
-            detail = getattr(adapter_instance, 'last_error', None) or '策略信号评估未拿到行情数据'
-            raise HTTPException(status_code=502, detail=detail)
-
-        df = pd.DataFrame([
-            {
-                'timestamp': bar.timestamp,
-                'open': bar.open,
-                'high': bar.high,
-                'low': bar.low,
-                'close': bar.close,
-                'volume': bar.volume,
-            }
-            for bar in bars
-        ])
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.set_index('timestamp')
-
-        engine = StrategySignalEngine(config, df)
-        result = engine.evaluate()
-        latest_bar = result.get('latest_bar') or {}
-        signal_key = f"{strategy_id}:{target_symbol}:{result.get('signal')}:{latest_bar.get('timestamp', '')}"
-
-        return {
-            'strategy_id': strategy_id,
-            'strategy_name': config.get('name', row['name']),
-            'symbol': target_symbol,
-            'timeframe': timeframe,
-            'adapter': adapter,
-            'signal_key': signal_key,
-            **result,
-        }
-    finally:
-        if adapter_instance and hasattr(adapter_instance, 'disconnect'):
-            try:
-                adapter_instance.disconnect()
-            except Exception:
-                pass
+        result = evaluate_strategy(
+            strategy_id=strategy_id,
+            symbol=target_symbol,
+            timeframe=config.get("timeframe", "1d"),
+            trigger_mode="on_quote",
+            adapter_type=adapter,
+            adapter_host=host,
+            adapter_port=port,
+            strategy_config=config,
+        )
+        payload = result.to_dict()
+        payload["requested_adapter"] = adapter
+        payload["resolved_quote_source"] = resolve_runtime_source(target_symbol, adapter)
+        payload["resolved_kline_source"] = resolve_kline_source(target_symbol, adapter)
+        return payload
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"策略信号评估失败: {e}")

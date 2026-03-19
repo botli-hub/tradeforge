@@ -17,6 +17,7 @@ from enum import Enum
 
 from app.data.history_repository import get_kline_bars
 from app.data.adapter import get_adapter, Quote, Bar
+from app.data.source_router import normalize_symbol, resolve_kline_source, resolve_quote_source
 
 
 # 支持的timeframe
@@ -337,6 +338,10 @@ def _load_market_state(
     adapter_port: int,
 ) -> MarketState:
     """加载市场状态（不获取实时quote）"""
+    symbol = normalize_symbol(symbol)
+    kline_source = resolve_kline_source(symbol, adapter_type)
+    quote_source = resolve_quote_source(symbol, adapter_type)
+
     # 计算时间范围
     end_dt = datetime.now(timezone.utc)
     start_dt = end_dt - timedelta(days=history_days)
@@ -372,7 +377,7 @@ def _load_market_state(
     if len(history_bars) < 5:
         adapter = None
         try:
-            adapter = get_adapter(adapter_type=adapter_type, host=adapter_host, port=adapter_port)
+            adapter = get_adapter(adapter_type=kline_source, host=adapter_host, port=adapter_port)
             if adapter.connect():
                 bars = adapter.get_klines(
                     symbol=symbol,
@@ -389,7 +394,7 @@ def _load_market_state(
                         "low": bar.low,
                         "close": bar.close,
                         "volume": bar.volume,
-                        "source": adapter_type,
+                        "source": kline_source,
                         "is_forming": False,
                     }
                     for bar in bars
@@ -404,10 +409,10 @@ def _load_market_state(
     # 3. 如果是实时模式，创建forming bar
     forming_bar = None
     if trigger_mode == TriggerMode.ON_QUOTE:
-        # 从adapter获取最新报价来初始化forming bar
+        # 从实时 quote 路由获取最新报价来初始化 forming bar
         adapter = None
         try:
-            adapter = get_adapter(adapter_type=adapter_type, host=adapter_host, port=adapter_port)
+            adapter = get_adapter(adapter_type=quote_source, host=adapter_host, port=adapter_port)
             if adapter.connect():
                 quote = adapter.get_quote(symbol)
                 if quote:
@@ -455,7 +460,9 @@ def _load_market_state(
         "trigger_mode": trigger_mode.value,
         "history_bar_count": len(history_bars),
         "has_forming_bar": forming_bar is not None,
-        "data_source": history_bars[0].get("source", adapter_type) if history_bars else adapter_type,
+        "route_mode": "auto",
+        "quote_source": quote_source,
+        "kline_source": history_bars[0].get("source", kline_source) if history_bars else kline_source,
         "loaded_at": datetime.now(timezone.utc).isoformat(),
     }
     
