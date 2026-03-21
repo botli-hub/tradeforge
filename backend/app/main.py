@@ -7,10 +7,15 @@ from app.data.history_scheduler import get_history_scheduler
 
 app = FastAPI(title="TradeForge API", version="1.0.0")
 
-# CORS
+# CORS — 仅允许本地前端访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:1420",
+        "http://localhost:1420",
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

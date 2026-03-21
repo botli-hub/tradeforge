@@ -7,272 +7,385 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; }
-        
+
         /* 导航 */
-        .nav { background: #16213e; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #0f3460; }
+        .nav { background: #16213e; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #0f3460; align-items: center; }
+        .nav-logo { font-weight: 700; color: #4cc9f0; margin-right: 8px; }
         .nav-item { color: #888; cursor: pointer; padding: 8px 16px; border-radius: 6px; transition: 0.2s; }
         .nav-item:hover { color: #fff; }
         .nav-item.active { background: #0f3460; color: #4cc9f0; }
-        
+
         /* 页面容器 */
-        .page { display: none; padding: 24px; }
+        .page { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
         .page.active { display: block; }
-        
+
         /* 通用组件 */
         .card { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
         .btn { background: #4cc9f0; color: #000; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
         .btn:hover { opacity: 0.9; }
-        .btn-outline { background: transparent; border: 1px solid #4cc9f0; color: #4cc9f0; }
-        .btn-danger { background: #e94560; color: #fff; }
-        
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-outline { background: transparent; border: 1px solid #4cc9f0; color: #4cc9f0; padding: 10px 20px; border-radius: 6px; cursor: pointer; }
+        .btn-outline:hover { background: rgba(76,201,240,0.1); }
+        .btn-danger { background: #e94560; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; }
+
         input, select { background: #0f3460; border: 1px solid #333; color: #fff; padding: 8px 12px; border-radius: 6px; }
-        
+        input:focus, select:focus { outline: none; border-color: #4cc9f0; }
+
         /* 行情页 */
         .search-bar { display: flex; gap: 12px; margin-bottom: 16px; }
         .search-bar input { flex: 1; }
-        .chart-area { height: 400px; background: #0f3460; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #666; font-size: 14px; position: relative; overflow: hidden; }
-        .chart-candle { position: absolute; bottom: 60px; left: 20px; right: 20px; height: 280px; display: flex; align-items: flex-end; gap: 4px; padding: 10px; }
-        .candle { width: 12px; background: #e94560; border-radius: 2px; }
-        .candle.up { background: #4cc9f0; }
+        .chart-area { height: 360px; background: #0f3460; border-radius: 12px; position: relative; overflow: hidden; }
+        .chart-candle { position: absolute; bottom: 40px; left: 20px; right: 20px; height: 260px; display: flex; align-items: flex-end; gap: 5px; padding: 10px; }
+        .candle-body { width: 12px; border-radius: 2px; position: relative; }
+        .candle-body.up { background: #4cc9f0; }
+        .candle-body.down { background: #e94560; }
+        .chart-label { position: absolute; top: 10px; right: 14px; color: #555; font-size: 12px; }
         .chart-controls { display: flex; gap: 8px; margin-top: 12px; }
-        .chart-controls button { padding: 6px 12px; font-size: 12px; }
-        .chart-controls button.active { background: #4cc9f0; color: #000; }
-        
+        .chart-controls button { padding: 6px 14px; font-size: 12px; border-radius: 6px; cursor: pointer; background: transparent; border: 1px solid #333; color: #888; transition: 0.2s; }
+        .chart-controls button.active { background: #0f3460; border-color: #4cc9f0; color: #4cc9f0; }
+        .quick-actions { display: flex; gap: 12px; margin-top: 16px; }
+
+        /* 数据来源标注 */
+        .source-strip { font-size: 12px; color: #666; margin-top: 8px; }
+        .source-strip span { margin-right: 16px; }
+
         /* 策略页 */
         .strategy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
         .strategy-card { background: #0f3460; border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center; }
         .strategy-info h3 { color: #4cc9f0; margin-bottom: 8px; }
-        .strategy-info p { color: #888; font-size: 14px; }
+        .strategy-info p { color: #888; font-size: 14px; line-height: 1.8; }
         .strategy-actions { display: flex; gap: 8px; }
-        
-        /* 策略编辑器 */
+
+        /* 标签 */
+        .tag { padding: 3px 10px; border-radius: 4px; font-size: 12px; display: inline-block; }
+        .tag.draft { background: #333; color: #888; }
+        .tag.ready { background: #1a4a8a; color: #4cc9f0; }
+        .tag.positive { background: rgba(76,201,240,0.15); color: #4cc9f0; }
+        .tag.negative { background: rgba(233,69,96,0.15); color: #e94560; }
+
+        /* 模态框 */
+        .modal-backdrop {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.65);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-backdrop.open { display: flex; }
+        .modal {
+            background: #16213e;
+            border: 1px solid #4cc9f0;
+            border-radius: 12px;
+            padding: 28px;
+            width: 560px;
+            max-width: 95vw;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .modal-header h3 { color: #4cc9f0; font-size: 18px; }
+        .modal-close { background: none; border: none; color: #888; font-size: 20px; cursor: pointer; padding: 4px 8px; }
+        .modal-close:hover { color: #fff; }
         .editor-section { margin-bottom: 20px; }
-        .editor-section h4 { color: #4cc9f0; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #333; }
-        .condition-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
-        .condition-row select, .condition-row input { flex: 1; }
-        .condition-row .delete { color: #e94560; cursor: pointer; padding: 8px; }
-        
+        .editor-section h4 { color: #9fb2d0; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #333; font-size: 13px; }
+        .condition-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+        .condition-row select, .condition-row input { flex: 1; min-width: 80px; }
+        .delete-btn { color: #e94560; cursor: pointer; padding: 6px; background: none; border: none; font-size: 16px; }
+        .modal-footer { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; padding-top: 16px; border-top: 1px solid #333; }
+
         /* 回测页 */
         .backtest-config { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
-        .backtest-config .field label { display: block; color: #888; font-size: 12px; margin-bottom: 6px; }
-        .backtest-config .field input, .backtest-config .field select { width: 100%; }
-        
+        .field label { display: block; color: #888; font-size: 12px; margin-bottom: 6px; }
+        .field input, .field select { width: 100%; }
+        .preset-btns { display: flex; gap: 8px; margin-bottom: 16px; }
+        .preset-btns button { font-size: 12px; padding: 5px 12px; }
+
         .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
         .metric-card { background: #0f3460; padding: 16px; border-radius: 8px; text-align: center; }
-        .metric-card .value { font-size: 24px; font-weight: bold; color: #4cc9f0; }
+        .metric-card .value { font-size: 22px; font-weight: bold; }
         .metric-card .value.positive { color: #4cc9f0; }
         .metric-card .value.negative { color: #e94560; }
+        .metric-card .value.neutral { color: #eee; }
         .metric-card .label { color: #888; font-size: 12px; margin-top: 4px; }
-        
-        .progress-bar { height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
-        .progress-fill { height: 100%; background: linear-gradient(90deg, #4cc9f0, #4361ee); width: 0%; transition: 0.3s; }
-        
-        .equity-curve { height: 200px; background: #0f3460; border-radius: 8px; position: relative; overflow: hidden; }
-        .curve-line { position: absolute; bottom: 40px; left: 20px; right: 20px; height: 120px; }
-        
-        .trade-table { width: 100%; border-collapse: collapse; }
-        .trade-table th, .trade-table td { padding: 12px; text-align: left; border-bottom: 1px solid #333; }
-        .trade-table th { color: #888; font-size: 12px; }
+
+        /* Buy & Hold 基准行 */
+        .bh-row {
+            grid-column: span 4;
+            background: #0a2040;
+            border-top: 1px solid #1a3a60;
+            border-radius: 8px;
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            font-size: 13px;
+        }
+        .bh-label { color: #666; }
+        .bh-value { font-weight: 600; }
+        .bh-alpha { color: #888; }
+        .bh-alpha span { margin-left: 4px; }
+
+        .progress-bar { height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; margin: 12px 0; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #4cc9f0, #4361ee); transition: width 0.3s; }
+
+        .equity-curve { height: 200px; background: #0f3460; border-radius: 8px; position: relative; overflow: hidden; margin-bottom: 16px; }
+
+        .trade-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .trade-table th, .trade-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #222; }
+        .trade-table th { color: #888; font-size: 11px; text-transform: uppercase; }
         .trade-table td.positive { color: #4cc9f0; }
         .trade-table td.negative { color: #e94560; }
-        
+
+        /* 回测状态视图 */
+        .backtest-state { display: none; }
+        .backtest-state.active { display: block; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: #555; }
+        .empty-state h3 { color: #777; margin-bottom: 8px; }
+
         /* 设置页 */
-        .settings-section { margin-bottom: 24px; }
-        .settings-section h4 { color: #4cc9f0; margin-bottom: 16px; }
-        .settings-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #333; }
-        .settings-row label { color: #ccc; }
-        
-        /* 空状态 */
-        .empty-state { text-align: center; padding: 60px; color: #666; }
-        .empty-state h3 { color: #888; margin-bottom: 8px; }
-        
-        /* 标签 */
-        .tag { padding: 4px 10px; border-radius: 4px; font-size: 12px; }
-        .tag.draft { background: #333; color: #888; }
-        .tag.ready { background: #4361ee; color: #fff; }
-        .tag.positive { background: rgba(76, 201, 240, 0.2); color: #4cc9f0; }
-        .tag.negative { background: rgba(233, 69, 96, 0.2); color: #e94560; }
-        
-        /* 快捷操作 */
-        .quick-actions { display: flex; gap: 12px; margin-top: 16px; }
-        
+        .settings-section { margin-bottom: 28px; }
+        .settings-section h4 { color: #4cc9f0; margin-bottom: 16px; font-size: 14px; }
+        .settings-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #222; }
+        .settings-row label { color: #ccc; font-size: 14px; }
+
         h2 { margin-bottom: 20px; color: #fff; }
+        .section-title { color: #9fb2d0; font-size: 14px; margin-bottom: 12px; }
+
+        /* Toast */
+        .toast {
+            position: fixed; bottom: 24px; right: 24px;
+            background: #0f3460; border: 1px solid #4cc9f0;
+            color: #eee; padding: 12px 20px; border-radius: 8px;
+            font-size: 14px; display: none; z-index: 200;
+            animation: slideIn 0.2s ease;
+        }
+        .toast.show { display: block; }
+        @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     </style>
 </head>
 <body>
 
 <!-- 导航 -->
 <div class="nav">
-    <div class="nav-item active" onclick="showPage('market')">📊 行情</div>
-    <div class="nav-item" onclick="showPage('strategy')">📈 策略</div>
-    <div class="nav-item" onclick="showPage('backtest')">🎯 回测</div>
-    <div class="nav-item" onclick="showPage('settings')">⚙️ 设置</div>
+    <span class="nav-logo">TradeForge</span>
+    <div class="nav-item active" onclick="showPage('market', this)">📊 行情</div>
+    <div class="nav-item" onclick="showPage('strategy', this)">📈 策略</div>
+    <div class="nav-item" onclick="showPage('backtest', this)">🎯 回测</div>
+    <div class="nav-item" onclick="showPage('settings', this)">⚙️ 设置</div>
 </div>
 
-<!-- 行情页 -->
+<!-- ===== 行情页 ===== -->
 <div id="market" class="page active">
     <h2>行情</h2>
-    
+
     <div class="search-bar">
-        <input type="text" placeholder="输入股票代码，如 AAPL、TSLA" value="AAPL">
-        <button class="btn">搜索</button>
+        <input type="text" id="symbolInput" placeholder="输入股票代码，如 AAPL、TSLA、00700.HK" value="AAPL">
+        <button class="btn" onclick="handleSearch()">搜索</button>
     </div>
-    
+
     <div class="card">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 12px;">
+        <div style="display: flex; justify-content: space-between; margin-bottom: 12px; align-items: flex-start;">
             <div>
-                <span style="font-size: 24px; font-weight: bold;">AAPL</span>
-                <span style="color: #4cc9f0; margin-left: 12px;">Apple Inc.</span>
+                <span style="font-size: 24px; font-weight: bold;" id="symbolDisplay">AAPL</span>
+                <span style="color: #4cc9f0; margin-left: 12px; font-size: 14px;">Apple Inc.</span>
             </div>
             <div style="text-align: right;">
                 <div style="font-size: 24px;">$185.50</div>
-                <div style="color: #4cc9f0;">+2.35 (+1.28%)</div>
+                <div style="color: #4cc9f0; font-size: 14px;">+2.35 (+1.28%)</div>
             </div>
         </div>
-        
+
         <div class="chart-area">
             <div class="chart-candle">
-                <!-- 模拟K线 -->
-                <div class="candle up" style="height: 40px;"></div>
-                <div class="candle" style="height: 55px;"></div>
-                <div class="candle up" style="height: 70px;"></div>
-                <div class="candle" style="height: 45px;"></div>
-                <div class="candle up" style="height: 90px;"></div>
-                <div class="candle" style="height: 65px;"></div>
-                <div class="candle up" style="height: 80px;"></div>
-                <div class="candle" style="height: 55px;"></div>
-                <div class="candle up" style="height: 100px;"></div>
-                <div class="candle" style="height: 75px;"></div>
-                <div class="candle up" style="height: 85px;"></div>
-                <div class="candle" style="height: 60px;"></div>
-                <div class="candle up" style="height: 95px;"></div>
-                <div class="candle" style="height: 50px;"></div>
-                <div class="candle up" style="height: 110px;"></div>
+                <div class="candle-body up" style="height:40px"></div>
+                <div class="candle-body down" style="height:55px"></div>
+                <div class="candle-body up" style="height:70px"></div>
+                <div class="candle-body down" style="height:45px"></div>
+                <div class="candle-body up" style="height:90px"></div>
+                <div class="candle-body down" style="height:65px"></div>
+                <div class="candle-body up" style="height:80px"></div>
+                <div class="candle-body down" style="height:55px"></div>
+                <div class="candle-body up" style="height:100px"></div>
+                <div class="candle-body down" style="height:75px"></div>
+                <div class="candle-body up" style="height:85px"></div>
+                <div class="candle-body down" style="height:60px"></div>
+                <div class="candle-body up" style="height:110px"></div>
+                <div class="candle-body down" style="height:50px"></div>
+                <div class="candle-body up" style="height:120px"></div>
             </div>
-            <div style="position: absolute; top: 10px; right: 10px; color: #666; font-size: 12px;">K线区域</div>
+            <div class="chart-label">K线图区域 (lightweight-charts)</div>
         </div>
-        
-        <div class="chart-controls">
-            <button class="btn-outline active">1m</button>
-            <button class="btn-outline">5m</button>
-            <button class="btn-outline">15m</button>
-            <button class="btn-outline">1h</button>
-            <button class="btn-outline active">1D</button>
+
+        <!-- 周期切换：互斥选择 -->
+        <div class="chart-controls" id="timeframeControls">
+            <button onclick="selectTimeframe(this)">1m</button>
+            <button onclick="selectTimeframe(this)">5m</button>
+            <button onclick="selectTimeframe(this)">15m</button>
+            <button onclick="selectTimeframe(this)">1h</button>
+            <button class="active" onclick="selectTimeframe(this)">1D</button>
         </div>
-        
+
+        <div class="source-strip">
+            <span>报价来源：<strong>Finnhub</strong></span>
+            <span>K线来源：<strong>本地历史库</strong></span>
+        </div>
+
         <div class="quick-actions">
-            <button class="btn">+ 新建策略</button>
-            <button class="btn-outline">加入自选</button>
+            <button class="btn" onclick="goCreateStrategy()">+ 新建策略</button>
+            <button class="btn-outline" onclick="showToast('已加入自选')">加入自选</button>
         </div>
     </div>
 </div>
 
-<!-- 策略页 -->
+<!-- ===== 策略页 ===== -->
 <div id="strategy" class="page">
     <div class="strategy-header">
         <h2>我的策略</h2>
-        <button class="btn" onclick="showEditor()">+ 新建策略</button>
+        <div style="display: flex; gap: 8px;">
+            <button class="btn-outline" onclick="openEditor('visual')">+ 新建 Visual</button>
+            <button class="btn" onclick="openEditor('formula')">+ 新建 Formula</button>
+        </div>
     </div>
-    
+
     <div class="card">
         <div class="strategy-card">
             <div class="strategy-info">
                 <h3>📈 MA双均线策略</h3>
-                <p>标的: AAPL, TSLA | 周期: 1D | <span class="tag ready">就绪</span></p>
-                <p style="margin-top: 8px;">最近回测: <span class="tag positive">+15.2%</span></p>
+                <p>标的: AAPL &nbsp;|&nbsp; 周期: 1D &nbsp;|&nbsp; Mode: visual &nbsp;<span class="tag ready">就绪</span></p>
+                <p>最近回测: <span class="tag positive">+15.2%</span> &nbsp; 买入持有基准: <span class="tag positive">+12.4%</span> &nbsp; 超额: <span class="tag positive">+2.8%</span></p>
             </div>
             <div class="strategy-actions">
-                <button class="btn-outline">编辑</button>
-                <button class="btn-outline">回测</button>
-                <button class="btn-outline" style="color: #e94560; border-color: #e94560;">删除</button>
+                <button class="btn-outline" onclick="openEditor('visual')">编辑</button>
+                <button class="btn-outline" onclick="goBacktest()">回测</button>
+                <button class="btn-danger" onclick="showToast('策略已删除')">删除</button>
             </div>
         </div>
     </div>
-    
+
     <div class="card">
         <div class="strategy-card">
             <div class="strategy-info">
-                <h3>📈 RSI超卖策略</h3>
-                <p>标的: NVDA | 周期: 1h | <span class="tag draft">草稿</span></p>
+                <h3>📋 RSI超卖策略</h3>
+                <p>标的: NVDA &nbsp;|&nbsp; 周期: 1h &nbsp;|&nbsp; Mode: formula &nbsp;<span class="tag draft">草稿</span></p>
             </div>
             <div class="strategy-actions">
-                <button class="btn-outline">编辑</button>
-                <button class="btn-outline">回测</button>
-                <button class="btn-outline" style="color: #e94560; border-color: #e94560;">删除</button>
+                <button class="btn-outline" onclick="openEditor('formula')">编辑</button>
+                <button class="btn-outline" onclick="showToast('请先保存策略再回测')">回测</button>
+                <button class="btn-danger" onclick="showToast('策略已删除')">删除</button>
             </div>
-        </div>
-    </div>
-    
-    <!-- 策略编辑器弹窗 -->
-    <div id="editor" class="card" style="display: none; margin-top: 20px; border: 2px solid #4cc9f0;">
-        <h3 style="color: #4cc9f0; margin-bottom: 16px;">策略编辑器</h3>
-        
-        <div class="editor-section">
-            <h4>基础配置</h4>
-            <div class="condition-row">
-                <input type="text" placeholder="策略名称" value="MA双均线策略" style="flex: 1;">
-                <select style="flex: 1;">
-                    <option>1D</option>
-                    <option>1h</option>
-                </select>
-            </div>
-        </div>
-        
-        <div class="editor-section">
-            <h4>入场条件 (AND)</h4>
-            <div class="condition-row">
-                <select style="flex: 1;"><option>MA(20)</option><option>MA(50)</option></select>
-                <select style="flex: 1;"><option>cross_above</option><option>cross_below</option></select>
-                <select style="flex: 1;"><option>MA(50)</option><option>MA(20)</option></select>
-                <span class="delete">✕</span>
-            </div>
-            <button class="btn-outline" style="font-size: 12px;">+ 添加条件</button>
-        </div>
-        
-        <div class="editor-section">
-            <h4>出场条件 (OR)</h4>
-            <div class="condition-row">
-                <select style="flex: 1;"><option>MA(20)</option></select>
-                <select style="flex: 1;"><option>cross_below</option></select>
-                <select style="flex: 1;"><option>MA(50)</option></select>
-                <span class="delete">✕</span>
-            </div>
-            <button class="btn-outline" style="font-size: 12px;">+ 添加条件</button>
-        </div>
-        
-        <div class="editor-section">
-            <h4>风控设置</h4>
-            <div class="condition-row">
-                <span>止损:</span>
-                <input type="number" value="5" style="width: 80px;">%
-                <span style="margin-left: 20px;">止盈:</span>
-                <input type="number" value="15" style="width: 80px;">%
-            </div>
-        </div>
-        
-        <div class="editor-section">
-            <h4>资金设置</h4>
-            <div class="condition-row">
-                <span>初始资金:</span>
-                <input type="number" value="100000" style="width: 120px;">
-                <span>手续费:</span>
-                <input type="number" value="0.03" step="0.01" style="width: 80px;">%
-                <span>滑点:</span>
-                <input type="number" value="0.1" step="0.01" style="width: 80px;">%
-            </div>
-        </div>
-        
-        <div style="display: flex; gap: 12px; justify-content: flex-end;">
-            <button class="btn-outline" onclick="hideEditor()">取消</button>
-            <button class="btn">保存策略</button>
         </div>
     </div>
 </div>
 
-<!-- 回测页 -->
+<!-- 策略编辑器模态框 -->
+<div class="modal-backdrop" id="editorModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 id="editorTitle">新建 Visual 策略</h3>
+            <button class="modal-close" onclick="closeEditor()">✕</button>
+        </div>
+
+        <!-- Visual 模式 -->
+        <div id="visualEditor">
+            <div class="editor-section">
+                <h4>基础配置</h4>
+                <div class="condition-row">
+                    <input type="text" placeholder="策略名称" value="MA双均线策略" style="flex: 2;">
+                    <select style="flex: 1;">
+                        <option>1D</option><option>1h</option><option>30m</option>
+                    </select>
+                </div>
+                <div class="condition-row">
+                    <input type="text" placeholder="标的 Symbol" value="AAPL" style="flex: 1;" id="prefillSymbol">
+                </div>
+            </div>
+
+            <div class="editor-section">
+                <h4>入场条件 (AND)</h4>
+                <div class="condition-row">
+                    <select style="flex:1;"><option>MA(5)</option><option>MA(20)</option><option>MA(50)</option></select>
+                    <select style="flex:1;"><option>cross_above</option><option>cross_below</option><option>&gt;</option><option>&lt;</option></select>
+                    <select style="flex:1;"><option>MA(20)</option><option>MA(50)</option></select>
+                    <button class="delete-btn">✕</button>
+                </div>
+                <div class="condition-row">
+                    <select style="flex:1;"><option>vol_ratio</option></select>
+                    <select style="flex:1;"><option>&gt;</option></select>
+                    <input type="number" value="1.5" step="0.1" style="flex:1;">
+                    <button class="delete-btn">✕</button>
+                </div>
+                <button class="btn-outline" style="font-size: 12px; padding: 5px 12px; margin-top: 4px;">+ 添加条件</button>
+            </div>
+
+            <div class="editor-section">
+                <h4>出场条件 (OR)</h4>
+                <div class="condition-row">
+                    <select style="flex:1;"><option>MA(5)</option></select>
+                    <select style="flex:1;"><option>cross_below</option></select>
+                    <select style="flex:1;"><option>MA(20)</option></select>
+                    <button class="delete-btn">✕</button>
+                </div>
+                <button class="btn-outline" style="font-size: 12px; padding: 5px 12px; margin-top: 4px;">+ 添加条件</button>
+            </div>
+
+            <div class="editor-section">
+                <h4>风控</h4>
+                <div class="condition-row">
+                    <span style="white-space:nowrap; color:#888;">止损</span>
+                    <input type="number" value="5" style="width:70px;">
+                    <span style="color:#888;">%</span>
+                    <span style="white-space:nowrap; color:#888; margin-left:12px;">止盈</span>
+                    <input type="number" value="15" style="width:70px;">
+                    <span style="color:#888;">%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Formula 模式 -->
+        <div id="formulaEditor" style="display:none;">
+            <div class="editor-section">
+                <h4>基础配置</h4>
+                <div class="condition-row">
+                    <input type="text" placeholder="策略名称" value="RSI超卖策略" style="flex: 2;">
+                    <select style="flex: 1;"><option>1h</option><option>1D</option></select>
+                </div>
+                <div class="condition-row">
+                    <input type="text" placeholder="标的 Symbol" value="NVDA" style="flex: 1;">
+                </div>
+            </div>
+            <div class="editor-section">
+                <h4>Formula 代码</h4>
+                <textarea style="width:100%; height:180px; background:#0f3460; border:1px solid #333; color:#eee; padding:12px; font-family:monospace; font-size:13px; border-radius:6px; resize:vertical;">strategy("RSI超卖", capital=100000, fee=0.0003)
+
+period = param("RSI周期", 14, 5, 30)
+oversold = param("超卖阈值", 30, 10, 50)
+
+rsi_val = RSI(close, period)
+
+entry = rsi_val < oversold
+exit = rsi_val > 50
+
+if entry:
+    buy(100)
+
+if exit:
+    sell_all()</textarea>
+            </div>
+        </div>
+
+        <div class="modal-footer">
+            <button class="btn-outline" onclick="closeEditor()">取消</button>
+            <button class="btn" onclick="saveStrategy()">保存策略</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 回测页 ===== -->
 <div id="backtest" class="page">
     <h2>回测</h2>
-    
+
     <div class="card">
         <div class="backtest-config">
             <div class="field">
@@ -281,151 +394,213 @@
             </div>
             <div class="field">
                 <label>标的</label>
-                <input type="text" value="AAPL">
+                <input type="text" value="AAPL" id="backtestSymbol">
             </div>
             <div class="field">
-                <label>时间区间</label>
-                <input type="text" value="2024-01-01 ~ 2025-01-01">
+                <label>Timeframe</label>
+                <select><option>1d</option><option>1h</option><option>30m</option></select>
             </div>
         </div>
-        
-        <div style="display: flex; gap: 12px; align-items: flex-end;">
+
+        <div style="margin-bottom: 16px;">
+            <div class="section-title">时间区间</div>
+            <div class="preset-btns">
+                <button class="btn-outline" onclick="setPreset(1)">近1月</button>
+                <button class="btn-outline" onclick="setPreset(3)">近3月</button>
+                <button class="btn-outline active" onclick="setPreset(12)">近1年</button>
+                <button class="btn-outline" onclick="setPreset(0)">自定义</button>
+            </div>
+            <div style="display: flex; gap: 12px;">
+                <input type="date" value="2024-01-01" id="startDate" style="flex:1;">
+                <span style="color:#888; line-height:36px;">~</span>
+                <input type="date" value="2025-01-01" id="endDate" style="flex:1;">
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap;">
             <div class="field">
                 <label>初始资金</label>
-                <input type="number" value="100000" style="width: 120px;">
+                <input type="number" value="100000" style="width:120px;">
             </div>
             <div class="field">
                 <label>手续费</label>
-                <input type="number" value="0.03" step="0.01" style="width: 80px;">%
+                <input type="number" value="0.03" step="0.01" style="width:80px;"> %
             </div>
             <div class="field">
                 <label>滑点</label>
-                <input type="number" value="0.1" step="0.01" style="width: 80px;">%
+                <input type="number" value="0.1" step="0.01" style="width:80px;"> %
             </div>
-            <button class="btn" style="margin-left: auto;">开始回测</button>
+            <button class="btn" style="margin-left:auto;" onclick="runBacktest()">开始回测</button>
         </div>
     </div>
-    
-    <!-- 回测结果 -->
-    <div class="card">
-        <h4 style="margin-bottom: 12px;">回测报告</h4>
-        
-        <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="value positive">+15.2%</div>
-                <div class="label">总收益率</div>
-            </div>
-            <div class="metric-card">
-                <div class="value positive">+8.5%</div>
-                <div class="label">年化收益</div>
-            </div>
-            <div class="metric-card">
-                <div class="value">1.32</div>
-                <div class="label">夏普比率</div>
-            </div>
-            <div class="metric-card">
-                <div class="value negative">-8.5%</div>
-                <div class="label">最大回撤</div>
-            </div>
-            <div class="metric-card">
-                <div class="value">58%</div>
-                <div class="label">胜率</div>
-            </div>
-            <div class="metric-card">
-                <div class="value">1.85</div>
-                <div class="label">盈亏比</div>
-            </div>
-            <div class="metric-card">
-                <div class="value">42</div>
-                <div class="label">交易次数</div>
-            </div>
-            <div class="metric-card">
-                <div class="value">5.2天</div>
-                <div class="label">平均持仓</div>
-            </div>
-        </div>
-        
-        <div class="equity-curve">
-            <div style="position: absolute; top: 10px; left: 10px; color: #888; font-size: 12px;">资金曲线</div>
-            <svg class="curve-line" viewBox="0 0 100 100" preserveAspectRatio="none">
-                <polyline fill="none" stroke="#4cc9f0" stroke-width="2" points="0,80 10,75 20,78 30,60 40,55 50,50 60,45 70,40 80,35 90,30 100,25"/>
-            </svg>
+
+    <!-- 空状态 -->
+    <div class="backtest-state active" id="bt-empty">
+        <div class="card empty-state">
+            <h3>还没有回测结果</h3>
+            <p style="margin-top: 8px;">选择策略、设置参数后点击「开始回测」</p>
         </div>
     </div>
-    
-    <!-- 交易明细 -->
-    <div class="card">
-        <h4 style="margin-bottom: 12px;">交易明细</h4>
-        <table class="trade-table">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>入场时间</th>
-                    <th>入场价</th>
-                    <th>出场时间</th>
-                    <th>出场价</th>
-                    <th>盈亏</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>1</td>
-                    <td>2024-03-15</td>
-                    <td>$120.50</td>
-                    <td>2024-03-22</td>
-                    <td>$125.30</td>
-                    <td class="positive">+$380</td>
-                </tr>
-                <tr>
-                    <td>2</td>
-                    <td>2024-04-02</td>
-                    <td>$130.00</td>
-                    <td>2024-04-10</td>
-                    <td>$128.50</td>
-                    <td class="negative">-$150</td>
-                </tr>
-                <tr>
-                    <td>3</td>
-                    <td>2024-04-15</td>
-                    <td>$125.00</td>
-                    <td>2024-04-28</td>
-                    <td>$132.80</td>
-                    <td class="positive">+$780</td>
-                </tr>
-            </tbody>
-        </table>
+
+    <!-- 执行中 -->
+    <div class="backtest-state" id="bt-running">
+        <div class="card">
+            <div style="color:#4cc9f0; margin-bottom: 10px;">⏳ 回测执行中...</div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill" style="width:0%"></div>
+            </div>
+            <div style="color:#888; font-size:13px;" id="progressText">正在加载数据...</div>
+        </div>
+    </div>
+
+    <!-- 错误 -->
+    <div class="backtest-state" id="bt-error">
+        <div class="card" style="border: 1px solid #e94560;">
+            <div style="color:#e94560; font-weight:600; margin-bottom:8px;">❌ 回测失败</div>
+            <div style="color:#888; font-size:13px;">数据加载失败，已使用 Mock 数据兜底运行。</div>
+            <button class="btn-outline" style="margin-top:12px;" onclick="runBacktest()">重试</button>
+        </div>
+    </div>
+
+    <!-- 结果 -->
+    <div class="backtest-state" id="bt-success">
+        <div class="card">
+            <div style="color:#888; font-size:13px; margin-bottom:16px;">
+                策略：<strong style="color:#fff">MA双均线策略</strong> &nbsp;·&nbsp;
+                区间：<strong style="color:#fff">2024-01-01 ~ 2025-01-01</strong> &nbsp;·&nbsp;
+                状态：<span style="color:#4cc9f0">✓ 完成</span>
+            </div>
+
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="value positive">+15.2%</div>
+                    <div class="label">总收益率</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value positive">+8.5%</div>
+                    <div class="label">年化收益</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value neutral">1.32</div>
+                    <div class="label">夏普比率</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value negative">-8.5%</div>
+                    <div class="label">最大回撤</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value neutral">58%</div>
+                    <div class="label">胜率</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value neutral">1.85</div>
+                    <div class="label">盈亏比</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value neutral">42</div>
+                    <div class="label">交易次数</div>
+                </div>
+                <div class="metric-card">
+                    <div class="value neutral">5.2 天</div>
+                    <div class="label">平均持仓</div>
+                </div>
+                <!-- 买入持有基准行 -->
+                <div class="bh-row">
+                    <span class="bh-label">买入持有基准 (Buy & Hold)</span>
+                    <span class="bh-value positive">+12.4%</span>
+                    <span class="bh-alpha">超额收益 <span class="positive">+2.8%</span></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h4 style="margin-bottom:12px;">资金曲线</h4>
+            <div class="equity-curve">
+                <svg width="100%" height="100%" viewBox="0 0 760 160" preserveAspectRatio="none" style="display:block;">
+                    <defs>
+                        <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#4cc9f0" stop-opacity="0.3"/>
+                            <stop offset="100%" stop-color="#4cc9f0" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                    <!-- 策略曲线 -->
+                    <polyline fill="none" stroke="#4cc9f0" stroke-width="2.5"
+                        points="0,130 80,120 160,125 240,100 320,90 400,80 480,70 560,55 640,45 760,35"/>
+                    <!-- Buy & Hold 基准（虚线）-->
+                    <polyline fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="6,4"
+                        points="0,130 760,50"/>
+                    <!-- 图例 -->
+                    <rect x="10" y="8" width="12" height="3" fill="#4cc9f0" rx="1"/>
+                    <text x="26" y="16" fill="#9fb2d0" font-size="11">策略</text>
+                    <rect x="70" y="8" width="12" height="3" fill="#888" rx="1"/>
+                    <text x="86" y="16" fill="#9fb2d0" font-size="11">买入持有</text>
+                </svg>
+            </div>
+        </div>
+
+        <div class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                <h4>交易明细</h4>
+                <button class="btn-outline" style="font-size:12px; padding:4px 12px;" onclick="showToast('CSV 已导出')">导出 CSV</button>
+            </div>
+            <table class="trade-table">
+                <thead>
+                    <tr>
+                        <th>#</th><th>入场时间</th><th>入场价</th>
+                        <th>出场时间</th><th>出场价</th><th>盈亏</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>1</td><td>2024-03-15</td><td>$120.50</td><td>2024-03-22</td><td>$125.30</td><td class="positive">+$380</td></tr>
+                    <tr><td>2</td><td>2024-04-02</td><td>$130.00</td><td>2024-04-10</td><td>$128.50</td><td class="negative">-$150</td></tr>
+                    <tr><td>3</td><td>2024-04-15</td><td>$125.00</td><td>2024-04-28</td><td>$132.80</td><td class="positive">+$780</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
-<!-- 设置页 -->
+<!-- ===== 设置页 ===== -->
 <div id="settings" class="page">
     <h2>设置</h2>
-    
+
     <div class="card">
         <div class="settings-section">
-            <h4>回测参数</h4>
+            <h4>回测默认参数</h4>
             <div class="settings-row">
                 <label>初始资金</label>
-                <input type="number" value="100000">
+                <input type="number" value="100000" style="width:150px;">
             </div>
             <div class="settings-row">
                 <label>手续费率</label>
-                <input type="number" value="0.03" step="0.01">%
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <input type="number" value="0.03" step="0.01" style="width:80px;"> %
+                </div>
             </div>
             <div class="settings-row">
                 <label>滑点</label>
-                <input type="number" value="0.1" step="0.01">%
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <input type="number" value="0.1" step="0.01" style="width:80px;"> %
+                </div>
             </div>
         </div>
-        
+
         <div class="settings-section">
-            <h4>数据</h4>
+            <h4>数据源</h4>
             <div class="settings-row">
-                <label>数据源</label>
-                <select><option>Mock模式</option></select>
+                <label>模式</label>
+                <select>
+                    <option>Mock</option>
+                    <option>Futu 模拟</option>
+                    <option>Futu 实盘</option>
+                </select>
+            </div>
+            <div class="settings-row">
+                <label>Futu OpenD 地址</label>
+                <input type="text" value="127.0.0.1:11111" style="width:180px;">
             </div>
         </div>
-        
+
         <div class="settings-section">
             <h4>显示</h4>
             <div class="settings-row">
@@ -437,30 +612,128 @@
                 <select><option>简体中文</option><option>English</option></select>
             </div>
         </div>
-        
+
         <div style="text-align: right;">
-            <button class="btn">保存设置</button>
+            <button class="btn" onclick="showToast('设置已保存')">保存设置</button>
         </div>
     </div>
 </div>
 
+<!-- Toast 通知 -->
+<div class="toast" id="toast"></div>
+
 <script>
-    function showPage(pageId) {
-        // 隐藏所有页面
-        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-        
-        // 显示选中页面
-        document.getElementById(pageId).classList.add('active');
-        event.target.classList.add('active');
+    // ===== 导航 =====
+    function showPage(pageId, el) {
+        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'))
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'))
+        document.getElementById(pageId).classList.add('active')
+        if (el) el.classList.add('active')
     }
-    
-    function showEditor() {
-        document.getElementById('editor').style.display = 'block';
+
+    // ===== 行情页 =====
+    function selectTimeframe(btn) {
+        document.querySelectorAll('#timeframeControls button').forEach(b => b.classList.remove('active'))
+        btn.classList.add('active')
     }
-    
-    function hideEditor() {
-        document.getElementById('editor').style.display = 'none';
+
+    function handleSearch() {
+        const val = document.getElementById('symbolInput').value.trim().toUpperCase()
+        if (val) {
+            document.getElementById('symbolDisplay').textContent = val
+            showToast(`已加载 ${val} 行情`)
+        }
+    }
+
+    // 从行情页跳转到策略编辑器，并预填标的
+    function goCreateStrategy() {
+        const symbol = document.getElementById('symbolInput').value.trim().toUpperCase() || 'AAPL'
+        document.querySelectorAll('.nav-item').forEach((n, i) => n.classList.toggle('active', i === 1))
+        showPage('strategy', null)
+        openEditor('visual', symbol)
+    }
+
+    // ===== 策略编辑器模态框 =====
+    function openEditor(mode, prefillSymbol) {
+        document.getElementById('editorModal').classList.add('open')
+        document.getElementById('visualEditor').style.display = mode === 'visual' ? '' : 'none'
+        document.getElementById('formulaEditor').style.display = mode === 'formula' ? '' : 'none'
+        document.getElementById('editorTitle').textContent = `新建 ${mode === 'visual' ? 'Visual' : 'Formula'} 策略`
+        if (prefillSymbol) {
+            const el = document.getElementById('prefillSymbol')
+            if (el) el.value = prefillSymbol
+        }
+    }
+
+    function closeEditor() {
+        document.getElementById('editorModal').classList.remove('open')
+    }
+
+    function saveStrategy() {
+        closeEditor()
+        showToast('策略已保存')
+    }
+
+    // 点击遮罩关闭
+    document.getElementById('editorModal').addEventListener('click', function(e) {
+        if (e.target === this) closeEditor()
+    })
+
+    // ===== 回测页 =====
+    let btState = 'empty'
+    function setBtState(state) {
+        btState = state
+        ;['empty', 'running', 'error', 'success'].forEach(s => {
+            document.getElementById('bt-' + s).classList.toggle('active', s === state)
+        })
+    }
+
+    function setPreset(months) {
+        if (months === 0) return
+        const end = new Date()
+        const start = new Date()
+        start.setMonth(start.getMonth() - months)
+        document.getElementById('startDate').value = start.toISOString().slice(0, 10)
+        document.getElementById('endDate').value = end.toISOString().slice(0, 10)
+
+        document.querySelectorAll('.preset-btns button').forEach(b => b.classList.remove('active'))
+        event.target.classList.add('active')
+    }
+
+    function runBacktest() {
+        setBtState('running')
+        let pct = 0
+        const fill = document.getElementById('progressFill')
+        const text = document.getElementById('progressText')
+        const steps = ['正在加载数据...', '正在计算指标...', '正在回测策略...', '正在生成报告...']
+        let step = 0
+        const interval = setInterval(() => {
+            pct = Math.min(pct + 14, 95)
+            fill.style.width = pct + '%'
+            if (step < steps.length) text.textContent = steps[step++]
+            if (pct >= 95) {
+                clearInterval(interval)
+                setTimeout(() => {
+                    fill.style.width = '100%'
+                    setTimeout(() => setBtState('success'), 300)
+                }, 200)
+            }
+        }, 350)
+    }
+
+    function goBacktest() {
+        document.querySelectorAll('.nav-item').forEach((n, i) => n.classList.toggle('active', i === 2))
+        showPage('backtest', null)
+    }
+
+    // ===== Toast =====
+    let toastTimer = null
+    function showToast(msg) {
+        const el = document.getElementById('toast')
+        el.textContent = msg
+        el.classList.add('show')
+        if (toastTimer) clearTimeout(toastTimer)
+        toastTimer = setTimeout(() => el.classList.remove('show'), 2500)
     }
 </script>
 

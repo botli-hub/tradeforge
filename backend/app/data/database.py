@@ -44,7 +44,7 @@ def _build_visual_demo() -> Dict[str, Any]:
                 "type": "AND",
                 "rules": [
                     {"id": "entry_1", "type": "crossover", "op": "cross_above", "left": "ma_fast", "right": "ma_slow"},
-                    {"id": "entry_2", "type": "binary", "op": ">", "left": "vol_ratio", "right": 1.5},
+                    {"id": "entry_2", "type": "binary", "op": ">", "left": "vol_ratio", "right": 1.0},
                 ],
             },
             "exit": {

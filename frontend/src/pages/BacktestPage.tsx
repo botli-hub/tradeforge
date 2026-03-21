@@ -21,6 +21,7 @@ interface BacktestMetrics {
   profit_factor: number
   total_trades: number
   avg_holding_days: number
+  buy_and_hold_return?: number
 }
 
 interface BacktestTrade {
@@ -374,6 +375,22 @@ export default function BacktestPage() {
                 <div className="value">{formatNumber(result.metrics.avg_holding_days, 1)} 天</div>
                 <div className="label">平均持仓</div>
               </div>
+              {result.metrics.buy_and_hold_return !== undefined && (
+                <div className="metric-card" style={{ gridColumn: 'span 4', borderTop: '1px solid #333', paddingTop: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    <span style={{ color: '#888', fontSize: 12 }}>买入持有基准 (Buy & Hold)</span>
+                    <span className={`value ${result.metrics.buy_and_hold_return >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: 20 }}>
+                      {formatPercent(result.metrics.buy_and_hold_return)}
+                    </span>
+                    <span style={{ color: '#888', fontSize: 12 }}>
+                      策略超额：
+                      <span className={(result.metrics.total_return - result.metrics.buy_and_hold_return) >= 0 ? 'positive' : 'negative'} style={{ marginLeft: 4 }}>
+                        {formatPercent(result.metrics.total_return - result.metrics.buy_and_hold_return)}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -425,7 +442,38 @@ export default function BacktestPage() {
           </div>
 
           <div className="card">
-            <h4 style={{ marginBottom: 12 }}>交易明细</h4>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h4>交易明细</h4>
+              {result.trades?.length ? (
+                <button
+                  className="btn-outline"
+                  style={{ fontSize: 12, padding: '4px 12px' }}
+                  onClick={() => {
+                    const headers = ['#', '标的', '入场时间', '入场价', '出场时间', '出场价', '数量', '盈亏']
+                    const rows = result.trades.map((trade, index) => [
+                      index + 1,
+                      trade.symbol || result.symbols?.[0] || '',
+                      trade.entry_time || '',
+                      trade.entry_price?.toFixed(2) ?? '',
+                      trade.exit_time || '',
+                      trade.exit_price?.toFixed(2) ?? '',
+                      trade.quantity?.toFixed(2) ?? '',
+                      trade.pnl?.toFixed(2) ?? '',
+                    ])
+                    const csv = [headers, ...rows].map(r => r.join(',')).join('\n')
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = `trades_${result.strategy_name || 'backtest'}_${result.start_date}_${result.end_date}.csv`
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                >
+                  导出 CSV
+                </button>
+              ) : null}
+            </div>
             {result.trades?.length ? (
               <div style={{ overflowX: 'auto' }}>
                 <table className="trade-table">

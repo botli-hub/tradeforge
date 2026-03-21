@@ -155,6 +155,7 @@ def _ensure_result_shape(raw_result: Dict[str, Any], strategy: Dict[str, Any], p
         "profit_factor": raw_result.get("profit_factor", 0),
         "total_trades": raw_result.get("total_trades", 0),
         "avg_holding_days": raw_result.get("avg_holding_days", 0),
+        "buy_and_hold_return": raw_result.get("buy_and_hold_return", 0),
     }
     trades = _json_safe(raw_result.get("trades") or [])
     equity_curve = _json_safe(raw_result.get("equity_curve") or [])
