@@ -341,3 +341,47 @@ export async function runHistoryScheduler(settings = getAppSettings()) {
     method: 'POST',
   })
 }
+
+// ---- 股票池 ----
+
+export interface StockItem {
+  symbol: string
+  name: string
+  market: 'US' | 'HK' | 'CN'
+  enabled: boolean
+  subscribed: boolean
+}
+
+export async function getStocks(params?: { market?: string; enabled_only?: boolean }) {
+  const qs = buildMarketQuery({
+    market: params?.market,
+    enabled_only: params?.enabled_only ? 'true' : undefined,
+  })
+  return request<StockItem[]>(`/api/stocks${qs ? `?${qs}` : ''}`)
+}
+
+export async function addStock(data: { symbol: string; name: string; market: string }) {
+  return request<StockItem>(`/api/stocks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteStock(symbol: string) {
+  return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function setStockEnabled(symbol: string, enabled: boolean) {
+  return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}/enable?enabled=${enabled}`, {
+    method: 'POST',
+  })
+}
+
+export async function setStockSubscribed(symbol: string, subscribed: boolean) {
+  return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}/subscribe?subscribed=${subscribed}`, {
+    method: 'POST',
+  })
+}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, IChartApi, ISeriesApi, CandlestickData } from 'lightweight-charts'
 import SignalConfirmModal from '../components/SignalConfirmModal'
+import StockSelect from '../components/StockSelect'
 import {
   AppSettings,
   addHistorySubscription,
@@ -571,12 +572,18 @@ export default function MarketPage() {
       </div>
 
       <div className="search-bar">
+        <StockSelect
+          value={symbol}
+          onChange={nextSymbol => selectStock(nextSymbol)}
+          style={{ flex: 1 }}
+        />
         <input
           type="text"
-          placeholder="输入股票代码，如 AAPL、TSLA、00700"
+          placeholder="搜索其他代码..."
           value={searchQ}
           onChange={e => setSearchQ(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleSearch()}
+          style={{ flex: 1 }}
         />
         <button className="btn" onClick={handleSearch}>搜索</button>
       </div>

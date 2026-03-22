@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getBacktestResult, getHistoryCoverage, getStrategies, runBacktest } from '../services/api'
+import StockSelect from '../components/StockSelect'
 
 interface Strategy {
   id: string
@@ -316,12 +317,7 @@ export default function BacktestPage() {
 
           <div className="strategy-field">
             <span>标的</span>
-            <input
-              type="text"
-              value={symbol}
-              onChange={e => setSymbol(e.target.value)}
-              placeholder="AAPL / 00700.HK / 600519.SH"
-            />
+            <StockSelect value={symbol} onChange={setSymbol} />
           </div>
 
           <div className="strategy-field">

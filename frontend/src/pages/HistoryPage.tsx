@@ -13,6 +13,7 @@ import {
   setHistorySubscriptionEnabled,
   subscribeSettings,
 } from '../services/api'
+import StockSelect from '../components/StockSelect'
 
 const PRESETS = ['AAPL', 'QQQ', 'TSLA', 'GOOGL', 'NVDA', 'AMD', '600519.SH', '300750.SZ', '00700.HK', '00883.HK']
 
@@ -180,7 +181,7 @@ export default function HistoryPage() {
           <div className="history-form-grid">
             <div className="option-field">
               <label>标的代码</label>
-              <input value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())} />
+              <StockSelect value={symbol} onChange={setSymbol} />
             </div>
             <div className="option-field">
               <label>周期</label>

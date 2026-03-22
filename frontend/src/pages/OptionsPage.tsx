@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getAppSettings, getOptionChain, getOptionExpirations, getOptionPayoff, subscribeSettings, type AppSettings } from '../services/api'
+import StockSelect from '../components/StockSelect'
 
 type StrategyType = 'long_call' | 'long_put' | 'bull_call_spread' | 'bear_put_spread'
 
@@ -179,7 +180,11 @@ export default function OptionsPage() {
 
       <div className="card">
         <div className="search-bar" style={{ marginBottom: 12 }}>
-          <input value={inputSymbol} onChange={e => setInputSymbol(e.target.value.toUpperCase())} placeholder="输入标的，如 AAPL / 00700" />
+          <StockSelect
+            value={inputSymbol}
+            onChange={v => setInputSymbol(v)}
+            style={{ flex: 1 }}
+          />
           <button className="btn" onClick={() => setSymbol(inputSymbol.trim().toUpperCase() || 'AAPL')}>加载期权链</button>
         </div>
         <div className="option-toolbar">

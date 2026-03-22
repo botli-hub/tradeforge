@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import FormulaEditor from './FormulaEditor'
 import { createStrategy, deleteStrategy, getStrategy, getStrategies, updateStrategy } from '../services/api'
+import StockSelect from '../components/StockSelect'
 
 type StrategyMode = 'visual' | 'formula'
 type ViewMode = 'list' | 'create' | 'edit'
@@ -305,7 +306,7 @@ export default function StrategyPage() {
           </label>
           <label className="strategy-field">
             <span>标的 Symbol</span>
-            <input value={visualForm.symbol} onChange={(e) => setVisualForm({ ...visualForm, symbol: e.target.value.toUpperCase() })} placeholder="AAPL" />
+            <StockSelect value={visualForm.symbol} onChange={v => setVisualForm({ ...visualForm, symbol: v })} />
           </label>
           <label className="strategy-field">
             <span>Timeframe</span>
@@ -354,7 +355,7 @@ export default function StrategyPage() {
           </label>
           <label className="strategy-field">
             <span>标的 Symbol</span>
-            <input value={formulaForm.symbol} onChange={(e) => setFormulaForm({ ...formulaForm, symbol: e.target.value.toUpperCase() })} placeholder="TSLA" />
+            <StockSelect value={formulaForm.symbol} onChange={v => setFormulaForm({ ...formulaForm, symbol: v })} />
           </label>
           <label className="strategy-field">
             <span>Timeframe</span>

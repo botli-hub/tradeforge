@@ -349,6 +349,19 @@ def init_db():
         )
     """)
 
+    # 股票池（下拉框数据源）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS stocks (
+            symbol TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            market TEXT NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            subscribed INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_kline_symbol_tf_ts ON kline_bars(symbol, timeframe, ts)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_kline_jobs_status ON kline_backfill_jobs(status, created_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_enabled ON data_subscriptions(enabled, updated_at)")
@@ -356,5 +369,58 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_events_symbol ON risk_events(symbol, created_at)")
 
     seed_demo_strategies(conn)
+    seed_stocks(conn)
     conn.commit()
     conn.close()
+
+
+_SEED_STOCKS: List[Dict[str, str]] = [
+    # 美股
+    {"symbol": "AAPL",  "name": "Apple",            "market": "US"},
+    {"symbol": "MSFT",  "name": "Microsoft",         "market": "US"},
+    {"symbol": "GOOGL", "name": "Alphabet",          "market": "US"},
+    {"symbol": "AMZN",  "name": "Amazon",            "market": "US"},
+    {"symbol": "NVDA",  "name": "NVIDIA",            "market": "US"},
+    {"symbol": "TSLA",  "name": "Tesla",             "market": "US"},
+    {"symbol": "META",  "name": "Meta",              "market": "US"},
+    {"symbol": "JPM",   "name": "JPMorgan Chase",    "market": "US"},
+    {"symbol": "V",     "name": "Visa",              "market": "US"},
+    {"symbol": "BRK.B", "name": "Berkshire Hathaway","market": "US"},
+    # 港股
+    {"symbol": "00700.HK", "name": "腾讯控股", "market": "HK"},
+    {"symbol": "09988.HK", "name": "阿里巴巴", "market": "HK"},
+    {"symbol": "00941.HK", "name": "中国移动", "market": "HK"},
+    {"symbol": "01810.HK", "name": "小米集团", "market": "HK"},
+    {"symbol": "02318.HK", "name": "中国平安", "market": "HK"},
+    {"symbol": "09618.HK", "name": "京东集团", "market": "HK"},
+    {"symbol": "00005.HK", "name": "汇丰控股", "market": "HK"},
+    {"symbol": "01211.HK", "name": "比亚迪股份", "market": "HK"},
+    {"symbol": "00388.HK", "name": "香港交易所", "market": "HK"},
+    {"symbol": "02269.HK", "name": "药明生物", "market": "HK"},
+    # A股
+    {"symbol": "600519.SH", "name": "贵州茅台", "market": "CN"},
+    {"symbol": "000858.SZ", "name": "五粮液",   "market": "CN"},
+    {"symbol": "601318.SH", "name": "中国平安", "market": "CN"},
+    {"symbol": "600036.SH", "name": "招商银行", "market": "CN"},
+    {"symbol": "000333.SZ", "name": "美的集团", "market": "CN"},
+    {"symbol": "600900.SH", "name": "长江电力", "market": "CN"},
+    {"symbol": "002594.SZ", "name": "比亚迪",   "market": "CN"},
+    {"symbol": "300750.SZ", "name": "宁德时代", "market": "CN"},
+    {"symbol": "601899.SH", "name": "紫金矿业", "market": "CN"},
+    {"symbol": "688981.SH", "name": "中芯国际", "market": "CN"},
+]
+
+
+def seed_stocks(conn: sqlite3.Connection):
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(1) AS cnt FROM stocks")
+    row = cursor.fetchone()
+    if row and row["cnt"]:
+        return
+    now = _now_iso()
+    for s in _SEED_STOCKS:
+        cursor.execute(
+            "INSERT OR IGNORE INTO stocks (symbol, name, market, enabled, subscribed, created_at, updated_at) VALUES (?, ?, ?, 1, 0, ?, ?)",
+            (s["symbol"], s["name"], s["market"], now, now),
+        )
+    conn.commit()
