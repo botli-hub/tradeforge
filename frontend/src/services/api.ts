@@ -352,7 +352,7 @@ export interface StockItem {
   subscribed: boolean
 }
 
-export async function getStocks(params?: { market?: string; enabled_only?: boolean }) {
+export async function getStocks(params?: { market?: string; enabled_only?: boolean; subscribed?: boolean }) {
   const qs = buildMarketQuery({
     market: params?.market,
     enabled_only: params?.enabled_only ? 'true' : undefined,

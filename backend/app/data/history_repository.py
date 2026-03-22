@@ -365,6 +365,19 @@ def list_scheduler_runs(limit: int = 20) -> List[Dict[str, Any]]:
     return rows
 
 
+def list_stocks_all(enabled_only: bool = True) -> List[Dict[str, Any]]:
+    """从 stocks 表读取股票池，供调度器使用"""
+    conn = get_db()
+    cursor = conn.cursor()
+    sql = "SELECT symbol, name, market FROM stocks"
+    if enabled_only:
+        sql += " WHERE enabled = 1"
+    sql += " ORDER BY symbol"
+    rows = [dict(row) for row in cursor.execute(sql).fetchall()]
+    conn.close()
+    return rows
+
+
 def has_successful_scheduler_run(target_date: str) -> bool:
     conn = get_db()
     cursor = conn.cursor()

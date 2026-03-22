@@ -4,22 +4,20 @@ import SignalConfirmModal from '../components/SignalConfirmModal'
 import StockSelect from '../components/StockSelect'
 import {
   AppSettings,
-  addHistorySubscription,
+  StockItem,
   evaluateStrategySignal,
   getAccount,
   getAppSettings,
-  getHistorySubscriptions,
   getKlines,
   getOrders,
   getPositions,
   getQuote,
+  getStocks,
   getStrategies,
   getTradingStatus,
   placeOrder,
-  previewHistorySource,
   saveAppSettings,
   searchStocks,
-  setHistorySubscriptionEnabled,
   subscribeSettings,
 } from '../services/api'
 
@@ -36,7 +34,7 @@ export default function MarketPage() {
   const [strategies, setStrategies] = useState<any[]>([])
   const [selectedStrategyId, setSelectedStrategyId] = useState('')
   const [signalInfo, setSignalInfo] = useState<any | null>(null)
-  const [watchlist, setWatchlist] = useState<any[]>([])
+  const [watchlist, setWatchlist] = useState<StockItem[]>([])
   const [notice, setNotice] = useState('')
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
@@ -213,10 +211,10 @@ export default function MarketPage() {
 
   async function refreshWatchlist() {
     try {
-      const list = await getHistorySubscriptions(true)
-      setWatchlist(list || [])
+      const list = await getStocks({ enabled_only: true })
+      setWatchlist((list || []).filter(s => s.subscribed))
     } catch {
-      // 观察池获取失败时不打断行情页
+      // 订阅池获取失败时不打断行情页
     }
   }
 
@@ -380,32 +378,6 @@ export default function MarketPage() {
     setSettings(next)
   }
 
-  async function handleSubscribeCurrent() {
-    try {
-      const preview = await previewHistorySource(symbol, settings.marketDataSource)
-      await addHistorySubscription({
-        symbol,
-        name: quote?.name || symbol,
-        source_hint: preview.source,
-        enabled: true,
-      })
-      setNotice(`已加入观察池：${symbol}（每天 08:00 更新 1d / 1h / 30m / 5m / 1m）`)
-      await refreshWatchlist()
-    } catch (e: any) {
-      setError(e.message || '加入观察池失败')
-    }
-  }
-
-  async function handleToggleWatchlist(targetSymbol: string, enabled: boolean) {
-    try {
-      await setHistorySubscriptionEnabled(targetSymbol, enabled)
-      setNotice(`${targetSymbol} 已${enabled ? '启用' : '停用'}观察池更新`)
-      await refreshWatchlist()
-    } catch (e: any) {
-      setError(e.message || '更新观察池失败')
-    }
-  }
-
   function selectStock(nextSymbol: string) {
     setSymbol(nextSymbol)
     setSearchResults([])
@@ -470,10 +442,6 @@ export default function MarketPage() {
   const expectedKlineSource = inferMarket(symbol) === 'US' ? 'yahoo' : 'futu'
   const quoteSource = formatSourceLabel(quote?.adapter || expectedQuoteSource)
   const klineSource = formatSourceLabel(klines[klines.length - 1]?.adapter || expectedKlineSource)
-  const enabledWatchlist = watchlist.filter(item => item.enabled)
-  const currentSubscription = watchlist.find(item => item.symbol === symbol)
-  const isCurrentSubscribed = Boolean(currentSubscription?.enabled)
-
   return (
     <div className="page active">
       <h2>行情</h2>
@@ -511,40 +479,26 @@ export default function MarketPage() {
       )}
 
       <div className="card compact-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
           <div>
-            <div style={{ color: '#fff', fontWeight: 700 }}>观察池</div>
+            <div style={{ color: '#fff', fontWeight: 700 }}>订阅池</div>
             <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 4 }}>
-              加入观察池后，会自动进入每天 08:00 的历史数据更新任务。
+              在「股票池」页面订阅标的后，系统将自动每天 08:00 补充历史数据。
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {isCurrentSubscribed ? (
-              <button className="btn-outline" onClick={() => handleToggleWatchlist(symbol, false)}>
-                取消关注 {symbol}
-              </button>
-            ) : (
-              <button className="btn" onClick={() => handleSubscribeCurrent()}>
-                关注 {symbol}
-              </button>
-            )}
-            <button className="btn-outline" onClick={() => refreshWatchlist()}>
-              刷新观察池
-            </button>
-          </div>
+          <button className="btn-outline" onClick={() => refreshWatchlist()}>
+            刷新
+          </button>
         </div>
 
         <div className="watchlist-strip">
-          {enabledWatchlist.length === 0 ? (
-            <span className="watchlist-empty">暂无观察池标的</span>
+          {watchlist.length === 0 ? (
+            <span className="watchlist-empty">暂无订阅标的，请前往「股票池」页面订阅</span>
           ) : (
-            enabledWatchlist.map(item => (
+            watchlist.map(item => (
               <div key={item.symbol} className={`watchlist-chip ${item.symbol === symbol ? 'active' : ''}`}>
                 <button className="watchlist-chip-main" onClick={() => selectStock(item.symbol)}>
                   {item.symbol}
-                </button>
-                <button className="watchlist-chip-close" onClick={() => handleToggleWatchlist(item.symbol, false)}>
-                  ×
                 </button>
               </div>
             ))

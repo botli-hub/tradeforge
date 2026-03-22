@@ -14,7 +14,7 @@ from app.data.history_repository import (
     finish_scheduler_run,
     has_successful_scheduler_run,
     list_scheduler_runs,
-    list_subscriptions,
+    list_stocks_all,
     now_iso,
     update_subscription_result,
 )
@@ -65,7 +65,7 @@ class HistoryScheduler:
             'next_run_at': next_run.isoformat(timespec='seconds'),
             'timeframes': TIMEFRAMES,
             'recent_runs': list_scheduler_runs(limit=10),
-            'subscriptions': list_subscriptions(enabled_only=True),
+            'subscriptions': list_stocks_all(enabled_only=True),
         }
 
     def run_once(self, trigger_type: str = 'manual', host: str = '127.0.0.1', port: int = 11111) -> Dict[str, Any]:
@@ -80,13 +80,13 @@ class HistoryScheduler:
         self._last_started_at = now_iso()
         self._last_attempted_date = target_date
 
-        subscriptions = list_subscriptions(enabled_only=True)
+        subscriptions = list_stocks_all(enabled_only=True)
         results: List[Dict[str, Any]] = []
         failed = 0
         try:
             for sub in subscriptions:
                 symbol = sub['symbol']
-                source_hint = sub.get('source_hint')
+                source_hint = sub.get('source_hint')  # stocks table has no source_hint; None = auto-detect
                 symbol_result = {'symbol': symbol, 'timeframes': []}
                 symbol_ok = True
 

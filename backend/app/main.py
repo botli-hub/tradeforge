@@ -1,4 +1,5 @@
 """TradeForge API 入口"""
+import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import strategies, backtest, market, formula, trading, options, history, runtime, stocks
@@ -25,7 +26,25 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     init_db()
-    get_history_scheduler().start()
+    scheduler = get_history_scheduler()
+    scheduler.start()
+    # 启动时在后台检查数据缺失并补数（若今天尚未跑过调度任务）
+    threading.Thread(target=_startup_backfill_check, args=(scheduler,), daemon=True).start()
+
+
+def _startup_backfill_check(scheduler):
+    import time
+    from app.data.history_repository import has_successful_scheduler_run
+    from datetime import datetime
+    time.sleep(3)  # 等待 uvicorn 完全就绪
+    today = datetime.now().date().isoformat()
+    if has_successful_scheduler_run(today):
+        return  # 今天已成功跑过，跳过
+    # 今天还没有成功的调度记录，触发启动补数（覆盖股票池所有启用股票的近期数据）
+    try:
+        scheduler.run_once(trigger_type='startup')
+    except Exception:
+        pass
 
 
 @app.on_event("shutdown")
