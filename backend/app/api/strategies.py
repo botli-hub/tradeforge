@@ -179,7 +179,7 @@ async def delete_strategy(strategy_id: str):
 async def evaluate_strategy_signal(
     strategy_id: str,
     symbol: Optional[str] = Query(None, description="标的代码，不传则取策略首个symbol"),
-    adapter: str = Query("mock", description="前端传入的首选入口（实际会走自动路由）"),
+    adapter: str = Query("auto", description="前端传入的首选入口（实际会走自动路由）"),
     host: str = Query("127.0.0.1", description="行情地址"),
     port: int = Query(11111, description="行情端口"),
 ):

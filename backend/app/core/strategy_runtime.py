@@ -89,7 +89,7 @@ def evaluate_strategy(
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
     trigger_mode: Literal["on_quote", "on_bar_close"] = "on_quote",
-    adapter_type: str = "mock",
+    adapter_type: str = "auto",
     adapter_host: str = "127.0.0.1",
     adapter_port: int = 11111,
     strategy_config: Optional[Dict[str, Any]] = None,
@@ -151,7 +151,7 @@ def evaluate_strategy_on_quote(
     strategy_id: str,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
-    adapter_type: str = "mock",
+    adapter_type: str = "auto",
     adapter_host: str = "127.0.0.1",
     adapter_port: int = 11111,
 ) -> SignalResult:
@@ -175,7 +175,7 @@ def evaluate_strategy_on_bar_close(
     strategy_id: str,
     symbol: Optional[str] = None,
     timeframe: Optional[str] = None,
-    adapter_type: str = "mock",
+    adapter_type: str = "auto",
     adapter_host: str = "127.0.0.1",
     adapter_port: int = 11111,
 ) -> SignalResult:
@@ -314,7 +314,7 @@ def evaluate_all_strategies_on_symbol(
     symbol: str,
     timeframe: str = "1d",
     trigger_mode: Literal["on_quote", "on_bar_close"] = "on_quote",
-    adapter_type: str = "mock",
+    adapter_type: str = "auto",
 ) -> List[SignalResult]:
     """
     评估所有订阅了该标的的策略

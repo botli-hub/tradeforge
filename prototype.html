@@ -6,43 +6,43 @@
     <title>TradeForge 产品原型</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #000000; color: #eee; }
 
         /* 导航 */
-        .nav { background: #16213e; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #0f3460; align-items: center; }
-        .nav-logo { font-weight: 700; color: #4cc9f0; margin-right: 8px; }
-        .nav-item { color: #888; cursor: pointer; padding: 8px 16px; border-radius: 6px; transition: 0.2s; }
+        .nav { background: #000; padding: 0 32px; display: flex; gap: 0; border-bottom: 1px solid #1c1c1c; align-items: center; }
+        .nav-logo { font-weight: 700; color: #00C805; margin-right: 24px; font-size: 15px; }
+        .nav-item { color: #a0a0a0; cursor: pointer; padding: 16px 18px; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 500; transition: color 0.15s, border-color 0.15s; }
         .nav-item:hover { color: #fff; }
-        .nav-item.active { background: #0f3460; color: #4cc9f0; }
+        .nav-item.active { background: transparent; color: #fff; border-bottom-color: #00C805; }
 
         /* 页面容器 */
         .page { display: none; padding: 24px; max-width: 1200px; margin: 0 auto; }
         .page.active { display: block; }
 
         /* 通用组件 */
-        .card { background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-        .btn { background: #4cc9f0; color: #000; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+        .card { background: #0a0a0a; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+        .btn { background: #00C805; color: #000; border: none; padding: 10px 20px; border-radius: 999px; cursor: pointer; font-weight: 600; }
         .btn:hover { opacity: 0.9; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-outline { background: transparent; border: 1px solid #4cc9f0; color: #4cc9f0; padding: 10px 20px; border-radius: 6px; cursor: pointer; }
+        .btn-outline { background: transparent; border: 1px solid #555; color: #fff; padding: 10px 20px; border-radius: 999px; cursor: pointer; }
         .btn-outline:hover { background: rgba(76,201,240,0.1); }
-        .btn-danger { background: #e94560; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; }
+        .btn-danger { background: #FF5000; color: #fff; border: none; padding: 10px 20px; border-radius: 999px; cursor: pointer; }
 
-        input, select { background: #0f3460; border: 1px solid #333; color: #fff; padding: 8px 12px; border-radius: 6px; }
-        input:focus, select:focus { outline: none; border-color: #4cc9f0; }
+        input, select { background: #1a1a1a; border: 1px solid #1c1c1c; color: #fff; padding: 8px 12px; border-radius: 999px; }
+        input:focus, select:focus { outline: none; border-color: #00C805; }
 
         /* 行情页 */
         .search-bar { display: flex; gap: 12px; margin-bottom: 16px; }
         .search-bar input { flex: 1; }
-        .chart-area { height: 360px; background: #0f3460; border-radius: 12px; position: relative; overflow: hidden; }
+        .chart-area { height: 360px; background: #1a1a1a; border-radius: 12px; position: relative; overflow: hidden; }
         .chart-candle { position: absolute; bottom: 40px; left: 20px; right: 20px; height: 260px; display: flex; align-items: flex-end; gap: 5px; padding: 10px; }
         .candle-body { width: 12px; border-radius: 2px; position: relative; }
-        .candle-body.up { background: #4cc9f0; }
-        .candle-body.down { background: #e94560; }
-        .chart-label { position: absolute; top: 10px; right: 14px; color: #555; font-size: 12px; }
+        .candle-body.up { background: #00C805; }
+        .candle-body.down { background: #FF5000; }
+        .chart-label { position: absolute; top: 10px; right: 14px; color: #666; font-size: 12px; }
         .chart-controls { display: flex; gap: 8px; margin-top: 12px; }
-        .chart-controls button { padding: 6px 14px; font-size: 12px; border-radius: 6px; cursor: pointer; background: transparent; border: 1px solid #333; color: #888; transition: 0.2s; }
-        .chart-controls button.active { background: #0f3460; border-color: #4cc9f0; color: #4cc9f0; }
+        .chart-controls button { padding: 6px 14px; font-size: 12px; border-radius: 999px; cursor: pointer; background: transparent; border: 1px solid #1c1c1c; color: #a0a0a0; transition: 0.2s; }
+        .chart-controls button.active { background: #1a1a1a; border-color: #00C805; color: #00C805; }
         .quick-actions { display: flex; gap: 12px; margin-top: 16px; }
 
         /* 数据来源标注 */
@@ -51,17 +51,17 @@
 
         /* 策略页 */
         .strategy-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .strategy-card { background: #0f3460; border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center; }
-        .strategy-info h3 { color: #4cc9f0; margin-bottom: 8px; }
-        .strategy-info p { color: #888; font-size: 14px; line-height: 1.8; }
+        .strategy-card { background: #1a1a1a; border-radius: 8px; padding: 16px; display: flex; justify-content: space-between; align-items: center; }
+        .strategy-info h3 { color: #fff; margin-bottom: 8px; }
+        .strategy-info p { color: #a0a0a0; font-size: 14px; line-height: 1.8; }
         .strategy-actions { display: flex; gap: 8px; }
 
         /* 标签 */
-        .tag { padding: 3px 10px; border-radius: 4px; font-size: 12px; display: inline-block; }
-        .tag.draft { background: #333; color: #888; }
-        .tag.ready { background: #1a4a8a; color: #4cc9f0; }
-        .tag.positive { background: rgba(76,201,240,0.15); color: #4cc9f0; }
-        .tag.negative { background: rgba(233,69,96,0.15); color: #e94560; }
+        .tag { padding: 3px 12px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; display: inline-block; }
+        .tag.draft { background: #1a1a1a; color: #a0a0a0; }
+        .tag.ready { background: rgba(0,200,5,0.12); color: #00C805; }
+        .tag.positive { background: rgba(0,200,5,0.12); color: #00C805; }
+        .tag.negative { background: rgba(255,80,0,0.12); color: #FF5000; }
 
         /* 模态框 */
         .modal-backdrop {
@@ -74,8 +74,8 @@
         }
         .modal-backdrop.open { display: flex; }
         .modal {
-            background: #16213e;
-            border: 1px solid #4cc9f0;
+            background: #0a0a0a;
+            border: 1px solid #00C805;
             border-radius: 12px;
             padding: 28px;
             width: 560px;
@@ -84,80 +84,82 @@
             overflow-y: auto;
         }
         .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .modal-header h3 { color: #4cc9f0; font-size: 18px; }
-        .modal-close { background: none; border: none; color: #888; font-size: 20px; cursor: pointer; padding: 4px 8px; }
+        .modal-header h3 { color: #00C805; font-size: 18px; }
+        .modal-close { background: none; border: none; color: #a0a0a0; font-size: 20px; cursor: pointer; padding: 4px 8px; }
         .modal-close:hover { color: #fff; }
         .editor-section { margin-bottom: 20px; }
-        .editor-section h4 { color: #9fb2d0; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #333; font-size: 13px; }
+        .editor-section h4 { color: #a0a0a0; margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #1c1c1c; font-size: 13px; }
         .condition-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
         .condition-row select, .condition-row input { flex: 1; min-width: 80px; }
-        .delete-btn { color: #e94560; cursor: pointer; padding: 6px; background: none; border: none; font-size: 16px; }
+        .delete-btn { color: #FF5000; cursor: pointer; padding: 6px; background: none; border: none; font-size: 16px; }
         .modal-footer { display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px; padding-top: 16px; border-top: 1px solid #333; }
 
         /* 回测页 */
         .backtest-config { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
-        .field label { display: block; color: #888; font-size: 12px; margin-bottom: 6px; }
+        .field label { display: block; color: #a0a0a0; font-size: 12px; margin-bottom: 6px; }
         .field input, .field select { width: 100%; }
         .preset-btns { display: flex; gap: 8px; margin-bottom: 16px; }
         .preset-btns button { font-size: 12px; padding: 5px 12px; }
 
-        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
-        .metric-card { background: #0f3460; padding: 16px; border-radius: 8px; text-align: center; }
-        .metric-card .value { font-size: 22px; font-weight: bold; }
-        .metric-card .value.positive { color: #4cc9f0; }
-        .metric-card .value.negative { color: #e94560; }
-        .metric-card .value.neutral { color: #eee; }
-        .metric-card .label { color: #888; font-size: 12px; margin-top: 4px; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-bottom: 0; border: 1px solid #1c1c1c; border-radius: 8px; overflow: hidden; }
+        .metric-card { background: transparent; padding: 20px 16px; text-align: left; border-right: 1px solid #1c1c1c; border-bottom: 1px solid #1c1c1c; }
+        .metric-card:nth-child(4n) { border-right: none; }
+        .metric-card .value { font-size: 24px; font-weight: 700; color: #fff; letter-spacing: -0.02em; }
+        .metric-card .value.positive { color: #00C805; }
+        .metric-card .value.negative { color: #FF5000; }
+        .metric-card .value.neutral { color: #fff; }
+        .metric-card .label { color: #555; font-size: 11px; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.06em; }
 
         /* Buy & Hold 基准行 */
         .bh-row {
             grid-column: span 4;
-            background: #0a2040;
-            border-top: 1px solid #1a3a60;
-            border-radius: 8px;
-            padding: 12px 16px;
+            background: transparent;
+            border-top: 1px solid #1c1c1c;
+            border-right: none;
+            border-bottom: none;
+            padding: 16px 16px;
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 24px;
             font-size: 13px;
         }
-        .bh-label { color: #666; }
-        .bh-value { font-weight: 600; }
-        .bh-alpha { color: #888; }
+        .bh-label { color: #555; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+        .bh-value { font-weight: 700; font-size: 18px; }
+        .bh-alpha { color: #a0a0a0; font-size: 13px; }
         .bh-alpha span { margin-left: 4px; }
 
-        .progress-bar { height: 8px; background: #0f3460; border-radius: 4px; overflow: hidden; margin: 12px 0; }
-        .progress-fill { height: 100%; background: linear-gradient(90deg, #4cc9f0, #4361ee); transition: width 0.3s; }
+        .progress-bar { height: 3px; background: #1a1a1a; border-radius: 999px; overflow: hidden; margin: 12px 0; }
+        .progress-fill { height: 100%; background: #00C805; transition: width 0.3s; }
 
-        .equity-curve { height: 200px; background: #0f3460; border-radius: 8px; position: relative; overflow: hidden; margin-bottom: 16px; }
+        .equity-curve { height: 220px; background: #000; border-radius: 8px; border: 1px solid #1c1c1c; position: relative; overflow: hidden; margin-bottom: 16px; }
 
         .trade-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        .trade-table th, .trade-table td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #222; }
-        .trade-table th { color: #888; font-size: 11px; text-transform: uppercase; }
-        .trade-table td.positive { color: #4cc9f0; }
-        .trade-table td.negative { color: #e94560; }
+        .trade-table th, .trade-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #1c1c1c; }
+        .trade-table th { color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+        .trade-table td.positive { color: #00C805; }
+        .trade-table td.negative { color: #FF5000; }
 
         /* 回测状态视图 */
         .backtest-state { display: none; }
         .backtest-state.active { display: block; }
 
         .empty-state { text-align: center; padding: 60px 20px; color: #555; }
-        .empty-state h3 { color: #777; margin-bottom: 8px; }
+        .empty-state h3 { color: #888; margin-bottom: 8px; font-size: 16px; }
 
         /* 设置页 */
         .settings-section { margin-bottom: 28px; }
-        .settings-section h4 { color: #4cc9f0; margin-bottom: 16px; font-size: 14px; }
-        .settings-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #222; }
-        .settings-row label { color: #ccc; font-size: 14px; }
+        .settings-section h4 { color: #fff; margin-bottom: 16px; font-size: 14px; font-weight: 600; }
+        .settings-row { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-bottom: 1px solid #1c1c1c; }
+        .settings-row label { color: #a0a0a0; font-size: 14px; }
 
-        h2 { margin-bottom: 20px; color: #fff; }
-        .section-title { color: #9fb2d0; font-size: 14px; margin-bottom: 12px; }
+        h2 { margin-bottom: 24px; color: #fff; font-size: 24px; font-weight: 700; }
+        .section-title { color: #a0a0a0; font-size: 13px; margin-bottom: 12px; }
 
         /* Toast */
         .toast {
             position: fixed; bottom: 24px; right: 24px;
-            background: #0f3460; border: 1px solid #4cc9f0;
-            color: #eee; padding: 12px 20px; border-radius: 8px;
+            background: #111; border: 1px solid #1c1c1c;
+            color: #eee; padding: 12px 20px; border-radius: 12px;
             font-size: 14px; display: none; z-index: 200;
             animation: slideIn 0.2s ease;
         }
@@ -170,10 +172,10 @@
 <!-- 导航 -->
 <div class="nav">
     <span class="nav-logo">TradeForge</span>
-    <div class="nav-item active" onclick="showPage('market', this)">📊 行情</div>
-    <div class="nav-item" onclick="showPage('strategy', this)">📈 策略</div>
-    <div class="nav-item" onclick="showPage('backtest', this)">🎯 回测</div>
-    <div class="nav-item" onclick="showPage('settings', this)">⚙️ 设置</div>
+    <div class="nav-item active" onclick="showPage('market', this)">行情</div>
+    <div class="nav-item" onclick="showPage('strategy', this)">策略</div>
+    <div class="nav-item" onclick="showPage('backtest', this)">回测</div>
+    <div class="nav-item" onclick="showPage('settings', this)">设置</div>
 </div>
 
 <!-- ===== 行情页 ===== -->
@@ -189,11 +191,11 @@
         <div style="display: flex; justify-content: space-between; margin-bottom: 12px; align-items: flex-start;">
             <div>
                 <span style="font-size: 24px; font-weight: bold;" id="symbolDisplay">AAPL</span>
-                <span style="color: #4cc9f0; margin-left: 12px; font-size: 14px;">Apple Inc.</span>
+                <span style="color: #00C805; margin-left: 12px; font-size: 14px;">Apple Inc.</span>
             </div>
             <div style="text-align: right;">
                 <div style="font-size: 24px;">$185.50</div>
-                <div style="color: #4cc9f0; font-size: 14px;">+2.35 (+1.28%)</div>
+                <div style="color: #00C805; font-size: 14px;">+2.35 (+1.28%)</div>
             </div>
         </div>
 
@@ -357,7 +359,7 @@
             </div>
             <div class="editor-section">
                 <h4>Formula 代码</h4>
-                <textarea style="width:100%; height:180px; background:#0f3460; border:1px solid #333; color:#eee; padding:12px; font-family:monospace; font-size:13px; border-radius:6px; resize:vertical;">strategy("RSI超卖", capital=100000, fee=0.0003)
+                <textarea style="width:100%; height:180px; background:#1a1a1a; border:1px solid #333; color:#eee; padding:12px; font-family:monospace; font-size:13px; border-radius:6px; resize:vertical;">strategy("RSI超卖", capital=100000, fee=0.0003)
 
 period = param("RSI周期", 14, 5, 30)
 oversold = param("超卖阈值", 30, 10, 50)
@@ -445,7 +447,7 @@ if exit:
     <!-- 执行中 -->
     <div class="backtest-state" id="bt-running">
         <div class="card">
-            <div style="color:#4cc9f0; margin-bottom: 10px;">⏳ 回测执行中...</div>
+            <div style="color:#00C805; margin-bottom: 10px;">⏳ 回测执行中...</div>
             <div class="progress-bar">
                 <div class="progress-fill" id="progressFill" style="width:0%"></div>
             </div>
@@ -455,9 +457,9 @@ if exit:
 
     <!-- 错误 -->
     <div class="backtest-state" id="bt-error">
-        <div class="card" style="border: 1px solid #e94560;">
-            <div style="color:#e94560; font-weight:600; margin-bottom:8px;">❌ 回测失败</div>
-            <div style="color:#888; font-size:13px;">数据加载失败，已使用 Mock 数据兜底运行。</div>
+        <div class="card" style="border: 1px solid #FF5000;">
+            <div style="color:#FF5000; font-weight:600; margin-bottom:8px;">❌ 回测失败</div>
+            <div style="color:#a0a0a0; font-size:13px;">历史数据不存在，请先到「数据」页面同步该标的的 K 线，再运行回测。</div>
             <button class="btn-outline" style="margin-top:12px;" onclick="runBacktest()">重试</button>
         </div>
     </div>
@@ -468,7 +470,7 @@ if exit:
             <div style="color:#888; font-size:13px; margin-bottom:16px;">
                 策略：<strong style="color:#fff">MA双均线策略</strong> &nbsp;·&nbsp;
                 区间：<strong style="color:#fff">2024-01-01 ~ 2025-01-01</strong> &nbsp;·&nbsp;
-                状态：<span style="color:#4cc9f0">✓ 完成</span>
+                状态：<span style="color:#00C805">✓ 完成</span>
             </div>
 
             <div class="metrics-grid">
@@ -519,18 +521,18 @@ if exit:
                 <svg width="100%" height="100%" viewBox="0 0 760 160" preserveAspectRatio="none" style="display:block;">
                     <defs>
                         <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#4cc9f0" stop-opacity="0.3"/>
-                            <stop offset="100%" stop-color="#4cc9f0" stop-opacity="0"/>
+                            <stop offset="0%" stop-color="#00C805" stop-opacity="0.3"/>
+                            <stop offset="100%" stop-color="#00C805" stop-opacity="0"/>
                         </linearGradient>
                     </defs>
                     <!-- 策略曲线 -->
-                    <polyline fill="none" stroke="#4cc9f0" stroke-width="2.5"
+                    <polyline fill="none" stroke="#00C805" stroke-width="2.5"
                         points="0,130 80,120 160,125 240,100 320,90 400,80 480,70 560,55 640,45 760,35"/>
                     <!-- Buy & Hold 基准（虚线）-->
                     <polyline fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="6,4"
                         points="0,130 760,50"/>
                     <!-- 图例 -->
-                    <rect x="10" y="8" width="12" height="3" fill="#4cc9f0" rx="1"/>
+                    <rect x="10" y="8" width="12" height="3" fill="#00C805" rx="1"/>
                     <text x="26" y="16" fill="#9fb2d0" font-size="11">策略</text>
                     <rect x="70" y="8" width="12" height="3" fill="#888" rx="1"/>
                     <text x="86" y="16" fill="#9fb2d0" font-size="11">买入持有</text>
@@ -590,7 +592,6 @@ if exit:
             <div class="settings-row">
                 <label>模式</label>
                 <select>
-                    <option>Mock</option>
                     <option>Futu 模拟</option>
                     <option>Futu 实盘</option>
                 </select>

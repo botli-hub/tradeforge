@@ -130,24 +130,24 @@ export default function MarketPage() {
     try {
       chartRef.current = createChart(chartContainerRef.current, {
         layout: {
-          background: { color: '#0f3460' },
-          textColor: '#888',
+          background: { color: '#000000' },
+          textColor: '#666666',
         },
         grid: {
-          vertLines: { color: '#1a1a2e' },
-          horzLines: { color: '#1a1a2e' },
+          vertLines: { color: '#111111' },
+          horzLines: { color: '#111111' },
         },
         width: chartContainerRef.current.clientWidth,
         height: 360,
       })
 
       candleSeriesRef.current = chartRef.current.addCandlestickSeries({
-        upColor: '#4cc9f0',
-        downColor: '#e94560',
-        borderUpColor: '#4cc9f0',
-        borderDownColor: '#e94560',
-        wickUpColor: '#4cc9f0',
-        wickDownColor: '#e94560',
+        upColor: '#00C805',
+        downColor: '#FF5000',
+        borderUpColor: '#00C805',
+        borderDownColor: '#FF5000',
+        wickUpColor: '#00C805',
+        wickDownColor: '#FF5000',
       })
       setChartWarning('')
     } catch (e: any) {
@@ -413,7 +413,7 @@ export default function MarketPage() {
 
   function openSignalModal(side: 'BUY' | 'SELL') {
     if (!tradingConnected) {
-      setError('交易账户未连接，请先去设置页连接 mock / futu 交易通道')
+      setError('交易账户未连接，请先到设置页连接 Futu 交易通道')
       return
     }
 
@@ -453,7 +453,7 @@ export default function MarketPage() {
   }
 
   const lastPrice = quote?.price ?? klines[klines.length - 1]?.close
-  const adapterLabel = settings.tradingAdapter === 'futu' ? 'Futu' : 'Mock'
+  const adapterLabel = 'Futu'
   const envLabel = settings.tradingEnv === 'REAL' ? '实盘' : '模拟盘'
   const routeModeLabel = '自动路由'
 
@@ -462,7 +462,6 @@ export default function MarketPage() {
     if (source === 'futu') return 'Futu'
     if (source === 'finnhub') return 'Finnhub'
     if (source === 'yahoo') return 'Yahoo'
-    if (source === 'mock') return 'Mock'
     return source
   }
 
@@ -505,7 +504,7 @@ export default function MarketPage() {
       </div>
 
       {notice && (
-        <div className="card" style={{ border: '1px solid rgba(76,201,240,0.35)', color: '#cde9f5' }}>
+        <div className="card" style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           {notice}
         </div>
       )}
@@ -514,7 +513,7 @@ export default function MarketPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <div>
             <div style={{ color: '#fff', fontWeight: 700 }}>观察池</div>
-            <div style={{ color: '#9fb2d0', fontSize: 12, marginTop: 4 }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 4 }}>
               加入观察池后，会自动进入每天 08:00 的历史数据更新任务。
             </div>
           </div>
@@ -565,7 +564,7 @@ export default function MarketPage() {
           </select>
         </div>
         {signalInfo && (
-          <div style={{ marginTop: 12, color: '#9eb6d6', fontSize: 13 }}>
+          <div style={{ marginTop: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
             当前策略：<strong>{signalInfo.strategy_name}</strong> | 最新信号：<strong>{signalInfo.signal}</strong>
           </div>
         )}
@@ -583,16 +582,16 @@ export default function MarketPage() {
       </div>
 
       {error && (
-        <div className="card" style={{ border: '1px solid rgba(233,69,96,0.35)', color: '#ffb0ba' }}>
+        <div className="card strategy-notice error">
           {error}
         </div>
       )}
 
       {signalText && (
-        <div className="card" style={{ border: '1px solid rgba(76,201,240,0.35)', color: '#cde9f5' }}>
+        <div className="card" style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <span>{signalText}</span>
-            {lastSignalAt && <span style={{ color: '#8fa8c6' }}>触发时间：{lastSignalAt}</span>}
+            {lastSignalAt && <span style={{ color: 'var(--text-secondary)' }}>触发时间：{lastSignalAt}</span>}
           </div>
         </div>
       )}
@@ -605,8 +604,8 @@ export default function MarketPage() {
               onClick={() => selectStock(s.symbol)}
               style={{ padding: '8px 0', cursor: 'pointer', borderBottom: '1px solid #333' }}
             >
-              <span style={{ color: '#4cc9f0' }}>{s.symbol}</span>
-              <span style={{ marginLeft: 12, color: '#888' }}>{s.name}</span>
+              <span style={{ color: 'var(--green)' }}>{s.symbol}</span>
+              <span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>{s.name}</span>
             </div>
           ))}
         </div>
@@ -616,11 +615,11 @@ export default function MarketPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, alignItems: 'center' }}>
           <div>
             <span style={{ fontSize: 24, fontWeight: 'bold' }}>{symbol}</span>
-            <span style={{ marginLeft: 10, color: '#888' }}>{quote?.name || symbol}</span>
+            <span style={{ marginLeft: 10, color: 'var(--text-secondary)' }}>{quote?.name || symbol}</span>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 24 }}>${lastPrice?.toFixed?.(2) ?? '--'}</div>
-            <div style={{ color: '#888', fontSize: 12 }}>{loading ? '加载中...' : `周期 ${timeframe}`}</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{loading ? '加载中...' : `周期 ${timeframe}`}</div>
           </div>
         </div>
 
@@ -686,7 +685,7 @@ export default function MarketPage() {
       <div className="card">
         <h3 style={{ marginBottom: 12 }}>当前持仓</h3>
         {positions.length === 0 ? (
-          <div style={{ color: '#888' }}>暂无持仓</div>
+          <div style={{ color: 'var(--text-secondary)' }}>暂无持仓</div>
         ) : (
           <table className="trade-table">
             <thead>
@@ -720,7 +719,7 @@ export default function MarketPage() {
       <div className="card">
         <h3 style={{ marginBottom: 12 }}>最近订单</h3>
         {orders.length === 0 ? (
-          <div style={{ color: '#888' }}>暂无订单</div>
+          <div style={{ color: 'var(--text-secondary)' }}>暂无订单</div>
         ) : (
           <table className="trade-table">
             <thead>

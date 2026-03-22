@@ -99,7 +99,7 @@ export default function PositionsPage() {
       {!connected ? (
         <div className="card empty-state">
           <h3>交易未连接</h3>
-          <p>先去设置页连接 mock / futu 交易通道，再查看持仓。</p>
+          <p>请先到设置页连接 Futu 交易通道，再查看持仓。</p>
         </div>
       ) : positions.length === 0 ? (
         <div className="card empty-state">

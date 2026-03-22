@@ -183,7 +183,7 @@ class MarketStateManager:
         timeframe: str,
         trigger_mode: TriggerMode = TriggerMode.ON_QUOTE,
         history_days: int = 420,
-        adapter_type: str = "mock",
+        adapter_type: str = "auto",
         adapter_host: str = "127.0.0.1",
         adapter_port: int = 11111,
     ) -> MarketState:
@@ -484,7 +484,7 @@ def get_market_state(
     timeframe: str = "1d",
     trigger_mode: Literal["on_quote", "on_bar_close"] = "on_quote",
     history_days: int = 420,
-    adapter_type: str = "mock",
+    adapter_type: str = "auto",
     adapter_host: str = "127.0.0.1",
     adapter_port: int = 11111,
 ) -> MarketState:

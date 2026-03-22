@@ -581,85 +581,15 @@ class YahooAdapter:
             return []
 
 
-class MockAdapter:
-    """Mock适配器 - 模拟数据"""
-
-    def __init__(self):
-        self._connected = True
-        self._subscribed = set()
-        self._quote_callback = None
-
-    def connect(self) -> bool:
-        self._connected = True
-        return True
-
-    def disconnect(self):
-        self._connected = False
-
-    def is_connected(self) -> bool:
-        return self._connected
-
-    def get_klines(self, symbol: str, timeframe: str,
-                   start_date: str, end_date: str) -> List[Bar]:
-        """使用Mock数据生成"""
-        from app.data.mock import generate_klines
-
-        klines = generate_klines(
-            symbol=symbol,
-            timeframe=timeframe,
-            start_date=start_date,
-            end_date=end_date
-        )
-
-        return [Bar(
-            timestamp=k['timestamp'],
-            open=k['open'],
-            high=k['high'],
-            low=k['low'],
-            close=k['close'],
-            volume=k['volume']
-        ) for k in klines]
-
-    def subscribe(self, symbols: List[str]) -> bool:
-        for s in symbols:
-            self._subscribed.add(s)
-        return True
-
-    def unsubscribe(self, symbols: List[str]) -> bool:
-        for s in symbols:
-            self._subscribed.discard(s)
-        return True
-
-    def on_quote(self, callback):
-        self._quote_callback = callback
-
-    def get_quote(self, symbol: str) -> Optional[Quote]:
-        from app.data.mock import get_stock_info
-        info = get_stock_info(symbol)
-        return Quote(
-            symbol=symbol,
-            name=info['name'],
-            price=info['base_price'],
-            change=0,
-            change_pct=0,
-            volume=1000000,
-            amount=info['base_price'] * 1000000,
-            bid=info['base_price'] - 0.01,
-            ask=info['base_price'] + 0.01,
-            high=info['base_price'] * 1.02,
-            low=info['base_price'] * 0.98,
-            open=info['base_price'],
-            pre_close=info['base_price'] * 0.99
-        )
-
-
 # 适配器工厂
-def get_adapter(adapter_type: str = "mock", **kwargs) -> MarketDataAdapter:
-    """获取适配器实例"""
+def get_adapter(adapter_type: str, **kwargs) -> MarketDataAdapter:
+    """获取适配器实例。adapter_type 必须为 futu / finnhub / yahoo。"""
     if adapter_type == "futu":
         return FutuAdapter(**kwargs)
     if adapter_type == "finnhub":
         return FinnhubAdapter(**kwargs)
     if adapter_type == "yahoo":
         return YahooAdapter(**kwargs)
-    return MockAdapter()
+    raise ValueError(
+        f"未知适配器类型: {adapter_type!r}。请使用 'futu'、'finnhub' 或 'yahoo'。"
+    )

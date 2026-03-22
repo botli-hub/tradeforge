@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.data.adapter import get_adapter
-from app.data.mock import get_stock_info
 from app.data.options import calculate_payoff
 
 router = APIRouter()
@@ -84,8 +83,10 @@ def _get_underlying_spot(symbol: str, host: str, port: int):
             except Exception:
                 pass
 
-    info = get_stock_info(display_symbol)
-    return float(info['base_price']), info['name'], 'mock_fallback', None
+    raise HTTPException(
+        status_code=502,
+        detail=f'无法获取 {display_symbol} 实时报价，请确认富途 OpenD 已启动并连接正常。'
+    )
 
 
 def _load_option_expirations(symbol: str, host: str, port: int) -> List[str]:

@@ -146,45 +146,47 @@ def _save_risk_event(
 
 
 def _get_account_info() -> Dict[str, float]:
-    """获取账户信息"""
-    from app.data.trading import get_trading_adapter
-    
-    adapter = get_trading_adapter("mock")
-    if adapter.connect("SIM"):
-        account = adapter.query_account()
-        return {
-            "cash": account.get("cash", 0),
-            "buying_power": account.get("buying_power", 0),
-            "market_value": account.get("market_value", 0),
-            "total_assets": account.get("total_assets", 0),
-        }
-    # 默认返回模拟账户
+    """获取账户信息 - 从全局已连接的交易适配器获取"""
+    try:
+        from app.api.trading import _trading_adapter
+        if _trading_adapter is not None and _trading_adapter.is_connected():
+            account = _trading_adapter.query_account()
+            return {
+                "cash": account.get("cash", 0),
+                "buying_power": account.get("buying_power", 0),
+                "market_value": account.get("market_value", 0),
+                "total_assets": account.get("total_assets", 0),
+            }
+    except Exception:
+        pass
+    # 未连接时返回零值，让风控以 price 参数或默认值计算
     return {
-        "cash": 100000,
-        "buying_power": 100000,
+        "cash": 0,
+        "buying_power": 0,
         "market_value": 0,
-        "total_assets": 100000,
+        "total_assets": 0,
     }
 
 
 def _get_positions() -> List[Dict[str, Any]]:
-    """获取当前持仓"""
-    from app.data.trading import get_trading_adapter
-    
-    adapter = get_trading_adapter("mock")
-    if adapter.connect("SIM"):
-        positions = adapter.query_positions()
-        return [
-            {
-                "symbol": p.symbol,
-                "direction": p.direction.value,
-                "quantity": p.quantity,
-                "avg_cost": p.avg_cost,
-                "current_price": p.current_price,
-                "value": p.quantity * p.current_price,
-            }
-            for p in positions
-        ]
+    """获取当前持仓 - 从全局已连接的交易适配器获取"""
+    try:
+        from app.api.trading import _trading_adapter
+        if _trading_adapter is not None and _trading_adapter.is_connected():
+            positions = _trading_adapter.query_positions()
+            return [
+                {
+                    "symbol": p.symbol,
+                    "direction": p.direction.value,
+                    "quantity": p.quantity,
+                    "avg_cost": p.avg_cost,
+                    "current_price": p.current_price,
+                    "value": p.quantity * p.current_price,
+                }
+                for p in positions
+            ]
+    except Exception:
+        pass
     return []
 
 
@@ -257,18 +259,8 @@ def check_order_risk(
         )
     
     # 2. 计算订单价值
-    # 获取当前价格
-    from app.data.adapter import get_adapter
-    adapter = get_adapter("mock")
-    current_price = 0
-    if adapter.connect():
-        quote = adapter.get_quote(symbol)
-        if quote:
-            current_price = quote.price
-    
-    if current_price <= 0:
-        # 使用限价或默认价格
-        current_price = price if price > 0 else 100
+    # 使用传入的 price，若为市价单则从全局账户获取或使用默认值
+    current_price = price if price > 0 else 100
     
     order_value = quantity * current_price
     details["order_value"] = order_value

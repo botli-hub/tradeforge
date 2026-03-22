@@ -20,7 +20,7 @@ class OrderRequest(BaseModel):
     order_type: str = "LIMIT"  # MARKET/LIMIT/STOP
 
 class ConnectRequest(BaseModel):
-    adapter: str = "mock"  # mock / futu
+    adapter: str = "futu"
     trd_env: str = "SIM"    # SIM / REAL
     host: str = "127.0.0.1"
     port: int = 11111
@@ -65,7 +65,7 @@ async def get_status():
     
     return {
         "connected": _trading_adapter.is_connected(),
-        "adapter": "futu" if hasattr(_trading_adapter, '_trd_env') else "mock"
+        "adapter": "futu"
     }
 
 @router.post("/order")

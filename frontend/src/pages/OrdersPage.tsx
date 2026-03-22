@@ -74,7 +74,7 @@ export default function OrdersPage() {
       {!connected ? (
         <div className="card empty-state">
           <h3>交易未连接</h3>
-          <p>先去设置页连接 mock / futu 交易通道，再查看订单。</p>
+          <p>请先到设置页连接 Futu 交易通道，再查看订单。</p>
         </div>
       ) : orders.length === 0 ? (
         <div className="card empty-state">

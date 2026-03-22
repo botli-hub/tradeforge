@@ -51,7 +51,7 @@ async def get_market_state_endpoint(
     symbol: str = Query(..., description="股票代码"),
     timeframe: str = Query("1d", description=f"时间周期: {', '.join(SUPPORTED_TIMEFRAMES)}"),
     trigger_mode: str = Query("on_quote", description="触发模式: on_quote(实时) / on_bar_close(收盘)"),
-    adapter: str = Query("mock", description="数据源: mock/futu/finnhub/yahoo"),
+    adapter: str = Query("auto", description="数据源: futu/finnhub/yahoo (auto=按标的自动路由)"),
     host: str = Query("127.0.0.1", description="行情地址"),
     port: int = Query(11111, description="行情端口"),
 ):
@@ -124,7 +124,7 @@ async def get_strategy_signal(
     symbol: Optional[str] = Query(None, description="标的代码，不传则取策略首个symbol"),
     timeframe: Optional[str] = Query(None, description="时间周期"),
     trigger_mode: str = Query("on_quote", description="触发模式: on_quote(实时) / on_bar_close(收盘)"),
-    adapter: str = Query("mock", description="数据源"),
+    adapter: str = Query("auto", description="数据源: futu/finnhub/yahoo (auto=按标的自动路由)"),
     host: str = Query("127.0.0.1", description="行情地址"),
     port: int = Query(11111, description="行情端口"),
 ):
@@ -158,7 +158,7 @@ async def get_strategy_signal_realtime(
     strategy_id: str,
     symbol: Optional[str] = Query(None, description="标的代码"),
     timeframe: Optional[str] = Query(None, description="时间周期"),
-    adapter: str = Query("mock", description="数据源"),
+    adapter: str = Query("auto", description="数据源: futu/finnhub/yahoo (auto=按标的自动路由)"),
     host: str = Query("127.0.0.1", description="行情地址"),
     port: int = Query(11111, description="行情端口"),
 ):
@@ -183,7 +183,7 @@ async def get_strategy_signal_bar_close(
     strategy_id: str,
     symbol: Optional[str] = Query(None, description="标的代码"),
     timeframe: Optional[str] = Query(None, description="时间周期"),
-    adapter: str = Query("mock", description="数据源"),
+    adapter: str = Query("auto", description="数据源: futu/finnhub/yahoo (auto=按标的自动路由)"),
     host: str = Query("127.0.0.1", description="行情地址"),
     port: int = Query(11111, description="行情端口"),
 ):
@@ -208,7 +208,7 @@ async def get_signals_for_symbol(
     symbol: str,
     timeframe: str = Query("1d", description="时间周期"),
     trigger_mode: str = Query("on_quote", description="触发模式"),
-    adapter: str = Query("mock", description="数据源"),
+    adapter: str = Query("auto", description="数据源: futu/finnhub/yahoo (auto=按标的自动路由)"),
 ):
     """
     获取所有策略在指定标的上的信号

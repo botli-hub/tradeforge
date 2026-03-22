@@ -14,7 +14,6 @@ from app.core.engine import BacktestEngine
 from app.core.multi_engine import MultiSymbolEngine
 from app.data.database import get_db
 from app.data.history_backfill import ensure_local_kline_range, resolve_history_source
-from app.data.mock import generate_klines, get_stock_info
 from app.data.source_router import normalize_symbol
 
 router = APIRouter()
@@ -119,26 +118,10 @@ def _load_symbol_bars(symbol: str, timeframe: str, start_date: str, end_date: st
             "warning": warning,
         }
     except Exception as local_error:
-        info = get_stock_info(normalized_symbol)
-        mock_rows = generate_klines(
-            symbol=normalized_symbol,
-            timeframe=timeframe,
-            start_date=start_date,
-            end_date=end_date,
-            initial_price=info["base_price"],
+        raise BacktestDataLoadError(
+            f"{normalized_symbol} 历史数据获取失败: {local_error}。"
+            f"请先到「历史数据」页面同步该标的的 K 线数据，然后再运行回测。"
         )
-        if not mock_rows:
-            raise BacktestDataLoadError(f"{normalized_symbol} 历史数据获取失败，且 mock 兜底也为空: {local_error}")
-        df = _to_dataframe(mock_rows)
-        return {
-            "symbol": normalized_symbol,
-            "dataframe": df,
-            "requested_source": resolved_source,
-            "data_source": "mock",
-            "load_mode": "fallback_mock",
-            "bar_count": len(df),
-            "warning": str(local_error),
-        }
 
 
 def _json_safe(value: Any) -> Any:

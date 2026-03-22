@@ -11,6 +11,17 @@ import SettingsPage from './pages/SettingsPage'
 
 type PageKey = 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'settings'
 
+const NAV_ITEMS: { key: PageKey; label: string }[] = [
+  { key: 'market', label: '行情' },
+  { key: 'strategy', label: '策略' },
+  { key: 'backtest', label: '回测' },
+  { key: 'options', label: '期权' },
+  { key: 'orders', label: '订单' },
+  { key: 'positions', label: '持仓' },
+  { key: 'history', label: '数据' },
+  { key: 'settings', label: '设置' },
+]
+
 function App() {
   const [currentPage, setCurrentPage] = useState<PageKey>('market')
 
@@ -22,37 +33,22 @@ function App() {
     orders: <OrdersPage />,
     positions: <PositionsPage />,
     history: <HistoryPage />,
-    settings: <SettingsPage />
+    settings: <SettingsPage />,
   }
 
   return (
     <div>
-      <div className="nav">
-        <div className={`nav-item ${currentPage === 'market' ? 'active' : ''}`} onClick={() => setCurrentPage('market')}>
-          📊 行情
-        </div>
-        <div className={`nav-item ${currentPage === 'strategy' ? 'active' : ''}`} onClick={() => setCurrentPage('strategy')}>
-          📈 策略
-        </div>
-        <div className={`nav-item ${currentPage === 'backtest' ? 'active' : ''}`} onClick={() => setCurrentPage('backtest')}>
-          🎯 回测
-        </div>
-        <div className={`nav-item ${currentPage === 'options' ? 'active' : ''}`} onClick={() => setCurrentPage('options')}>
-          🧩 期权
-        </div>
-        <div className={`nav-item ${currentPage === 'orders' ? 'active' : ''}`} onClick={() => setCurrentPage('orders')}>
-          🧾 订单
-        </div>
-        <div className={`nav-item ${currentPage === 'positions' ? 'active' : ''}`} onClick={() => setCurrentPage('positions')}>
-          💼 持仓
-        </div>
-        <div className={`nav-item ${currentPage === 'history' ? 'active' : ''}`} onClick={() => setCurrentPage('history')}>
-          🗄️ 历史数据
-        </div>
-        <div className={`nav-item ${currentPage === 'settings' ? 'active' : ''}`} onClick={() => setCurrentPage('settings')}>
-          ⚙️ 设置
-        </div>
-      </div>
+      <nav className="nav">
+        {NAV_ITEMS.map(({ key, label }) => (
+          <div
+            key={key}
+            className={`nav-item ${currentPage === key ? 'active' : ''}`}
+            onClick={() => setCurrentPage(key)}
+          >
+            {label}
+          </div>
+        ))}
+      </nav>
 
       <PageErrorBoundary resetKey={currentPage} pageName={currentPage}>
         {pages[currentPage]}

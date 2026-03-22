@@ -2,7 +2,7 @@ export const API_BASE = 'http://127.0.0.1:8000'
 const SETTINGS_KEY = 'tradeforge.settings'
 const SETTINGS_EVENT = 'tradeforge:settings-changed'
 
-export type AdapterType = 'mock' | 'futu' | 'finnhub'
+export type AdapterType = 'futu' | 'finnhub'
 export type TradingEnv = 'SIM' | 'REAL'
 
 export interface AppSettings {
@@ -42,10 +42,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   slippage: 0.001,
   theme: 'dark',
   language: 'zh',
-  marketDataSource: 'mock',
+  marketDataSource: 'finnhub',
   marketHost: '127.0.0.1',
   marketPort: 11111,
-  tradingAdapter: 'mock',
+  tradingAdapter: 'futu',
   tradingEnv: 'SIM',
   tradingHost: '127.0.0.1',
   tradingPort: 11111,
@@ -79,10 +79,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export function getAppSettings(): AppSettings {
   const raw = localStorage.getItem(SETTINGS_KEY)
   const parsed = raw ? parseJson<Partial<AppSettings>>(raw) : null
-  return {
-    ...DEFAULT_SETTINGS,
-    ...(parsed || {}),
-  }
+  const merged = { ...DEFAULT_SETTINGS, ...(parsed || {}) }
+  // Migrate away from removed 'mock' adapter
+  if ((merged.marketDataSource as string) === 'mock') merged.marketDataSource = 'finnhub'
+  if ((merged.tradingAdapter as string) === 'mock') merged.tradingAdapter = 'futu'
+  return merged
 }
 
 export function saveAppSettings(next: Partial<AppSettings> | AppSettings): AppSettings {

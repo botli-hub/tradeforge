@@ -2,7 +2,6 @@
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from datetime import datetime, timedelta
-from app.data.mock import search_stocks, get_stock_info
 from app.data.adapter import get_adapter
 from app.data.history_backfill import ensure_local_kline_range
 from app.data.source_router import (
@@ -35,7 +34,7 @@ def _close_adapter(adapter):
 
 @router.get("/status")
 async def market_status(
-    adapter: str = Query("mock", description="数据源类型：mock/futu/finnhub"),
+    adapter: str = Query("finnhub", description="数据源类型：futu/finnhub"),
     host: str = Query("127.0.0.1", description="OpenD地址"),
     port: int = Query(11111, description="OpenD端口"),
 ):
@@ -57,56 +56,46 @@ async def market_status(
 @router.get("/search")
 async def market_search(
     q: str = Query(..., description="搜索关键词"),
-    adapter: str = Query("mock", description="数据源类型：mock/futu/finnhub"),
+    adapter: str = Query("finnhub", description="数据源类型：futu/finnhub"),
 ):
     """搜索股票"""
     if is_cn_symbol(q) or is_hk_symbol(q):
         normalized = normalize_symbol(q)
-        info = get_stock_info(normalized)
-        return [{
-            "symbol": normalized,
-            "name": info["name"],
-            "price": info["base_price"]
-        }]
+        return [{"symbol": normalized, "name": normalized, "price": None}]
 
-    if adapter == 'finnhub':
-        market_adapter = None
-        try:
+    market_adapter = None
+    try:
+        if adapter == 'futu':
+            market_adapter = get_adapter(adapter_type='futu')
+        else:
             market_adapter = get_adapter(adapter_type='finnhub')
-            if hasattr(market_adapter, 'connect') and market_adapter.connect() and hasattr(market_adapter, 'search'):
-                results = market_adapter.search(q)
-                if results:
-                    return results
-                detail = getattr(market_adapter, 'last_error', None)
-                if detail:
-                    raise HTTPException(status_code=502, detail=detail)
-            else:
-                detail = getattr(market_adapter, 'last_error', None) or '连接 finnhub 行情源失败'
+
+        if hasattr(market_adapter, 'connect') and not market_adapter.connect():
+            detail = getattr(market_adapter, 'last_error', None) or f'连接 {adapter} 行情源失败'
+            raise HTTPException(status_code=502, detail=detail)
+
+        if hasattr(market_adapter, 'search'):
+            results = market_adapter.search(q)
+            if results:
+                return results
+            detail = getattr(market_adapter, 'last_error', None)
+            if detail:
                 raise HTTPException(status_code=502, detail=detail)
-        finally:
-            if market_adapter:
-                _close_adapter(market_adapter)
 
-    results = search_stocks(q)
-    if results:
-        return results
+        # futu 模式下允许直接输入代码
+        if adapter == 'futu' and q.strip():
+            return [{"symbol": q.upper(), "name": q.upper(), "price": None}]
 
-    # 富途模式下允许直接输入代码继续走后续行情/交易流程
-    if adapter == 'futu' and q.strip():
-        info = get_stock_info(q)
-        return [{
-            "symbol": q.upper(),
-            "name": info["name"],
-            "price": info["base_price"]
-        }]
-
-    return []
+        raise HTTPException(status_code=502, detail=f'{adapter} 搜索无结果，请检查网络或行情源配置')
+    finally:
+        if market_adapter:
+            _close_adapter(market_adapter)
 
 
 @router.get("/quote")
 async def market_quote(
     symbol: str = Query(..., description="股票代码"),
-    adapter: str = Query("mock", description="数据源类型：mock/futu/finnhub"),
+    adapter: str = Query("finnhub", description="数据源类型：futu/finnhub"),
     host: str = Query("127.0.0.1", description="OpenD地址"),
     port: int = Query(11111, description="OpenD端口"),
 ):
@@ -115,14 +104,13 @@ async def market_quote(
     try:
         normalized_symbol = normalize_symbol(symbol)
         resolved_adapter = resolve_quote_source(normalized_symbol, adapter)
-        info = get_stock_info(normalized_symbol)
         market_adapter = _create_adapter(resolved_adapter, host, port)
         quote = market_adapter.get_quote(normalized_symbol) if hasattr(market_adapter, 'get_quote') else None
 
         if quote is not None:
             return {
                 "symbol": quote.symbol,
-                "name": getattr(quote, 'name', info["name"]),
+                "name": getattr(quote, 'name', normalized_symbol),
                 "price": quote.price,
                 "change": quote.change,
                 "change_pct": quote.change_pct,
@@ -137,27 +125,9 @@ async def market_quote(
                 "adapter": resolved_adapter,
             }
 
-        if resolved_adapter in ('futu', 'finnhub'):
-            default_message = '富途实时报价获取失败' if resolved_adapter == 'futu' else 'Finnhub 实时报价获取失败'
-            detail = getattr(market_adapter, 'last_error', None) or default_message
-            raise HTTPException(status_code=502, detail=detail)
-
-        return {
-            "symbol": normalized_symbol,
-            "name": info["name"],
-            "price": info["base_price"],
-            "change": 0,
-            "change_pct": 0,
-            "volume": 0,
-            "amount": 0,
-            "bid": info["base_price"],
-            "ask": info["base_price"],
-            "high": info["base_price"],
-            "low": info["base_price"],
-            "open": info["base_price"],
-            "pre_close": info["base_price"],
-            "adapter": resolved_adapter,
-        }
+        default_message = '富途实时报价获取失败' if resolved_adapter == 'futu' else 'Finnhub 实时报价获取失败，请检查 API Key 或网络连接'
+        detail = getattr(market_adapter, 'last_error', None) or default_message
+        raise HTTPException(status_code=502, detail=detail)
     finally:
         if market_adapter:
             _close_adapter(market_adapter)
@@ -170,7 +140,7 @@ async def market_klines(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     limit: int = Query(365, description="数据点数量"),
-    adapter: str = Query("mock", description="数据源类型：mock/futu/finnhub"),
+    adapter: str = Query("finnhub", description="数据源类型：futu/finnhub"),
     host: str = Query("127.0.0.1", description="OpenD地址"),
     port: int = Query(11111, description="OpenD端口"),
     force_refresh: bool = Query(False, description="是否强制重新补数"),

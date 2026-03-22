@@ -211,11 +211,11 @@ export default function OptionsPage() {
             <span className="tag draft">定价来源：{chain.pricing_source}</span>
           </div>
         )}
-        {chain?.detail && <div style={{ marginTop: 10, color: '#f8c471', fontSize: 12 }}>{chain.detail}</div>}
+        {chain?.detail && <div style={{ marginTop: 10, color: '#ffb066', fontSize: 12 }}>{chain.detail}</div>}
       </div>
 
       {error && (
-        <div className="card" style={{ border: '1px solid rgba(233,69,96,0.35)', color: '#ffb0ba' }}>
+        <div className="card strategy-notice error">
           {error}
         </div>
       )}
@@ -224,9 +224,9 @@ export default function OptionsPage() {
         <div className="card option-chain-card">
           <h3 style={{ marginBottom: 12 }}>期权链</h3>
           {loading ? (
-            <div style={{ color: '#888' }}>加载中...</div>
+            <div style={{ color: 'var(--text-secondary)' }}>加载中...</div>
           ) : strikeRows.length === 0 ? (
-            <div style={{ color: '#888' }}>暂无期权链数据</div>
+            <div style={{ color: 'var(--text-secondary)' }}>暂无期权链数据</div>
           ) : (
             <div className="option-table-wrap">
               <table className="trade-table option-chain-table">
@@ -332,8 +332,8 @@ export default function OptionsPage() {
 
               <div className="payoff-chart-wrap">
                 <svg viewBox="0 0 720 280" className="payoff-chart">
-                  <line x1="0" y1="140" x2="720" y2="140" stroke="#2d3f60" strokeWidth="1" />
-                  <path d={path} fill="none" stroke="#4cc9f0" strokeWidth="3" />
+                  <line x1="0" y1="140" x2="720" y2="140" stroke="var(--border)" strokeWidth="1" />
+                  <path d={path} fill="none" stroke="var(--green)" strokeWidth="3" />
                 </svg>
               </div>
             </>

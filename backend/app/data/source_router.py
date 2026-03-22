@@ -59,6 +59,9 @@ def normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
 
 
+_INVALID_ADAPTERS = {'mock', 'auto', None, ''}
+
+
 def resolve_quote_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:
     """解析实时报价来源。"""
     normalized = normalize_symbol(symbol)
@@ -69,7 +72,10 @@ def resolve_quote_source(symbol: str, preferred_adapter: Optional[str] = None) -
     if market == 'US':
         return 'finnhub'
 
-    return preferred_adapter or 'finnhub'
+    # 只接受真实适配器作为偏好
+    if preferred_adapter not in _INVALID_ADAPTERS:
+        return preferred_adapter
+    return 'finnhub'
 
 
 def resolve_kline_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:

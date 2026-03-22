@@ -125,7 +125,7 @@ export default function FormulaEditor({
     <div style={{ display: 'flex', gap: 16, height: '100%' }}>
       <div style={{ flex: 2 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-          <span style={{ color: '#4cc9f0', fontWeight: 'bold' }}>Formula 编辑器</span>
+          <span style={{ color: 'var(--green)', fontWeight: 'bold' }}>Formula 编辑器</span>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="btn-outline" onClick={validate} disabled={validating || transpiling}>
               {validating ? '验证中...' : '验证'}
@@ -144,7 +144,7 @@ export default function FormulaEditor({
               padding: 8,
               borderRadius: 6,
               marginBottom: 8,
-              color: '#e94560'
+              color: 'var(--red)'
             }}
           >
             {errors.map((e, i) => <div key={i}>{e}</div>)}
@@ -171,7 +171,7 @@ export default function FormulaEditor({
       </div>
 
       <div style={{ flex: 1, minWidth: 220 }}>
-        <div style={{ color: '#4cc9f0', fontWeight: 'bold', marginBottom: 12 }}>参数面板</div>
+        <div style={{ color: 'var(--green)', fontWeight: 'bold', marginBottom: 12 }}>参数面板</div>
         {params.length === 0 ? (
           <div style={{ color: '#666' }}>点击“验证”解析参数</div>
         ) : (

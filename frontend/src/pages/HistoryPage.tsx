@@ -164,7 +164,7 @@ export default function HistoryPage() {
       </div>
 
       {message && (
-        <div className="card" style={{ border: '1px solid rgba(76,201,240,0.35)', color: '#cde9f5' }}>
+        <div className="card" style={{ border: '1px solid rgba(76,201,240,0.35)', color: 'var(--text-secondary)' }}>
           {message}
         </div>
       )}
@@ -244,7 +244,7 @@ export default function HistoryPage() {
               <div className="label">下次执行</div>
             </div>
           </div>
-          <div style={{ marginTop: 14, color: '#9fb2d0', fontSize: 13 }}>
+          <div style={{ marginTop: 14, color: 'var(--text-secondary)', fontSize: 13 }}>
             固定更新周期：<strong>1d / 1h / 30m / 5m / 1m</strong>
           </div>
         </div>
@@ -275,7 +275,7 @@ export default function HistoryPage() {
       <div className="card">
         <h3 style={{ marginBottom: 12 }}>订阅列表</h3>
         {subscriptions.length === 0 ? (
-          <div style={{ color: '#888' }}>暂无订阅。手动补数或点击“加入订阅”后会进入每天 08:00 更新列表。</div>
+          <div style={{ color: 'var(--text-secondary)' }}>暂无订阅。手动补数或点击“加入订阅”后会进入每天 08:00 更新列表。</div>
         ) : (
           <table className="trade-table">
             <thead>
@@ -313,7 +313,7 @@ export default function HistoryPage() {
       <div className="card">
         <h3 style={{ marginBottom: 12 }}>补数任务</h3>
         {jobs.length === 0 ? (
-          <div style={{ color: '#888' }}>暂无补数任务</div>
+          <div style={{ color: 'var(--text-secondary)' }}>暂无补数任务</div>
         ) : (
           <table className="trade-table">
             <thead>

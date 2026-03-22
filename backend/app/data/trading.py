@@ -281,102 +281,11 @@ class FutuTradingAdapter:
         return status_map.get(status, OrderStatus.SUBMITTED)
 
 
-class MockTradingAdapter:
-    """模拟交易适配器"""
-    
-    def __init__(self):
-        self._connected = True
-        self._orders = {}
-        self._positions = {}
-        self._order_counter = 1000
-    
-    def connect(self, trd_env: str = "SIM") -> bool:
-        self._connected = True
-        return True
-    
-    def disconnect(self):
-        self._connected = False
-    
-    def is_connected(self) -> bool:
-        return self._connected
-    
-    def place_order(self, symbol: str, side: OrderSide,
-                   quantity: float, price: float = 0,
-                   order_type: OrderType = OrderType.LIMIT) -> str:
-        order_id = f"MOCK{self._order_counter}"
-        self._order_counter += 1
-        
-        self._orders[order_id] = Order(
-            order_id=order_id,
-            symbol=symbol,
-            side=side,
-            price=price,
-            quantity=quantity,
-            filled_quantity=quantity,  # 模拟直接成交
-            status=OrderStatus.FILLED,
-            order_type=order_type,
-            create_time=datetime.now().isoformat(),
-            update_time=datetime.now().isoformat(),
-            message="模拟成交"
-        )
-        
-        # 更新持仓
-        if symbol not in self._positions:
-            self._positions[symbol] = Position(
-                symbol=symbol,
-                direction=side,
-                quantity=quantity,
-                avg_cost=price,
-                current_price=price,
-                unrealized_pnl=0,
-                realized_pnl=0
-            )
-        else:
-            pos = self._positions[symbol]
-            if pos.direction == side:
-                # 同向加仓
-                pos.quantity += quantity
-                pos.avg_cost = (pos.avg_cost * pos.quantity + price * quantity) / (pos.quantity + quantity)
-            else:
-                # 反向减仓
-                if pos.quantity > quantity:
-                    pos.quantity -= quantity
-                else:
-                    del self._positions[symbol]
-        
-        return order_id
-    
-    def cancel_order(self, order_id: str) -> bool:
-        if order_id in self._orders:
-            self._orders[order_id].status = OrderStatus.CANCELLED
-            return True
-        return False
-    
-    def query_order(self, order_id: str) -> Optional[Order]:
-        return self._orders.get(order_id)
-    
-    def query_orders(self, status: OrderStatus = None) -> List[Order]:
-        if status:
-            return [o for o in self._orders.values() if o.status == status]
-        return list(self._orders.values())
-    
-    def query_positions(self) -> List[Position]:
-        return list(self._positions.values())
-    
-    def query_account(self) -> dict:
-        total = sum(p.current_price * p.quantity for p in self._positions.values())
-        return {
-            "cash": 100000,
-            "buying_power": 100000,
-            "market_value": total,
-            "total_assets": 100000 + total,
-        }
-
-
 # 工厂函数
-def get_trading_adapter(adapter_type: str = "mock", **kwargs) -> TradingAdapter:
-    """获取交易适配器"""
+def get_trading_adapter(adapter_type: str = "futu", **kwargs) -> TradingAdapter:
+    """获取交易适配器。目前仅支持 futu。"""
     if adapter_type == "futu":
         return FutuTradingAdapter(**kwargs)
-    else:
-        return MockTradingAdapter()
+    raise ValueError(
+        f"未知交易适配器: {adapter_type!r}。目前仅支持 'futu'。"
+    )
