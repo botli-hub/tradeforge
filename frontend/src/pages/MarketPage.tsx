@@ -4,7 +4,6 @@ import SignalConfirmModal from '../components/SignalConfirmModal'
 import StockSelect from '../components/StockSelect'
 import {
   AppSettings,
-  StockItem,
   evaluateStrategySignal,
   getAccount,
   getAppSettings,
@@ -12,7 +11,6 @@ import {
   getOrders,
   getPositions,
   getQuote,
-  getStocks,
   getStrategies,
   getTradingStatus,
   placeOrder,
@@ -34,7 +32,6 @@ export default function MarketPage() {
   const [strategies, setStrategies] = useState<any[]>([])
   const [selectedStrategyId, setSelectedStrategyId] = useState('')
   const [signalInfo, setSignalInfo] = useState<any | null>(null)
-  const [watchlist, setWatchlist] = useState<StockItem[]>([])
   const [notice, setNotice] = useState('')
   const [searchQ, setSearchQ] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
@@ -92,7 +89,6 @@ export default function MarketPage() {
   useEffect(() => {
     void loadStrategiesList()
     void refreshTradingPanels()
-    void refreshWatchlist()
   }, [])
 
   useEffect(() => {
@@ -209,14 +205,6 @@ export default function MarketPage() {
     }
   }
 
-  async function refreshWatchlist() {
-    try {
-      const list = await getStocks({ enabled_only: true })
-      setWatchlist((list || []).filter(s => s.subscribed))
-    } catch {
-      // 订阅池获取失败时不打断行情页
-    }
-  }
 
   async function refreshTradingPanels(silent = false) {
     try {
@@ -478,33 +466,6 @@ export default function MarketPage() {
         </div>
       )}
 
-      <div className="card compact-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
-          <div>
-            <div style={{ color: '#fff', fontWeight: 700 }}>订阅池</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 4 }}>
-              在「股票池」页面订阅标的后，系统将自动每天 08:00 补充历史数据。
-            </div>
-          </div>
-          <button className="btn-outline" onClick={() => refreshWatchlist()}>
-            刷新
-          </button>
-        </div>
-
-        <div className="watchlist-strip">
-          {watchlist.length === 0 ? (
-            <span className="watchlist-empty">暂无订阅标的，请前往「股票池」页面订阅</span>
-          ) : (
-            watchlist.map(item => (
-              <div key={item.symbol} className={`watchlist-chip ${item.symbol === symbol ? 'active' : ''}`}>
-                <button className="watchlist-chip-main" onClick={() => selectStock(item.symbol)}>
-                  {item.symbol}
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
 
       <div className="card compact-card">
         <div className="settings-row" style={{ borderBottom: 'none', padding: 0 }}>
