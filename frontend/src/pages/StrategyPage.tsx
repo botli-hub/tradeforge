@@ -1,21 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import FormulaEditor from './FormulaEditor'
-import { createStrategy, deleteStrategy, getStrategy, getStrategies, updateStrategy } from '../services/api'
+import { StrategySummary, createStrategy, deleteStrategy, getStrategy, getStrategies, updateStrategy } from '../services/api'
 import StockSelect from '../components/StockSelect'
 
 type StrategyMode = 'visual' | 'formula'
 type ViewMode = 'list' | 'create' | 'edit'
 
-type StrategyItem = {
-  id: string
-  name: string
-  status: string
-  mode: StrategyMode
-  symbols?: string[]
-  timeframe?: string
-  version?: number
-  config?: any
-}
+type StrategyItem = StrategySummary
 
 type VisualForm = {
   name: string
@@ -441,10 +432,10 @@ export default function StrategyPage() {
                 <div className="strategy-list-main">
                   <div className="strategy-title-row">
                     <h3>{s.name}</h3>
-                    <span className={`tag ${s.status === 'ready' ? 'ready' : 'draft'}`}>{s.status}</span>
+                    <span className={`tag ${s.status === 'ready' ? 'ready' : 'draft'}`}>{s.status || 'draft'}</span>
                   </div>
                   <div className="strategy-meta-grid">
-                    <div><span className="meta-label">Mode</span><strong>{s.mode}</strong></div>
+                    <div><span className="meta-label">Mode</span><strong>{s.mode || (s.config?.mode as StrategyMode) || 'visual'}</strong></div>
                     <div><span className="meta-label">Symbol(s)</span><strong>{(s.symbols || []).join(', ') || '-'}</strong></div>
                     <div><span className="meta-label">Timeframe</span><strong>{s.timeframe || '-'}</strong></div>
                     <div><span className="meta-label">Version</span><strong>v{s.config?.version || s.version || 1}</strong></div>
