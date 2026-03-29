@@ -253,20 +253,33 @@ class FutuTradingAdapter:
         """查询账户"""
         if not self._connected:
             return {}
-        
+
         try:
             ret, data = self._trade.accinfo_query()
             if ret == 0 and len(data) > 0:
-                row = data.iloc[0]
+                row = data.iloc[0] if hasattr(data, 'iloc') else data[0]
+
+                # futu 返回字段名是 market_val，不是 market_value。
+                # 这里做兼容兜底，避免因为字段名不一致导致持仓市值缺失，
+                # 进而让前端的总资产/现金/市值展示产生误判。
+                market_value = row.get('market_val', row.get('market_value', 0.0))
+                cash = row.get('cash', 0.0)
+                buying_power = row.get('buying_power', row.get('power', 0.0))
+                total_assets = row.get('total_assets')
+
+                # total_assets 优先使用券商原始返回；若缺失则退化为 cash + market_value。
+                if total_assets is None:
+                    total_assets = float(cash) + float(market_value)
+
                 return {
-                    "cash": float(row['cash']),
-                    "buying_power": float(row['buying_power']),
-                    "market_value": float(row['market_value']),
-                    "total_assets": float(row['total_assets']),
+                    "cash": float(cash),
+                    "buying_power": float(buying_power),
+                    "market_value": float(market_value),
+                    "total_assets": float(total_assets),
                 }
         except Exception as e:
             print(f"查询账户失败: {e}")
-        
+
         return {}
     
     def _parse_status(self, status: str) -> OrderStatus:
