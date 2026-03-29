@@ -4,6 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from app.data.database import get_db
+from app.data.source_router import normalize_symbol
 
 router = APIRouter()
 
@@ -77,10 +78,10 @@ def add_stock(body: StockIn):
             VALUES (?, ?, ?, 1, 0, 'STOCK', ?, ?, NULL, 'active', ?, ?)
             """,
             (
-                body.symbol,
+                normalize_symbol(body.symbol),
                 body.name,
                 body.market.upper(),
-                body.symbol,
+                normalize_symbol(body.symbol),
                 'USD' if body.market.upper() == 'US' else ('HKD' if body.market.upper() == 'HK' else 'CNY'),
                 now,
                 now,

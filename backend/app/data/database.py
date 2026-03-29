@@ -439,6 +439,7 @@ def init_db():
             WHEN market = 'SH' OR symbol LIKE '%.SH' OR symbol LIKE '%.SZ' THEN 'CN'
             WHEN market = 'SZ' THEN 'CN'
             WHEN market = 'HK' OR symbol LIKE '%.HK' THEN 'HK'
+            WHEN symbol GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]' THEN 'CN'
             ELSE 'US'
         END
         """

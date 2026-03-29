@@ -44,6 +44,10 @@ def infer_market(symbol: str) -> str:
         return 'SZ'
     if symbol.endswith('.HK'):
         return 'HK'
+    if symbol.isdigit() and len(symbol) == 6:
+        return 'SH' if symbol.startswith(('5', '6', '9')) else 'SZ'
+    if symbol.isdigit() and len(symbol) <= 5:
+        return 'HK'
     return 'US'
 
 

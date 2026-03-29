@@ -33,8 +33,8 @@ type CategoryMeta = {
 const USD_CNY = 7.25
 const HKD_CNY = 0.925
 const YEARS = 6.75
-const QUOTE_REFRESH_MS = 60000
-const QUOTE_CACHE_TTL_MS = 45000
+const QUOTE_REFRESH_MS = 3600000
+const QUOTE_CACHE_TTL_MS = 3600000
 
 const CATEGORY_META: Record<CategoryKey, CategoryMeta> = {
   defensive: { name: '防御压舱石', color: '#00C805', light: 'rgba(0, 200, 5, 0.10)', targetRange: [0.3, 0.35] },
@@ -122,6 +122,8 @@ function Plan2032Page() {
   const [eventType, setEventType] = useState('')
   const [macroCycle, setMacroCycle] = useState('')
   const [saveStatus, setSaveStatus] = useState('')
+  const refreshQuotesRef = useRef<((force?: boolean) => Promise<void>) | null>(null)
+  const [quoteRefreshAt, setQuoteRefreshAt] = useState('')
 
   useEffect(() => {
     getStocks()
@@ -215,9 +217,13 @@ function Plan2032Page() {
         })
       } finally {
         quoteBatchRunningRef.current = false
+        if (!cancelled) {
+          setQuoteRefreshAt(new Date().toLocaleTimeString('zh-CN', { hour12: false }))
+        }
       }
     }
 
+    refreshQuotesRef.current = refreshBatch
     void refreshBatch(false)
     const timer = window.setInterval(() => {
       void refreshBatch(false)
@@ -492,9 +498,11 @@ function Plan2032Page() {
                 <button className={holdingSort === 'symbol' ? 'active' : ''} onClick={() => setHoldingSort('symbol')}>按标的</button>
                 <button className={holdingSort === 'cagr' ? 'active' : ''} onClick={() => setHoldingSort('cagr')}>按总CAGR</button>
               </div>
+              <button className="btn-outline" onClick={() => refreshQuotesRef.current?.(true)}>刷新价格</button>
               <button className="btn-outline" onClick={handleSave}>保存</button>
             </div>
             {saveStatus && <div className="plan2032-muted">{saveStatus}</div>}
+            <div className="plan2032-muted">价格缓存保留；自动刷新频率：1小时。{quoteRefreshAt ? ` 最近刷新：${quoteRefreshAt}` : ''}</div>
           </div>
 
           <div className="plan2032-table-wrap">
