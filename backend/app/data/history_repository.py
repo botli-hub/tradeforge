@@ -52,24 +52,26 @@ def infer_currency(market: str) -> str:
 
 
 def upsert_instrument(symbol: str, source_symbol: str, name: Optional[str] = None, asset_type: str = 'STOCK', lot_size: Optional[int] = None):
+    """兼容旧函数名：标的主数据统一写入 stocks 表。"""
     market = infer_market(symbol)
     now = now_iso()
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO instruments (symbol, market, asset_type, source_symbol, name, currency, lot_size, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+        INSERT INTO stocks (symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status, created_at, updated_at)
+        VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, 'active', ?, ?)
         ON CONFLICT(symbol) DO UPDATE SET
             market=excluded.market,
             asset_type=excluded.asset_type,
             source_symbol=excluded.source_symbol,
-            name=COALESCE(excluded.name, instruments.name),
+            name=COALESCE(excluded.name, stocks.name),
             currency=excluded.currency,
-            lot_size=COALESCE(excluded.lot_size, instruments.lot_size),
+            lot_size=COALESCE(excluded.lot_size, stocks.lot_size),
+            status='active',
             updated_at=excluded.updated_at
         """,
-        (symbol, market, asset_type, source_symbol, name, infer_currency(market), lot_size, now, now),
+        (symbol, name or symbol, market, asset_type, source_symbol, infer_currency(market), lot_size, now, now),
     )
     conn.commit()
     conn.close()
@@ -263,20 +265,22 @@ def list_backfill_jobs(limit: int = 50) -> List[Dict[str, Any]]:
 def upsert_subscription(symbol: str, name: Optional[str] = None, source_hint: Optional[str] = None, enabled: bool = True):
     now = now_iso()
     market = infer_market(symbol)
+    market = 'CN' if market in ('SH', 'SZ') else market
+    currency = infer_currency('SH' if market == 'CN' else market)
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO data_subscriptions (symbol, market, name, source_hint, enabled, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO stocks (symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status, source_hint, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 1, 'STOCK', ?, ?, NULL, 'active', ?, ?, ?)
         ON CONFLICT(symbol) DO UPDATE SET
             market=excluded.market,
-            name=COALESCE(excluded.name, data_subscriptions.name),
-            source_hint=COALESCE(excluded.source_hint, data_subscriptions.source_hint),
+            name=COALESCE(NULLIF(stocks.name, stocks.symbol), excluded.name, stocks.name),
+            source_hint=COALESCE(excluded.source_hint, stocks.source_hint),
             enabled=excluded.enabled,
             updated_at=excluded.updated_at
         """,
-        (symbol, market, name, source_hint, 1 if enabled else 0, now, now),
+        (symbol, name or symbol, market, 1 if enabled else 0, symbol, currency, source_hint, now, now),
     )
     conn.commit()
     conn.close()
@@ -288,7 +292,7 @@ def update_subscription_result(symbol: str, status: str, error: Optional[str] = 
     cursor = conn.cursor()
     cursor.execute(
         """
-        UPDATE data_subscriptions
+        UPDATE stocks
         SET last_scheduled_sync_at = ?, last_scheduled_status = ?, last_error = ?, updated_at = ?
         WHERE symbol = ?
         """,
@@ -301,10 +305,16 @@ def update_subscription_result(symbol: str, status: str, error: Optional[str] = 
 def list_subscriptions(enabled_only: bool = False) -> List[Dict[str, Any]]:
     conn = get_db()
     cursor = conn.cursor()
+    sql = """
+        SELECT symbol, market, name, source_hint, enabled, created_at, updated_at,
+               last_scheduled_sync_at, last_scheduled_status, last_error
+        FROM stocks
+        WHERE subscribed = 1
+    """
     if enabled_only:
-        cursor.execute("SELECT * FROM data_subscriptions WHERE enabled = 1 ORDER BY symbol ASC")
-    else:
-        cursor.execute("SELECT * FROM data_subscriptions ORDER BY symbol ASC")
+        sql += " AND enabled = 1"
+    sql += " ORDER BY symbol ASC"
+    cursor.execute(sql)
     rows = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return rows
@@ -315,7 +325,7 @@ def set_subscription_enabled(symbol: str, enabled: bool):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE data_subscriptions SET enabled = ?, updated_at = ? WHERE symbol = ?",
+        "UPDATE stocks SET enabled = ?, subscribed = 1, updated_at = ? WHERE symbol = ?",
         (1 if enabled else 0, now, symbol),
     )
     conn.commit()
@@ -366,10 +376,10 @@ def list_scheduler_runs(limit: int = 20) -> List[Dict[str, Any]]:
 
 
 def list_stocks_all(enabled_only: bool = True) -> List[Dict[str, Any]]:
-    """从 stocks 表读取股票池，供调度器使用"""
+    """从 stocks 表读取股票池/调度标的。"""
     conn = get_db()
     cursor = conn.cursor()
-    sql = "SELECT symbol, name, market FROM stocks"
+    sql = "SELECT symbol, name, market, source_hint, subscribed FROM stocks"
     if enabled_only:
         sql += " WHERE enabled = 1"
     sql += " ORDER BY symbol"

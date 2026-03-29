@@ -14,6 +14,11 @@ class StockOut(BaseModel):
     market: str
     enabled: bool
     subscribed: bool
+    asset_type: Optional[str] = None
+    source_symbol: Optional[str] = None
+    currency: Optional[str] = None
+    lot_size: Optional[int] = None
+    status: Optional[str] = None
 
 
 class StockIn(BaseModel):
@@ -33,7 +38,7 @@ def list_stocks(
 ):
     conn = get_db()
     cursor = conn.cursor()
-    sql = "SELECT symbol, name, market, enabled, subscribed FROM stocks WHERE 1=1"
+    sql = "SELECT symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status FROM stocks WHERE 1=1"
     params: list = []
     if enabled_only:
         sql += " AND enabled = 1"
@@ -50,6 +55,11 @@ def list_stocks(
             market=r["market"],
             enabled=bool(r["enabled"]),
             subscribed=bool(r["subscribed"]),
+            asset_type=r["asset_type"],
+            source_symbol=r["source_symbol"],
+            currency=r["currency"],
+            lot_size=r["lot_size"],
+            status=r["status"],
         )
         for r in rows
     ]
@@ -62,8 +72,19 @@ def add_stock(body: StockIn):
     now = _now()
     try:
         cursor.execute(
-            "INSERT INTO stocks (symbol, name, market, enabled, subscribed, created_at, updated_at) VALUES (?, ?, ?, 1, 0, ?, ?)",
-            (body.symbol, body.name, body.market.upper(), now, now),
+            """
+            INSERT INTO stocks (symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status, created_at, updated_at)
+            VALUES (?, ?, ?, 1, 0, 'STOCK', ?, ?, NULL, 'active', ?, ?)
+            """,
+            (
+                body.symbol,
+                body.name,
+                body.market.upper(),
+                body.symbol,
+                'USD' if body.market.upper() == 'US' else ('HKD' if body.market.upper() == 'HK' else 'CNY'),
+                now,
+                now,
+            ),
         )
         conn.commit()
     except Exception as e:
@@ -77,6 +98,11 @@ def add_stock(body: StockIn):
         market=row["market"],
         enabled=bool(row["enabled"]),
         subscribed=bool(row["subscribed"]),
+        asset_type=row["asset_type"],
+        source_symbol=row["source_symbol"],
+        currency=row["currency"],
+        lot_size=row["lot_size"],
+        status=row["status"],
     )
 
 

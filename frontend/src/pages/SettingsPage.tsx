@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   AppSettings,
   connectTrading,
   disconnectTrading,
   getAppSettings,
   getMarketStatus,
-  getTradingStatus,
   saveAppSettings,
 } from '../services/api'
 
@@ -14,31 +13,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [marketStatus, setMarketStatus] = useState<{ connected: boolean; adapter: string } | null>(null)
-  const [tradingStatus, setTradingStatus] = useState<{ connected: boolean; adapter: string | null } | null>(null)
   const [testingMarket, setTestingMarket] = useState(false)
   const [connectingTrading, setConnectingTrading] = useState(false)
-
-  useEffect(() => {
-    refreshStatuses()
-  }, [])
-
-  async function refreshStatuses() {
-    try {
-      const [market, trading] = await Promise.allSettled([
-        getMarketStatus(settings),
-        getTradingStatus(),
-      ])
-
-      if (market.status === 'fulfilled') {
-        setMarketStatus({ connected: market.value.connected, adapter: market.value.adapter })
-      }
-      if (trading.status === 'fulfilled') {
-        setTradingStatus(trading.value)
-      }
-    } catch {
-      // 忽略状态刷新异常
-    }
-  }
+  const [tradingConnected, setTradingConnected] = useState(false)
 
   function updateField<K extends keyof AppSettings>(key: K, value: AppSettings[K]) {
     setSettings(prev => ({ ...prev, [key]: value }))
@@ -76,10 +53,10 @@ export default function SettingsPage() {
       const latest = saveAppSettings(settings)
       setSettings(latest)
       await connectTrading(latest)
-      const status = await getTradingStatus()
-      setTradingStatus(status)
+      setTradingConnected(true)
       setMessage(`交易账户已连接：${latest.tradingAdapter} / ${latest.tradingEnv}`)
     } catch (e: any) {
+      setTradingConnected(false)
       setMessage(`交易连接失败：${e.message}`)
     } finally {
       setConnectingTrading(false)
@@ -91,8 +68,7 @@ export default function SettingsPage() {
     setMessage('')
     try {
       await disconnectTrading()
-      const status = await getTradingStatus()
-      setTradingStatus(status)
+      setTradingConnected(false)
       setMessage('交易账户已断开')
     } catch (e: any) {
       setMessage(`断开失败：${e.message}`)
@@ -209,8 +185,8 @@ export default function SettingsPage() {
           </div>
           <div className="status-row">
             <span>交易状态</span>
-            <span className={`tag ${tradingStatus?.connected ? 'ready' : 'draft'}`}>
-              {tradingStatus?.connected ? `已连接 (${tradingStatus.adapter})` : '未连接'}
+            <span className={`tag ${tradingConnected ? 'ready' : 'draft'}`}>
+              {tradingConnected ? `已连接 (${settings.tradingAdapter})` : '未连接'}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>

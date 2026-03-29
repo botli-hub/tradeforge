@@ -233,22 +233,6 @@ def init_db():
         )
     """)
 
-    # 标的基础信息
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS instruments (
-            symbol TEXT PRIMARY KEY,
-            market TEXT NOT NULL,
-            asset_type TEXT NOT NULL,
-            source_symbol TEXT NOT NULL,
-            name TEXT,
-            currency TEXT,
-            lot_size INTEGER,
-            status TEXT DEFAULT 'active',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    """)
-
     # 历史K线
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS kline_bars (
@@ -304,22 +288,6 @@ def init_db():
         )
     """)
 
-    # 数据订阅表（定时更新列表）
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS data_subscriptions (
-            symbol TEXT PRIMARY KEY,
-            market TEXT NOT NULL,
-            name TEXT,
-            source_hint TEXT,
-            enabled INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            last_scheduled_sync_at TEXT,
-            last_scheduled_status TEXT,
-            last_error TEXT
-        )
-    """)
-
     # 调度运行记录
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS history_scheduler_runs (
@@ -349,7 +317,7 @@ def init_db():
         )
     """)
 
-    # 股票池（下拉框数据源）
+    # 股票池 + 标的主数据（统一主表）
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS stocks (
             symbol TEXT PRIMARY KEY,
@@ -357,15 +325,180 @@ def init_db():
             market TEXT NOT NULL,
             enabled INTEGER DEFAULT 1,
             subscribed INTEGER DEFAULT 0,
+            asset_type TEXT DEFAULT 'STOCK',
+            source_symbol TEXT,
+            currency TEXT,
+            lot_size INTEGER,
+            status TEXT DEFAULT 'active',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
     """)
 
+    # 兼容旧库：为 stocks 增补主数据 + 调度订阅字段
+    for ddl in [
+        "ALTER TABLE stocks ADD COLUMN asset_type TEXT DEFAULT 'STOCK'",
+        "ALTER TABLE stocks ADD COLUMN source_symbol TEXT",
+        "ALTER TABLE stocks ADD COLUMN currency TEXT",
+        "ALTER TABLE stocks ADD COLUMN lot_size INTEGER",
+        "ALTER TABLE stocks ADD COLUMN status TEXT DEFAULT 'active'",
+        "ALTER TABLE stocks ADD COLUMN source_hint TEXT",
+        "ALTER TABLE stocks ADD COLUMN last_scheduled_sync_at TEXT",
+        "ALTER TABLE stocks ADD COLUMN last_scheduled_status TEXT",
+        "ALTER TABLE stocks ADD COLUMN last_error TEXT",
+    ]:
+        try:
+            cursor.execute(ddl)
+        except Exception:
+            pass
+
+    # 从旧 instruments 表一次性回填到 stocks；若旧表不存在则自动跳过
+    try:
+        cursor.execute(
+            "SELECT symbol, market, asset_type, source_symbol, name, currency, lot_size, status, created_at, updated_at FROM instruments"
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            cursor.execute(
+                """
+                INSERT INTO stocks (symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status, created_at, updated_at)
+                VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name=COALESCE(NULLIF(stocks.name, stocks.symbol), excluded.name, stocks.name),
+                    market=COALESCE(stocks.market, excluded.market),
+                    asset_type=COALESCE(stocks.asset_type, excluded.asset_type),
+                    source_symbol=COALESCE(stocks.source_symbol, excluded.source_symbol),
+                    currency=COALESCE(stocks.currency, excluded.currency),
+                    lot_size=COALESCE(stocks.lot_size, excluded.lot_size),
+                    status=COALESCE(stocks.status, excluded.status),
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    row["symbol"],
+                    row["name"] or row["symbol"],
+                    row["market"],
+                    row["asset_type"],
+                    row["source_symbol"],
+                    row["currency"],
+                    row["lot_size"],
+                    row["status"] or 'active',
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+    except Exception:
+        pass
+
+    # 从旧 data_subscriptions 表回填到 stocks；若旧表不存在则自动跳过
+    try:
+        cursor.execute(
+            "SELECT symbol, market, name, source_hint, enabled, created_at, updated_at, last_scheduled_sync_at, last_scheduled_status, last_error FROM data_subscriptions"
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            cursor.execute(
+                """
+                INSERT INTO stocks (
+                    symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status,
+                    source_hint, last_scheduled_sync_at, last_scheduled_status, last_error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 0, 'STOCK', ?, ?, NULL, 'active', ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    name=COALESCE(NULLIF(stocks.name, stocks.symbol), excluded.name, stocks.name),
+                    market=COALESCE(stocks.market, excluded.market),
+                    enabled=excluded.enabled,
+                    source_hint=COALESCE(stocks.source_hint, excluded.source_hint),
+                    last_scheduled_sync_at=COALESCE(excluded.last_scheduled_sync_at, stocks.last_scheduled_sync_at),
+                    last_scheduled_status=COALESCE(excluded.last_scheduled_status, stocks.last_scheduled_status),
+                    last_error=COALESCE(excluded.last_error, stocks.last_error),
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    row["symbol"],
+                    row["name"] or row["symbol"],
+                    row["market"],
+                    row["enabled"],
+                    row["symbol"],
+                    'USD' if row['market'] == 'US' else ('HKD' if row['market'] == 'HK' else 'CNY'),
+                    row["source_hint"],
+                    row["last_scheduled_sync_at"],
+                    row["last_scheduled_status"],
+                    row["last_error"],
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+    except Exception:
+        pass
+
+    # 主数据清洗：规范 market / source_symbol / currency / name
+    cursor.execute(
+        """
+        UPDATE stocks
+        SET market = CASE
+            WHEN market = 'SH' OR symbol LIKE '%.SH' OR symbol LIKE '%.SZ' THEN 'CN'
+            WHEN market = 'SZ' THEN 'CN'
+            WHEN market = 'HK' OR symbol LIKE '%.HK' THEN 'HK'
+            ELSE 'US'
+        END
+        """
+    )
+    cursor.execute(
+        """
+        UPDATE stocks
+        SET currency = CASE
+            WHEN market = 'CN' THEN 'CNY'
+            WHEN market = 'HK' THEN 'HKD'
+            ELSE 'USD'
+        END
+        WHERE currency IS NULL OR currency = ''
+        """
+    )
+    cursor.execute(
+        "UPDATE stocks SET source_symbol = symbol WHERE source_symbol IS NULL OR source_symbol = ''"
+    )
+    cursor.execute(
+        "UPDATE stocks SET asset_type = 'STOCK' WHERE asset_type IS NULL OR asset_type = ''"
+    )
+    cursor.execute(
+        "UPDATE stocks SET status = 'active' WHERE status IS NULL OR status = ''"
+    )
+    cursor.execute(
+        "UPDATE stocks SET name = symbol WHERE name IS NULL OR TRIM(name) = ''"
+    )
+
+    # 逻辑上停用旧表：迁移后尝试删除；若不存在则跳过
+    for old_table in ['instruments', 'data_subscriptions']:
+        try:
+            cursor.execute(f"DROP TABLE IF EXISTS {old_table}")
+        except Exception:
+            pass
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_kline_symbol_tf_ts ON kline_bars(symbol, timeframe, ts)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_kline_jobs_status ON kline_backfill_jobs(status, created_at)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_enabled ON data_subscriptions(enabled, updated_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stocks_enabled ON stocks(enabled, updated_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_stocks_subscribed ON stocks(subscribed, updated_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_target ON history_scheduler_runs(target_date, status)")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS plan2032_holdings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            name TEXT NOT NULL,
+            shares REAL DEFAULT 0,
+            target2032 REAL DEFAULT 0,
+            dividend_yield REAL DEFAULT 0,
+            category TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            pe REAL,
+            moat TEXT,
+            risk INTEGER DEFAULT 3,
+            note TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_events_symbol ON risk_events(symbol, created_at)")
 
     seed_demo_strategies(conn)
@@ -413,14 +546,24 @@ _SEED_STOCKS: List[Dict[str, str]] = [
 
 def seed_stocks(conn: sqlite3.Connection):
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(1) AS cnt FROM stocks")
-    row = cursor.fetchone()
-    if row and row["cnt"]:
-        return
     now = _now_iso()
     for s in _SEED_STOCKS:
+        currency = 'USD' if s['market'] == 'US' else ('HKD' if s['market'] == 'HK' else 'CNY')
         cursor.execute(
-            "INSERT OR IGNORE INTO stocks (symbol, name, market, enabled, subscribed, created_at, updated_at) VALUES (?, ?, ?, 1, 0, ?, ?)",
-            (s["symbol"], s["name"], s["market"], now, now),
+            """
+            INSERT INTO stocks
+            (symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status, created_at, updated_at)
+            VALUES (?, ?, ?, 1, 0, 'STOCK', ?, ?, NULL, 'active', ?, ?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                name = CASE
+                    WHEN stocks.name IS NULL OR TRIM(stocks.name) = '' OR stocks.name = stocks.symbol THEN excluded.name
+                    ELSE stocks.name
+                END,
+                market = COALESCE(stocks.market, excluded.market),
+                source_symbol = COALESCE(stocks.source_symbol, excluded.source_symbol),
+                currency = COALESCE(stocks.currency, excluded.currency),
+                updated_at = excluded.updated_at
+            """,
+            (s["symbol"], s["name"], s["market"], s["symbol"], currency, now, now),
         )
     conn.commit()

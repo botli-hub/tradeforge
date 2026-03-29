@@ -11,13 +11,11 @@ export type {
   QuoteData,
   SearchStockResult,
   StockItem,
+  Plan2032Holding,
   StrategySignal,
   StrategySummary,
-  TradingAccount,
   TradingEnv,
   TradingOrder,
-  TradingPosition,
-  TradingStatus,
 } from './types'
 import type {
   AppSettings,
@@ -26,12 +24,10 @@ import type {
   QuoteData,
   SearchStockResult,
   StockItem,
+  Plan2032Holding,
   StrategySignal,
   StrategySummary,
-  TradingAccount,
   TradingOrder,
-  TradingPosition,
-  TradingStatus,
 } from './types'
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -140,6 +136,16 @@ export async function getQuote(symbol: string, settings = getAppSettings()) {
   return request<QuoteData>(`/api/market/quote?${qs}`)
 }
 
+export async function getQuotes(symbols: string[], settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbols: symbols.join(','),
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<{ items: QuoteData[] }>(`/api/market/quotes?${qs}`)
+}
+
 export async function getKlines(symbol: string, timeframe: string = '1d', limit: number = 365, settings = getAppSettings()) {
   const qs = buildMarketQuery({
     symbol,
@@ -179,10 +185,6 @@ export async function getOptionPayoff(data: any) {
   })
 }
 
-export async function getTradingStatus() {
-  return request<TradingStatus>(`/api/trading/status`)
-}
-
 export async function connectTrading(settings = getAppSettings()) {
   return request<{ status: string; adapter: string }>(`/api/trading/connect`, {
     method: 'POST',
@@ -212,14 +214,6 @@ export async function placeOrder(payload: OrderPayload) {
 
 export async function getOrders() {
   return request<TradingOrder[]>(`/api/trading/orders`)
-}
-
-export async function getPositions() {
-  return request<TradingPosition[]>(`/api/trading/positions`)
-}
-
-export async function getAccount() {
-  return request<TradingAccount>(`/api/trading/account`)
 }
 
 export async function getStrategies() {
@@ -371,5 +365,17 @@ export async function setStockEnabled(symbol: string, enabled: boolean) {
 export async function setStockSubscribed(symbol: string, subscribed: boolean) {
   return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}/subscribe?subscribed=${subscribed}`, {
     method: 'POST',
+  })
+}
+
+export async function getPlan2032Holdings() {
+  return request<Plan2032Holding[]>(`/api/plan2032/holdings`)
+}
+
+export async function savePlan2032Holdings(holdings: Plan2032Holding[]) {
+  return request<Plan2032Holding[]>(`/api/plan2032/holdings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ holdings }),
   })
 }

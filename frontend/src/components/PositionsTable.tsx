@@ -1,4 +1,4 @@
-import type { TradingPosition } from '../services/api'
+import type { TradingPosition } from '../services/types'
 
 interface Props {
   positions: TradingPosition[]

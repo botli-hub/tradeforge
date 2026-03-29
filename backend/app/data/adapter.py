@@ -248,66 +248,75 @@ class FutuAdapter:
         self._quote_callback = callback
 
     def get_quote(self, symbol: str) -> Optional[Quote]:
-        """获取实时报价"""
-        if not self.is_connected():
-            return None
+        """获取单个实时报价"""
+        quotes = self.get_quotes([symbol])
+        return quotes.get(symbol)
+
+    def get_quotes(self, symbols: List[str]) -> dict[str, Quote]:
+        """批量获取实时报价，复用连接/订阅，避免逐个 symbol 重连。"""
+        if not self.is_connected() or not symbols:
+            return {}
 
         try:
             from futu import SubType, RET_OK
 
-            code = self._normalize_symbol(symbol)
-            ret_sub, err = self._quote_ctx.subscribe([code], [SubType.QUOTE], subscribe_push=False)
-            if ret_sub != RET_OK:
-                self.last_error = f"订阅报价失败: {err}"
-                print(self.last_error)
-                return None
+            normalized_codes = []
+            original_by_code = {}
+            for symbol in symbols:
+                code = self._normalize_symbol(symbol)
+                normalized_codes.append(code)
+                original_by_code[code] = symbol
 
-            ret, data = self._quote_ctx.get_stock_quote([code])
+            missing_quote_subs = [code for code in normalized_codes if code not in self._subscribed]
+            if missing_quote_subs:
+                ret_sub, err = self._quote_ctx.subscribe(missing_quote_subs, [SubType.QUOTE], subscribe_push=False)
+                if ret_sub != RET_OK:
+                    self.last_error = f"订阅报价失败: {err}"
+                    print(self.last_error)
+                    return {}
+                self._subscribed.update(missing_quote_subs)
+
+            ret, data = self._quote_ctx.get_stock_quote(normalized_codes)
             if ret != RET_OK or len(data) == 0:
                 self.last_error = f"获取报价失败: {data}"
                 print(self.last_error)
-                return None
+                return {}
 
-            row = data.iloc[0]
-            price = float(row.get('last_price', 0) or 0)
-            pre_close = float(row.get('prev_close_price', 0) or 0)
-            change = price - pre_close if pre_close else 0.0
-            change_pct = (change / pre_close * 100) if pre_close else 0.0
-
-            bid = price
-            ask = price
-            try:
-                ret_book_sub, _ = self._quote_ctx.subscribe([code], [SubType.ORDER_BOOK], subscribe_push=False)
-                if ret_book_sub == RET_OK:
-                    ret_book, book = self._quote_ctx.get_order_book(code, num=1)
-                    if ret_book == RET_OK:
-                        if book.get('Bid'):
-                            bid = float(book['Bid'][0][0])
-                        if book.get('Ask'):
-                            ask = float(book['Ask'][0][0])
-            except Exception:
-                pass
+            results: dict[str, Quote] = {}
+            for _, row in data.iterrows():
+                code = str(row.get('code', '') or '')
+                if not code:
+                    continue
+                price = float(row.get('last_price', 0) or 0)
+                pre_close = float(row.get('prev_close_price', 0) or 0)
+                change = price - pre_close if pre_close else 0.0
+                change_pct = (change / pre_close * 100) if pre_close else 0.0
+                denormalized = self._denormalize_symbol(code)
+                original_symbol = original_by_code.get(code, denormalized)
+                quote = Quote(
+                    symbol=denormalized,
+                    name=str(row.get('name', denormalized)),
+                    price=price,
+                    change=change,
+                    change_pct=change_pct,
+                    volume=int(row.get('volume', 0) or 0),
+                    amount=float(row.get('turnover', 0) or 0),
+                    bid=price,
+                    ask=price,
+                    high=float(row.get('high_price', price) or price),
+                    low=float(row.get('low_price', price) or price),
+                    open=float(row.get('open_price', price) or price),
+                    pre_close=pre_close,
+                )
+                results[original_symbol] = quote
+                results[denormalized] = quote
 
             self.last_error = None
-            return Quote(
-                symbol=self._denormalize_symbol(str(row.get('code', code))),
-                name=str(row.get('name', self._denormalize_symbol(code))),
-                price=price,
-                change=change,
-                change_pct=change_pct,
-                volume=int(row.get('volume', 0) or 0),
-                amount=float(row.get('turnover', 0) or 0),
-                bid=bid,
-                ask=ask,
-                high=float(row.get('high_price', price) or price),
-                low=float(row.get('low_price', price) or price),
-                open=float(row.get('open_price', price) or price),
-                pre_close=pre_close,
-            )
+            return results
         except Exception as e:
             self.last_error = f"获取报价异常: {e}"
             print(self.last_error)
-            return None
+            return {}
 
 
 def _load_env_file_once():

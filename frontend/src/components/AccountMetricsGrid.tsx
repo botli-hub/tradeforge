@@ -1,4 +1,4 @@
-import type { TradingAccount } from '../services/api'
+import type { TradingAccount } from '../services/types'
 
 interface Props {
   account: TradingAccount | null

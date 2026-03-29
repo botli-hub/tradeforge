@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, IChartApi, ISeriesApi, CandlestickData } from 'lightweight-charts'
-import AccountMetricsGrid from '../components/AccountMetricsGrid'
 import MarketStatusBar from '../components/MarketStatusBar'
-import OrdersTable from '../components/OrdersTable'
-import PositionsTable from '../components/PositionsTable'
 import SearchResultsList from '../components/SearchResultsList'
 import SignalConfirmModal from '../components/SignalConfirmModal'
 import StockSelect from '../components/StockSelect'
@@ -14,18 +11,11 @@ import {
   SearchStockResult,
   StrategySignal,
   StrategySummary,
-  TradingAccount,
-  TradingOrder,
-  TradingPosition,
   evaluateStrategySignal,
-  getAccount,
   getAppSettings,
   getKlines,
-  getOrders,
-  getPositions,
   getQuote,
   getStrategies,
-  getTradingStatus,
   placeOrder,
   saveAppSettings,
   searchStocks,
@@ -39,9 +29,6 @@ export default function MarketPage() {
   const [timeframe, setTimeframe] = useState('1d')
   const [klines, setKlines] = useState<KlineBar[]>([])
   const [quote, setQuote] = useState<QuoteData | null>(null)
-  const [orders, setOrders] = useState<TradingOrder[]>([])
-  const [positions, setPositions] = useState<TradingPosition[]>([])
-  const [account, setAccount] = useState<TradingAccount | null>(null)
   const [strategies, setStrategies] = useState<StrategySummary[]>([])
   const [selectedStrategyId, setSelectedStrategyId] = useState('')
   const [signalInfo, setSignalInfo] = useState<StrategySignal | null>(null)
@@ -50,7 +37,6 @@ export default function MarketPage() {
   const [searchResults, setSearchResults] = useState<SearchStockResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [tradingConnected, setTradingConnected] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [signalSide, setSignalSide] = useState<'BUY' | 'SELL'>('BUY')
   const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET'>('LIMIT')
@@ -101,7 +87,6 @@ export default function MarketPage() {
 
   useEffect(() => {
     void loadStrategiesList()
-    void refreshTradingPanels()
   }, [])
 
   useEffect(() => {
@@ -127,7 +112,6 @@ export default function MarketPage() {
 
     const timer = window.setInterval(() => {
       void fetchMarketData(true)
-      void refreshTradingPanels(true)
     }, pollMs)
     return () => window.clearInterval(timer)
   }, [pollMs, symbol, timeframe, settings.marketDataSource, settings.marketHost, settings.marketPort, selectedStrategyId])
@@ -218,35 +202,6 @@ export default function MarketPage() {
     }
   }
 
-
-  async function refreshTradingPanels(silent = false) {
-    try {
-      const status = await getTradingStatus()
-      setTradingConnected(status.connected)
-
-      if (!status.connected) {
-        setOrders([])
-        setPositions([])
-        setAccount(null)
-        return
-      }
-
-      const [ordersData, positionsData, accountData] = await Promise.all([
-        getOrders(),
-        getPositions(),
-        getAccount(),
-      ])
-      setOrders((ordersData || []).slice().reverse())
-      setPositions(positionsData || [])
-      setAccount(accountData || null)
-    } catch (e: any) {
-      setTradingConnected(false)
-      if (!silent) {
-        setError(e.message || '交易状态获取失败')
-      }
-    }
-  }
-
   async function fetchStrategySignal(silent = false) {
     if (!selectedStrategyId) {
       setSignalInfo(null)
@@ -265,7 +220,6 @@ export default function MarketPage() {
       }
 
       if (
-        tradingConnected &&
         settings.confirmSignals &&
         signal.signal !== 'NONE' &&
         signal.signal_key !== lastSignalKeyRef.current
@@ -386,11 +340,6 @@ export default function MarketPage() {
   }
 
   function openSignalModal(side: 'BUY' | 'SELL') {
-    if (!tradingConnected) {
-      setError('交易账户未连接，请先到设置页连接 Futu 交易通道')
-      return
-    }
-
     setSignalSide(side)
     setOrderType('LIMIT')
     setOrderQuantity(settings.defaultOrderQuantity)
@@ -418,7 +367,6 @@ export default function MarketPage() {
       })
       setShowModal(false)
       setSignalText(`${side === 'BUY' ? '买入' : '卖出'}委托已提交`)
-      await refreshTradingPanels(true)
     } catch (e: any) {
       setError(e.message || '下单失败')
     } finally {
@@ -450,7 +398,7 @@ export default function MarketPage() {
         settings={settings}
         refreshOptions={refreshOptions}
         lastRefreshAt={lastRefreshAt}
-        tradingConnected={tradingConnected}
+        tradingConnected={false}
         quoteSource={quoteSource}
         klineSource={klineSource}
         strategies={strategies}
@@ -548,13 +496,8 @@ export default function MarketPage() {
           <button className="btn-outline" onClick={() => openSignalModal('SELL')}>手动卖出</button>
           <button className="btn-outline" onClick={() => fetchMarketData(false)}>刷新行情</button>
           <button className="btn-outline" onClick={() => fetchStrategySignal(false)}>评估策略信号</button>
-          <button className="btn-outline" onClick={() => refreshTradingPanels(false)}>刷新订单/持仓</button>
         </div>
       </div>
-
-      <AccountMetricsGrid account={account} />
-      <PositionsTable positions={positions} />
-      <OrdersTable orders={orders} />
 
       <SignalConfirmModal
         open={showModal}

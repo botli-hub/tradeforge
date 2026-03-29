@@ -129,4 +129,29 @@ export interface StockItem {
   market: 'US' | 'HK' | 'CN'
   enabled: boolean
   subscribed: boolean
+  asset_type?: string
+  source_symbol?: string
+  currency?: 'USD' | 'HKD' | 'CNY'
+  lot_size?: number | null
+  status?: string
+  source_hint?: string | null
+  last_scheduled_sync_at?: string | null
+  last_scheduled_status?: string | null
+  last_error?: string | null
+}
+
+export interface Plan2032Holding {
+  id?: number
+  symbol: string
+  name: string
+  shares: number
+  target2032: number
+  dividend_yield: number
+  category: string
+  currency: 'USD' | 'HKD' | 'CNY'
+  pe?: number | null
+  moat?: string
+  risk?: number
+  note?: string
+  sort_order?: number
 }
