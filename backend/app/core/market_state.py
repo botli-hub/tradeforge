@@ -8,12 +8,19 @@
 两种模式区别：
 - on_bar_close: 用已收盘的完整 bars，适合回测和传统定时信号
 - on_quote: 用 historical_bars + forming_bar（实时更新OHLC），适合盘中实时信号
+
+优化说明（v1.2）：
+- 引入 logging 替换 print，消除裸 except
+- update_with_quote 中移除硬编码 volume_delta=100，改为直接使用传入的 volume 字段
 """
+import logging
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any, Literal
 from dataclasses import dataclass, field
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 from app.data.history_repository import get_kline_bars
 from app.data.adapter import get_adapter, Quote, Bar
@@ -218,8 +225,8 @@ class MarketStateManager:
             if state.trigger_mode == TriggerMode.ON_QUOTE:
                 # 更新forming bar
                 if state.forming_bar:
-                    # volume_delta估算：假设每秒1笔，每笔100股
-                    volume_delta = 100
+                    # 直接使用 Quote 中的 volume 字段作为增量（由推送服务计算差值后传入）
+                    volume_delta = quote.volume if quote.volume and quote.volume > 0 else 0
                     state.forming_bar.update_with_quote(quote.price, volume_delta)
                 else:
                     # 创建新的forming bar
@@ -370,8 +377,8 @@ def _load_market_state(
                 }
                 for bar in local_bars
             ]
-    except Exception as e:
-        print(f"获取本地历史K线失败: {e}")
+    except Exception:
+        logger.warning("获取本地历史K线失败: symbol=%s, timeframe=%s", symbol, timeframe, exc_info=True)
     
     # 2. 如果本地数据不足，从adapter获取
     if len(history_bars) < 5:
@@ -399,12 +406,14 @@ def _load_market_state(
                     }
                     for bar in bars
                 ]
+        except Exception:
+            logger.warning("从远端适配器获取历史K线失败: symbol=%s, timeframe=%s", symbol, timeframe, exc_info=True)
         finally:
             if adapter and hasattr(adapter, 'disconnect'):
                 try:
                     adapter.disconnect()
-                except:
-                    pass
+                except Exception:
+                    logger.debug("断开历史K线适配器时发生异常", exc_info=True)
     
     # 3. 如果是实时模式，创建forming bar
     forming_bar = None
@@ -447,12 +456,14 @@ def _load_market_state(
                             initial_price=latest_price,
                             period_start=period_start,
                         )
+        except Exception:
+            logger.warning("获取实时报价以初始化 forming bar 失败: symbol=%s", symbol, exc_info=True)
         finally:
             if adapter and hasattr(adapter, 'disconnect'):
                 try:
                     adapter.disconnect()
-                except:
-                    pass
+                except Exception:
+                    logger.debug("断开报价适配器时发生异常", exc_info=True)
     
     # 4. 元数据
     metadata = {

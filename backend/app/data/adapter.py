@@ -1,5 +1,10 @@
-"""行情适配器 - Futu / Finnhub / Mock"""
+"""行情适配器 - Futu / Finnhub / Mock
+
+优化说明（v1.2）：
+- 引入 logging 替换所有 print 调用
+"""
 import json
+import logging
 import urllib.parse
 import urllib.request
 from typing import List, Protocol, Optional
@@ -7,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -130,11 +137,11 @@ class FutuAdapter:
             return True
         except ImportError:
             self.last_error = "futu-api 未安装"
-            print(self.last_error)
+            logger.error(self.last_error)
             return False
         except Exception as e:
             self.last_error = f"连接失败: {e}"
-            print(self.last_error)
+            logger.error(self.last_error)
             return False
 
     def disconnect(self):
@@ -176,14 +183,14 @@ class FutuAdapter:
             ret_sub, err = self._quote_ctx.subscribe([code], [subtype], subscribe_push=False, session=Session.ALL)
             if ret_sub != RET_OK:
                 self.last_error = f"订阅K线失败: {err}"
-                print(self.last_error)
+                logger.error(self.last_error)
                 return []
 
             num = self._estimate_bar_count(timeframe, start_date, end_date)
             ret, data = self._quote_ctx.get_cur_kline(code, num, subtype, AuType.QFQ)
             if ret != RET_OK:
                 self.last_error = f"获取K线失败: {data}"
-                print(self.last_error)
+                logger.error(self.last_error)
                 return []
 
             bars = []
@@ -200,7 +207,7 @@ class FutuAdapter:
             return bars
         except Exception as e:
             self.last_error = f"获取K线异常: {e}"
-            print(self.last_error)
+            logger.error(self.last_error)
             return []
 
     def subscribe(self, symbols: List[str]) -> bool:
@@ -217,11 +224,11 @@ class FutuAdapter:
                 self.last_error = None
                 return True
             self.last_error = f"订阅失败: {err}"
-            print(self.last_error)
+            logger.error(self.last_error)
             return False
         except Exception as e:
             self.last_error = f"订阅失败: {e}"
-            print(self.last_error)
+            logger.error(self.last_error)
             return False
 
     def unsubscribe(self, symbols: List[str]) -> bool:
@@ -237,10 +244,10 @@ class FutuAdapter:
                 for code in code_list:
                     self._subscribed.discard(code)
                 return True
-            print(f"取消订阅失败: {err}")
+            logger.error("取消订阅失败: %s", err)
             return False
         except Exception as e:
-            print(f"取消订阅失败: {e}")
+            logger.error("取消订阅失败", exc_info=True)
             return False
 
     def on_quote(self, callback):
@@ -272,14 +279,14 @@ class FutuAdapter:
                 ret_sub, err = self._quote_ctx.subscribe(missing_quote_subs, [SubType.QUOTE], subscribe_push=False)
                 if ret_sub != RET_OK:
                     self.last_error = f"订阅报价失败: {err}"
-                    print(self.last_error)
+                    logger.error(self.last_error)
                     return {}
                 self._subscribed.update(missing_quote_subs)
 
             ret, data = self._quote_ctx.get_stock_quote(normalized_codes)
             if ret != RET_OK or len(data) == 0:
                 self.last_error = f"获取报价失败: {data}"
-                print(self.last_error)
+                logger.error(self.last_error)
                 return {}
 
             results: dict[str, Quote] = {}
@@ -315,7 +322,7 @@ class FutuAdapter:
             return results
         except Exception as e:
             self.last_error = f"获取报价异常: {e}"
-            print(self.last_error)
+            logger.error(self.last_error)
             return {}
 
 
