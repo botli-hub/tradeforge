@@ -385,3 +385,101 @@ export async function setStockSubscribed(symbol: string, subscribed: boolean) {
     method: 'POST',
   })
 }
+
+// ── LEAPS 信号监控 ────────────────────────────────────────────────────────────
+
+export interface LeapsWatchlistItem {
+  symbol: string
+  name: string
+  floor_price: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface LeapsSuggestion {
+  contract_code: string
+  strike: number
+  expiry: string
+  premium: number
+  delta: number
+  annualized_yield: number
+  cost_basis: number
+  dte: number
+}
+
+export interface LeapsSignal {
+  id: string
+  symbol: string
+  contract_code: string
+  signal_level: 'PRIMARY' | 'SECONDARY'
+  trigger_price: number
+  ema_value: number
+  ema_type: string
+  iv_rank: number
+  underlying_price: number
+  floor_price: number
+  suggestions: LeapsSuggestion[]
+  is_intraday: boolean
+  created_at: string
+}
+
+export interface LeapsCooldown {
+  contract_code: string
+  symbol: string
+  cooldown_until: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LeapsStatus {
+  watchlist_total: number
+  watchlist_enabled: number
+  recent_signals: LeapsSignal[]
+  active_cooldowns: number
+}
+
+export async function getLeapsWatchlist() {
+  return request<LeapsWatchlistItem[]>('/api/leaps/watchlist')
+}
+
+export async function updateLeapsWatchlistItem(
+  symbol: string,
+  data: { floor_price?: number; enabled?: boolean; name?: string }
+) {
+  return request<LeapsWatchlistItem>(`/api/leaps/watchlist/${encodeURIComponent(symbol)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getLeapsSignals(symbol?: string, limit = 50) {
+  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}&limit=${limit}` : `?limit=${limit}`
+  return request<LeapsSignal[]>(`/api/leaps/signals${qs}`)
+}
+
+export async function getLeapsCooldowns() {
+  return request<LeapsCooldown[]>('/api/leaps/cooldowns')
+}
+
+export async function getLeapsStatus() {
+  return request<LeapsStatus>('/api/leaps/status')
+}
+
+export async function triggerLeapsScan(symbol?: string, is_intraday = false) {
+  return request<{ status: string; symbol: string | null; is_intraday: boolean }>(
+    '/api/leaps/scan',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: symbol ?? null, is_intraday }),
+    }
+  )
+}
+
+export async function resendLeapsSignal(signalId: string) {
+  return request<{ sent: boolean; message: string }>(
+    `/api/leaps/signals/${encodeURIComponent(signalId)}/notify`
+  )
+}

@@ -9,8 +9,9 @@ import PositionsPage from './pages/PositionsPage'
 import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 import StocksPage from './pages/StocksPage'
+import LeapsMonitorPage from './pages/LeapsMonitorPage'
 
-type PageKey = 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'settings'
+type PageKey = 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'settings'
 
 const NAV_ITEMS: { key: PageKey; label: string }[] = [
   { key: 'market', label: '行情' },
@@ -21,6 +22,7 @@ const NAV_ITEMS: { key: PageKey; label: string }[] = [
   { key: 'positions', label: '持仓' },
   { key: 'history', label: '数据' },
   { key: 'stocks', label: '股票池' },
+  { key: 'leaps', label: 'LEAPS' },
   { key: 'settings', label: '设置' },
 ]
 
@@ -36,6 +38,7 @@ function App() {
     positions: <PositionsPage />,
     history: <HistoryPage />,
     stocks: <StocksPage />,
+    leaps: <LeapsMonitorPage />,
     settings: <SettingsPage />,
   }
 

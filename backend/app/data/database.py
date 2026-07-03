@@ -368,8 +368,77 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_scheduler_runs_target ON history_scheduler_runs(target_date, status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_events_symbol ON risk_events(symbol, created_at)")
 
+    # LEAPS 监控表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_watchlist (
+            symbol TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            floor_price REAL NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_option_price_cache (
+            contract_code TEXT NOT NULL,
+            date TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume REAL,
+            iv REAL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (contract_code, date)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_iv_history (
+            contract_code TEXT NOT NULL,
+            date TEXT NOT NULL,
+            iv REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (contract_code, date)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_signals (
+            id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            contract_code TEXT NOT NULL,
+            signal_level TEXT NOT NULL,
+            trigger_price REAL NOT NULL,
+            ema_value REAL NOT NULL,
+            ema_type TEXT NOT NULL,
+            iv_rank REAL NOT NULL,
+            underlying_price REAL NOT NULL,
+            floor_price REAL NOT NULL,
+            suggestions TEXT,
+            is_intraday INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_cooldowns (
+            contract_code TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            cooldown_until TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_leaps_signals_symbol ON leaps_signals(symbol, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_leaps_cooldowns_symbol ON leaps_cooldowns(symbol, cooldown_until)")
+
     seed_demo_strategies(conn)
     seed_stocks(conn)
+    seed_leaps_watchlist(conn)
     conn.commit()
     conn.close()
 
@@ -409,6 +478,28 @@ _SEED_STOCKS: List[Dict[str, str]] = [
     {"symbol": "601899.SH", "name": "紫金矿业", "market": "CN"},
     {"symbol": "688981.SH", "name": "中芯国际", "market": "CN"},
 ]
+
+
+_SEED_LEAPS_WATCHLIST = [
+    {"symbol": "AAPL", "name": "Apple", "floor_price": 200.0},
+    {"symbol": "NVDA", "name": "NVIDIA", "floor_price": 80.0},
+    {"symbol": "GOOG", "name": "Alphabet", "floor_price": 130.0},
+]
+
+
+def seed_leaps_watchlist(conn: sqlite3.Connection):
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(1) AS cnt FROM leaps_watchlist")
+    row = cursor.fetchone()
+    if row and row["cnt"]:
+        return
+    now = _now_iso()
+    for item in _SEED_LEAPS_WATCHLIST:
+        cursor.execute(
+            "INSERT OR IGNORE INTO leaps_watchlist (symbol, name, floor_price, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)",
+            (item["symbol"], item["name"], item["floor_price"], now, now),
+        )
+    conn.commit()
 
 
 def seed_stocks(conn: sqlite3.Connection):

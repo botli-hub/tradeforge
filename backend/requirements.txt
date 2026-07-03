@@ -5,3 +5,5 @@ pydantic==2.10.6
 numpy==2.2.4
 pandas==2.2.3
 futu-api==10.0.6008
+pyyaml==6.0.2
+httpx==0.28.1
