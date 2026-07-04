@@ -265,7 +265,6 @@ export default function LeapsMonitorPage() {
 function SignalsTable({
   signals,
   onResend,
-  showFull = false,
 }: {
   signals: LeapsSignal[]
   onResend: (id: string) => void
