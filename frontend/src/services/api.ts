@@ -1,40 +1,34 @@
 export const API_BASE = 'http://127.0.0.1:8000'
 const SETTINGS_KEY = 'tradeforge.settings'
 const SETTINGS_EVENT = 'tradeforge:settings-changed'
-
-export type AdapterType = 'futu' | 'finnhub'
-export type TradingEnv = 'SIM' | 'REAL'
-
-export interface AppSettings {
-  initialCapital: number
-  feeRate: number
-  slippage: number
-  theme: string
-  language: string
-  marketDataSource: AdapterType
-  marketHost: string
-  marketPort: number
-  tradingAdapter: AdapterType
-  tradingEnv: TradingEnv
-  tradingHost: string
-  tradingPort: number
-  defaultOrderQuantity: number
-  confirmSignals: boolean
-  refreshIntervalSec: number
-}
-
-export interface TradingStatus {
-  connected: boolean
-  adapter: string | null
-}
-
-export interface OrderPayload {
-  symbol: string
-  side: 'BUY' | 'SELL'
-  quantity: number
-  price?: number
-  order_type?: 'LIMIT' | 'MARKET' | 'STOP'
-}
+export type {
+  AdapterType,
+  AppSettings,
+  KlineBar,
+  OrderPayload,
+  OrderSide,
+  OrderType,
+  QuoteData,
+  SearchStockResult,
+  StockItem,
+  Plan2032Holding,
+  StrategySignal,
+  StrategySummary,
+  TradingEnv,
+  TradingOrder,
+} from './types'
+import type {
+  AppSettings,
+  KlineBar,
+  OrderPayload,
+  QuoteData,
+  SearchStockResult,
+  StockItem,
+  Plan2032Holding,
+  StrategySignal,
+  StrategySummary,
+  TradingOrder,
+} from './types'
 
 const DEFAULT_SETTINGS: AppSettings = {
   initialCapital: 100000,
@@ -129,7 +123,7 @@ export async function searchStocks(q: string, settings = getAppSettings()) {
     q,
     adapter: settings.marketDataSource,
   })
-  return request<any[]>(`/api/market/search?${qs}`)
+  return request<SearchStockResult[]>(`/api/market/search?${qs}`)
 }
 
 export async function getQuote(symbol: string, settings = getAppSettings()) {
@@ -139,7 +133,17 @@ export async function getQuote(symbol: string, settings = getAppSettings()) {
     host: settings.marketHost,
     port: settings.marketPort,
   })
-  return request<any>(`/api/market/quote?${qs}`)
+  return request<QuoteData>(`/api/market/quote?${qs}`)
+}
+
+export async function getQuotes(symbols: string[], settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbols: symbols.join(','),
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<{ items: QuoteData[] }>(`/api/market/quotes?${qs}`)
 }
 
 export async function getKlines(symbol: string, timeframe: string = '1d', limit: number = 365, settings = getAppSettings()) {
@@ -151,7 +155,7 @@ export async function getKlines(symbol: string, timeframe: string = '1d', limit:
     host: settings.marketHost,
     port: settings.marketPort,
   })
-  return request<any[]>(`/api/market/klines?${qs}`)
+  return request<KlineBar[]>(`/api/market/klines?${qs}`)
 }
 
 export async function getOptionExpirations(symbol: string, settings = getAppSettings()) {
@@ -179,10 +183,6 @@ export async function getOptionPayoff(data: any) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-}
-
-export async function getTradingStatus() {
-  return request<TradingStatus>(`/api/trading/status`)
 }
 
 export async function connectTrading(settings = getAppSettings()) {
@@ -213,23 +213,15 @@ export async function placeOrder(payload: OrderPayload) {
 }
 
 export async function getOrders() {
-  return request<any[]>(`/api/trading/orders`)
-}
-
-export async function getPositions() {
-  return request<any[]>(`/api/trading/positions`)
-}
-
-export async function getAccount() {
-  return request<any>(`/api/trading/account`)
+  return request<TradingOrder[]>(`/api/trading/orders`)
 }
 
 export async function getStrategies() {
-  return request<any[]>(`/api/strategies`)
+  return request<StrategySummary[]>(`/api/strategies`)
 }
 
 export async function getStrategy(id: string) {
-  return request<any>(`/api/strategies/${id}`)
+  return request<StrategySummary>(`/api/strategies/${id}`)
 }
 
 export async function evaluateStrategySignal(strategyId: string, symbol: string, settings = getAppSettings()) {
@@ -239,7 +231,7 @@ export async function evaluateStrategySignal(strategyId: string, symbol: string,
     host: settings.marketHost,
     port: settings.marketPort,
   })
-  return request<any>(`/api/strategies/${strategyId}/signal?${qs}`)
+  return request<StrategySignal>(`/api/strategies/${strategyId}/signal?${qs}`)
 }
 
 export async function createStrategy(data: any) {
@@ -340,16 +332,6 @@ export async function runHistoryScheduler(settings = getAppSettings()) {
   return request<any>(`/api/history/scheduler/run?${qs}`, {
     method: 'POST',
   })
-}
-
-// ---- 股票池 ----
-
-export interface StockItem {
-  symbol: string
-  name: string
-  market: 'US' | 'HK' | 'CN'
-  enabled: boolean
-  subscribed: boolean
 }
 
 export async function getStocks(params?: { market?: string; enabled_only?: boolean; subscribed?: boolean }) {
@@ -482,4 +464,18 @@ export async function resendLeapsSignal(signalId: string) {
   return request<{ sent: boolean; message: string }>(
     `/api/leaps/signals/${encodeURIComponent(signalId)}/notify`
   )
+}
+
+// ── 2032 投资计划 ─────────────────────────────────────────────────────────────
+
+export async function getPlan2032Holdings() {
+  return request<Plan2032Holding[]>(`/api/plan2032/holdings`)
+}
+
+export async function savePlan2032Holdings(holdings: Plan2032Holding[]) {
+  return request<Plan2032Holding[]>(`/api/plan2032/holdings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ holdings }),
+  })
 }

@@ -10,10 +10,12 @@ import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 import StocksPage from './pages/StocksPage'
 import LeapsMonitorPage from './pages/LeapsMonitorPage'
+import Plan2032Page from './pages/Plan2032Page'
 
-type PageKey = 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'settings'
+type PageKey = 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
 
 const NAV_ITEMS: { key: PageKey; label: string }[] = [
+  { key: 'plan2032', label: '2032Plan' },
   { key: 'market', label: '行情' },
   { key: 'strategy', label: '策略' },
   { key: 'backtest', label: '回测' },
@@ -27,7 +29,7 @@ const NAV_ITEMS: { key: PageKey; label: string }[] = [
 ]
 
 function App() {
-  const [currentPage, setCurrentPage] = useState<PageKey>('market')
+  const [currentPage, setCurrentPage] = useState<PageKey>('plan2032')
 
   const pages: Record<PageKey, JSX.Element> = {
     market: <MarketPage />,
@@ -39,6 +41,7 @@ function App() {
     history: <HistoryPage />,
     stocks: <StocksPage />,
     leaps: <LeapsMonitorPage />,
+    plan2032: <Plan2032Page />,
     settings: <SettingsPage />,
   }
 
@@ -56,9 +59,13 @@ function App() {
         ))}
       </nav>
 
-      <PageErrorBoundary resetKey={currentPage} pageName={currentPage}>
-        {pages[currentPage]}
-      </PageErrorBoundary>
+      {Object.entries(pages).map(([key, page]) => (
+        <div key={key} style={{ display: currentPage === key ? 'block' : 'none' }}>
+          <PageErrorBoundary resetKey={key} pageName={key}>
+            {page}
+          </PageErrorBoundary>
+        </div>
+      ))}
     </div>
   )
 }

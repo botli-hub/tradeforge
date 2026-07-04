@@ -1,18 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { createChart, IChartApi, ISeriesApi, CandlestickData } from 'lightweight-charts'
+import MarketStatusBar from '../components/MarketStatusBar'
+import SearchResultsList from '../components/SearchResultsList'
 import SignalConfirmModal from '../components/SignalConfirmModal'
 import StockSelect from '../components/StockSelect'
 import {
   AppSettings,
+  KlineBar,
+  QuoteData,
+  SearchStockResult,
+  StrategySignal,
+  StrategySummary,
   evaluateStrategySignal,
-  getAccount,
   getAppSettings,
   getKlines,
-  getOrders,
-  getPositions,
   getQuote,
   getStrategies,
-  getTradingStatus,
   placeOrder,
   saveAppSettings,
   searchStocks,
@@ -24,20 +27,16 @@ export default function MarketPage() {
   const [settings, setSettings] = useState<AppSettings>(initialSettings)
   const [symbol, setSymbol] = useState('AAPL')
   const [timeframe, setTimeframe] = useState('1d')
-  const [klines, setKlines] = useState<any[]>([])
-  const [quote, setQuote] = useState<any | null>(null)
-  const [orders, setOrders] = useState<any[]>([])
-  const [positions, setPositions] = useState<any[]>([])
-  const [account, setAccount] = useState<any | null>(null)
-  const [strategies, setStrategies] = useState<any[]>([])
+  const [klines, setKlines] = useState<KlineBar[]>([])
+  const [quote, setQuote] = useState<QuoteData | null>(null)
+  const [strategies, setStrategies] = useState<StrategySummary[]>([])
   const [selectedStrategyId, setSelectedStrategyId] = useState('')
-  const [signalInfo, setSignalInfo] = useState<any | null>(null)
+  const [signalInfo, setSignalInfo] = useState<StrategySignal | null>(null)
   const [notice, setNotice] = useState('')
   const [searchQ, setSearchQ] = useState('')
-  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [searchResults, setSearchResults] = useState<SearchStockResult[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [tradingConnected, setTradingConnected] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [signalSide, setSignalSide] = useState<'BUY' | 'SELL'>('BUY')
   const [orderType, setOrderType] = useState<'LIMIT' | 'MARKET'>('LIMIT')
@@ -88,7 +87,6 @@ export default function MarketPage() {
 
   useEffect(() => {
     void loadStrategiesList()
-    void refreshTradingPanels()
   }, [])
 
   useEffect(() => {
@@ -114,7 +112,6 @@ export default function MarketPage() {
 
     const timer = window.setInterval(() => {
       void fetchMarketData(true)
-      void refreshTradingPanels(true)
     }, pollMs)
     return () => window.clearInterval(timer)
   }, [pollMs, symbol, timeframe, settings.marketDataSource, settings.marketHost, settings.marketPort, selectedStrategyId])
@@ -197,40 +194,11 @@ export default function MarketPage() {
     try {
       const list = await getStrategies()
       setStrategies(list || [])
-      if (!selectedStrategyId && list?.length > 0) {
+      if (!selectedStrategyId && list.length > 0) {
         setSelectedStrategyId(list[0].id)
       }
     } catch (e: any) {
       setError(e.message || '策略列表加载失败')
-    }
-  }
-
-
-  async function refreshTradingPanels(silent = false) {
-    try {
-      const status = await getTradingStatus()
-      setTradingConnected(status.connected)
-
-      if (!status.connected) {
-        setOrders([])
-        setPositions([])
-        setAccount(null)
-        return
-      }
-
-      const [ordersData, positionsData, accountData] = await Promise.all([
-        getOrders(),
-        getPositions(),
-        getAccount(),
-      ])
-      setOrders((ordersData || []).slice().reverse())
-      setPositions(positionsData || [])
-      setAccount(accountData || null)
-    } catch (e: any) {
-      setTradingConnected(false)
-      if (!silent) {
-        setError(e.message || '交易状态获取失败')
-      }
     }
   }
 
@@ -252,12 +220,11 @@ export default function MarketPage() {
       }
 
       if (
-        tradingConnected &&
         settings.confirmSignals &&
         signal.signal !== 'NONE' &&
         signal.signal_key !== lastSignalKeyRef.current
       ) {
-        lastSignalKeyRef.current = signal.signal_key
+        lastSignalKeyRef.current = signal.signal_key || ''
         setSignalSide(signal.signal as 'BUY' | 'SELL')
         setOrderType('LIMIT')
         setOrderQuantity(settings.defaultOrderQuantity)
@@ -303,7 +270,7 @@ export default function MarketPage() {
 
         const fallbackBar = latestKlines[latestKlines.length - 1]
         if (fallbackBar) {
-          setQuote((prev: any) => ({
+          setQuote(prev => ({
             symbol,
             name: prev?.name || symbol,
             price: Number(fallbackBar.close || prev?.price || 0),
@@ -373,11 +340,6 @@ export default function MarketPage() {
   }
 
   function openSignalModal(side: 'BUY' | 'SELL') {
-    if (!tradingConnected) {
-      setError('交易账户未连接，请先到设置页连接 Futu 交易通道')
-      return
-    }
-
     setSignalSide(side)
     setOrderType('LIMIT')
     setOrderQuantity(settings.defaultOrderQuantity)
@@ -405,7 +367,6 @@ export default function MarketPage() {
       })
       setShowModal(false)
       setSignalText(`${side === 'BUY' ? '买入' : '卖出'}委托已提交`)
-      await refreshTradingPanels(true)
     } catch (e: any) {
       setError(e.message || '下单失败')
     } finally {
@@ -416,7 +377,6 @@ export default function MarketPage() {
   const lastPrice = quote?.price ?? klines[klines.length - 1]?.close
   const adapterLabel = 'Futu'
   const envLabel = settings.tradingEnv === 'REAL' ? '实盘' : '模拟盘'
-  const routeModeLabel = '自动路由'
 
   const formatSourceLabel = (source?: string) => {
     if (!source) return '--'
@@ -434,57 +394,25 @@ export default function MarketPage() {
     <div className="page active">
       <h2>行情</h2>
 
-      <div className="card compact-card">
-        <div className="status-line">
-          <span className="tag ready">路由模式：{routeModeLabel}</span>
-          <span className="tag ready">报价实际来源：{quoteSource}</span>
-          <span className="tag ready">K线实际来源：{klineSource}</span>
-          <span className={`tag ${tradingConnected ? 'ready' : 'draft'}`}>
-            交易：{tradingConnected ? `${adapterLabel} / ${envLabel}` : '未连接'}
-          </span>
-          <span className="tag ready refresh-tag">
-            <span>实时刷新</span>
-            <select
-              className="tag-select"
-              value={String(settings.refreshIntervalSec || 0)}
-              onChange={e => handleRefreshIntervalChange(Number(e.target.value))}
-            >
-              {refreshOptions.map(option => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </span>
-          {lastRefreshAt && <span className="tag draft">最近刷新：{lastRefreshAt}</span>}
-        </div>
-      </div>
+      <MarketStatusBar
+        settings={settings}
+        refreshOptions={refreshOptions}
+        lastRefreshAt={lastRefreshAt}
+        tradingConnected={false}
+        quoteSource={quoteSource}
+        klineSource={klineSource}
+        strategies={strategies}
+        selectedStrategyId={selectedStrategyId}
+        signalInfo={signalInfo}
+        onChangeRefreshInterval={handleRefreshIntervalChange}
+        onChangeStrategy={setSelectedStrategyId}
+      />
 
       {notice && (
         <div className="card" style={{ border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           {notice}
         </div>
       )}
-
-
-      <div className="card compact-card">
-        <div className="settings-row" style={{ borderBottom: 'none', padding: 0 }}>
-          <label>信号策略</label>
-          <select value={selectedStrategyId} onChange={e => setSelectedStrategyId(e.target.value)} style={{ minWidth: 260 }}>
-            <option value="">不启用自动信号</option>
-            {strategies.map(strategy => (
-              <option key={strategy.id} value={strategy.id}>
-                {strategy.name} · {strategy.timeframe || '1d'}
-              </option>
-            ))}
-          </select>
-        </div>
-        {signalInfo && (
-          <div style={{ marginTop: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
-            当前策略：<strong>{signalInfo.strategy_name}</strong> | 最新信号：<strong>{signalInfo.signal}</strong>
-          </div>
-        )}
-      </div>
 
       <div className="search-bar">
         <StockSelect
@@ -518,20 +446,7 @@ export default function MarketPage() {
         </div>
       )}
 
-      {searchResults.length > 0 && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          {searchResults.map(s => (
-            <div
-              key={s.symbol}
-              onClick={() => selectStock(s.symbol)}
-              style={{ padding: '8px 0', cursor: 'pointer', borderBottom: '1px solid #333' }}
-            >
-              <span style={{ color: 'var(--green)' }}>{s.symbol}</span>
-              <span style={{ marginLeft: 12, color: 'var(--text-secondary)' }}>{s.name}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <SearchResultsList results={searchResults} onSelect={selectStock} />
 
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, alignItems: 'center' }}>
@@ -581,95 +496,7 @@ export default function MarketPage() {
           <button className="btn-outline" onClick={() => openSignalModal('SELL')}>手动卖出</button>
           <button className="btn-outline" onClick={() => fetchMarketData(false)}>刷新行情</button>
           <button className="btn-outline" onClick={() => fetchStrategySignal(false)}>评估策略信号</button>
-          <button className="btn-outline" onClick={() => refreshTradingPanels(false)}>刷新订单/持仓</button>
         </div>
-      </div>
-
-      <div className="metrics-grid">
-        <div className="metric-card">
-          <div className="value">{account?.cash?.toFixed?.(0) ?? '--'}</div>
-          <div className="label">现金</div>
-        </div>
-        <div className="metric-card">
-          <div className="value">{account?.buying_power?.toFixed?.(0) ?? '--'}</div>
-          <div className="label">可用购买力</div>
-        </div>
-        <div className="metric-card">
-          <div className="value">{account?.market_value?.toFixed?.(0) ?? '--'}</div>
-          <div className="label">持仓市值</div>
-        </div>
-        <div className="metric-card">
-          <div className="value">{account?.total_assets?.toFixed?.(0) ?? '--'}</div>
-          <div className="label">总资产</div>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginBottom: 12 }}>当前持仓</h3>
-        {positions.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)' }}>暂无持仓</div>
-        ) : (
-          <table className="trade-table">
-            <thead>
-              <tr>
-                <th>代码</th>
-                <th>方向</th>
-                <th>数量</th>
-                <th>成本</th>
-                <th>现价</th>
-                <th>浮盈亏</th>
-              </tr>
-            </thead>
-            <tbody>
-              {positions.map((p, idx) => (
-                <tr key={`${p.symbol}-${idx}`}>
-                  <td>{p.symbol}</td>
-                  <td>{p.direction}</td>
-                  <td>{p.quantity}</td>
-                  <td>{p.avg_cost?.toFixed?.(2) ?? p.avg_cost}</td>
-                  <td>{p.current_price?.toFixed?.(2) ?? p.current_price}</td>
-                  <td className={p.unrealized_pnl >= 0 ? 'positive' : 'negative'}>
-                    {p.unrealized_pnl?.toFixed?.(2) ?? p.unrealized_pnl}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginBottom: 12 }}>最近订单</h3>
-        {orders.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)' }}>暂无订单</div>
-        ) : (
-          <table className="trade-table">
-            <thead>
-              <tr>
-                <th>订单号</th>
-                <th>代码</th>
-                <th>方向</th>
-                <th>价格</th>
-                <th>数量</th>
-                <th>状态</th>
-                <th>时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.slice(0, 8).map(o => (
-                <tr key={o.order_id}>
-                  <td>{o.order_id}</td>
-                  <td>{o.symbol}</td>
-                  <td>{o.side}</td>
-                  <td>{o.price?.toFixed?.(2) ?? o.price}</td>
-                  <td>{o.quantity}</td>
-                  <td>{o.status}</td>
-                  <td>{String(o.create_time).slice(11, 19)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
 
       <SignalConfirmModal
