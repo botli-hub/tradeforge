@@ -11,7 +11,7 @@ from typing import List, Protocol, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.core.config import get_settings
+from app.core.config import get_effective_config
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +69,10 @@ class MarketDataAdapter(Protocol):
 class FutuAdapter:
     """富途行情适配器"""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 11111):
-        self.host = host
-        self.port = port
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
+        futu_cfg = (get_effective_config().get("futu") or {})
+        self.host = host or futu_cfg.get("host") or "127.0.0.1"
+        self.port = port or futu_cfg.get("port") or 11111
         self._connected = False
         self._subscribed = set()
         self._quote_callback = None
@@ -326,30 +327,13 @@ class FutuAdapter:
             return {}
 
 
-def _load_env_file_once():
-    if os.environ.get("_TRADEFORGE_ENV_LOADED") == "1":
-        return
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith('#') or '=' not in line:
-                continue
-            key, value = line.split('=', 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key and key not in os.environ:
-                os.environ[key] = value
-    os.environ["_TRADEFORGE_ENV_LOADED"] = "1"
-
-
 class FinnhubAdapter:
-    """Finnhub 行情适配器（美股/ETF 优先）"""
+    """Finnhub 行情适配器（美股/ETF 优先）。api_key/base_url 均来自设置页保存的本地数据库配置。"""
 
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://finnhub.io/api/v1", **kwargs):
-        settings = get_settings()
-        self.api_key = api_key or settings["finnhub_api_key"]
-        self.base_url = base_url.rstrip('/')
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, **kwargs):
+        effective = get_effective_config()
+        self.api_key = api_key or effective.get("finnhub_api_key") or ""
+        self.base_url = (base_url or effective.get("finnhub_base_url") or "https://finnhub.io/api/v1").rstrip('/')
         self._connected = False
         self._quote_callback = None
         self.last_error: Optional[str] = None
@@ -490,10 +474,11 @@ class FinnhubAdapter:
 
 
 class YahooAdapter:
-    """Yahoo Finance K线适配器（主打美股/ETF K线）"""
+    """Yahoo Finance K线适配器（主打美股/ETF K线）。base_url 来自设置页保存的本地数据库配置。"""
 
-    def __init__(self, base_url: str = "https://query1.finance.yahoo.com/v8/finance/chart", **kwargs):
-        self.base_url = base_url.rstrip('/')
+    def __init__(self, base_url: Optional[str] = None, **kwargs):
+        effective = get_effective_config()
+        self.base_url = (base_url or effective.get("yahoo_base_url") or "https://query1.finance.yahoo.com/v8/finance/chart").rstrip('/')
         self._connected = False
         self._quote_callback = None
         self.last_error: Optional[str] = None

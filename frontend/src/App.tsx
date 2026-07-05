@@ -11,10 +11,12 @@ import SettingsPage from './pages/SettingsPage'
 import StocksPage from './pages/StocksPage'
 import LeapsMonitorPage from './pages/LeapsMonitorPage'
 import Plan2032Page from './pages/Plan2032Page'
+import WheelPage from './pages/WheelPage'
 
-type PageKey = 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
+type PageKey = 'wheel' | 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
 
 const NAV_ITEMS: { key: PageKey; label: string }[] = [
+  { key: 'wheel', label: 'Wheel' },
   { key: 'plan2032', label: '2032Plan' },
   { key: 'market', label: '行情' },
   { key: 'strategy', label: '策略' },
@@ -29,9 +31,10 @@ const NAV_ITEMS: { key: PageKey; label: string }[] = [
 ]
 
 function App() {
-  const [currentPage, setCurrentPage] = useState<PageKey>('plan2032')
+  const [currentPage, setCurrentPage] = useState<PageKey>('wheel')
 
   const pages: Record<PageKey, JSX.Element> = {
+    wheel: <WheelPage />,
     market: <MarketPage />,
     strategy: <StrategyPage />,
     backtest: <BacktestPage />,

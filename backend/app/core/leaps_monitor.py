@@ -6,6 +6,8 @@
   S3: 标的现价 > 接货底线价
 """
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,6 +18,20 @@ import pandas as pd
 from app.data import leaps_repository as repo
 
 logger = logging.getLogger(__name__)
+
+# ── 富途接口节流:到期日/期权链/快照类接口限频约 10 次/30 秒 ─────────────────────
+_QUOTA_LOCK = threading.Lock()
+_LAST_QUOTA_CALL = {"t": 0.0}
+
+
+def _throttle(min_interval: float = 3.2):
+    """保证相邻 quota 类请求间隔 >= min_interval 秒(线程安全)"""
+    with _QUOTA_LOCK:
+        now = time.monotonic()
+        wait = _LAST_QUOTA_CALL["t"] + min_interval - now
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_QUOTA_CALL["t"] = time.monotonic()
 
 
 @dataclass
@@ -57,6 +73,121 @@ def _iv_percentile(iv_history: List[float], current_iv: float) -> float:
         return 0.0
     arr = np.array(iv_history)
     return float(np.sum(arr <= current_iv) / len(arr) * 100)
+
+
+class WheelTimingMonitor:
+    """Wheel 开仓时机扫描 —— 核心原则:期权合约价格受长期均线压制,
+    合约价触及自身日K的 EMA50(一级)或 EMA200(强)即为卖出时机。
+
+    卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
+      - 标的现价 > 接货底线价
+      - PUT 合约(DTE/strike 按 wheel_timing 配置)价格触及 EMA50/EMA200
+    持股卖 Call 时机(轮子处于 HOLDING):
+      - CALL 合约 strike ≥ cost basis
+      - 合约价格触及 EMA50/EMA200
+    IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
+    信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
+    合约冷却复用 LEAPS 的 leaps_cooldowns。
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        cfg = config.get("wheel_timing", {}) or {}
+        self.monitor = LeapsMonitor(config)
+        # 覆盖冷却天数(wheel 单独配置)
+        cd = cfg.get("cooldown_trading_days")
+        if cd:
+            self.monitor.cooldown_days = cd
+        self.dte_min = cfg.get("dte_min", 30)
+        self.dte_max = cfg.get("dte_max", 500)
+        self.iv_threshold = cfg.get("iv_percentile_threshold", 0)
+        # Wheel 扫描的每标的合约数上限(0 = 不限制;独立于 LEAPS 的 5)
+        mc = cfg.get("contract_max_per_symbol")
+        if mc is not None:
+            self.monitor.max_contracts = mc
+
+    def scan_all(self, symbol: Optional[str] = None, is_intraday: bool = True,
+                 report: Optional[List[Dict[str, Any]]] = None) -> List[LeapsSignal]:
+        """is_intraday=True(默认): 用合约最新价与 EMA 比较(现价 ≥ EMA 触发);
+        False 则用当日最高价(盘中摸过均线也算)。"""
+        from app.data import wheel_repository as wrepo
+        from app.data import leaps_repository as lrepo
+        signals: List[LeapsSignal] = []
+        targets = [t for t in wrepo.get_targets() if t.get("enabled")]
+        if symbol:
+            targets = [t for t in targets if t["symbol"] == symbol.upper()]
+        for t in targets:
+            sym = t["symbol"]
+            try:
+                cycles = wrepo.get_active_cycles(sym)
+                can_open_put = (not cycles) or any(c["status"] == "IDLE" for c in cycles)
+                holding = [c for c in cycles if c["status"] == "HOLDING"]
+
+                if can_open_put:
+                    rep: Dict[str, Any] = {"symbol": sym, "side": "PUT"}
+                    signals.extend(self.monitor.scan_symbol(
+                        sym, t["floor_price"], is_intraday=is_intraday,
+                        option_type="PUT",
+                        dte_min=self.dte_min, dte_max=self.dte_max,
+                        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+                        iv_threshold=self.iv_threshold,
+                        respect_30d_cap=False, with_suggestions=False,
+                        report=rep,
+                    ))
+                    if report is not None:
+                        report.append(rep)
+                elif report is not None:
+                    report.append({"symbol": sym, "side": "PUT", "note": "无可开新轮的空闲轮子,跳过卖Put扫描"})
+
+                for cyc in holding:
+                    cost_basis = cyc.get("cost_basis") or 0
+                    rep = {"symbol": sym, "side": "CALL"}
+                    signals.extend(self.monitor.scan_symbol(
+                        sym, 0, is_intraday=is_intraday,
+                        option_type="CALL",
+                        dte_min=self.dte_min, dte_max=self.dte_max,
+                        strike_min=cost_basis if cost_basis > 0 else None,
+                        level_map={"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"},
+                        iv_threshold=self.iv_threshold,
+                        respect_30d_cap=False, with_suggestions=False,
+                        report=rep,
+                    ))
+                    if report is not None:
+                        report.append(rep)
+            except Exception as e:
+                logger.error("wheel timing scan(%s) failed: %s", sym, e)
+                if report is not None:
+                    report.append({"symbol": sym, "side": "-", "note": f"扫描异常: {e}"})
+
+        # 写入时机历史(按合约代码合并去重)
+        for sig in signals:
+            try:
+                lrepo.upsert_timing_history(sig)
+            except Exception as e:
+                logger.warning("时机历史写入失败(%s): %s", sig.contract_code, e)
+        return signals
+
+
+def format_wheel_signal(sig: "LeapsSignal") -> str:
+    """Telegram 推送文案(合约触线)"""
+    kind = "卖Put时机" if sig.signal_level == "WHEEL_PUT" else "卖Call时机(持股)"
+    strong = " 🔥强" if sig.ema_type == "EMA200" else ""
+    return (
+        f"🛞 [Wheel {kind}]{strong} {sig.symbol}\n"
+        f"合约 {sig.contract_code}  strike {sig.strike}  到期 {sig.expiry}\n"
+        f"合约价 {round(sig.trigger_price, 2)} 触及 {sig.ema_type}({round(sig.ema_value, 2)})\n"
+        f"IV分位 {sig.iv_rank}  标的现价 {sig.underlying_price}"
+    )
+
+
+
+def _to_futu_symbol(symbol: str) -> str:
+    """股票池符号 → Futu 符号。US: AAPL → US.AAPL;HK: 00700.HK → HK.00700"""
+    s = symbol.strip().upper()
+    if s.endswith(".HK"):
+        return f"HK.{s[:-3]}"
+    if s.startswith(("US.", "HK.")):
+        return s
+    return f"US.{s}"
 
 
 def _parse_futu_contract(code: str) -> Tuple[str, str, float, str]:
@@ -127,30 +258,60 @@ class LeapsMonitor:
         return signals
 
     def scan_symbol(
-        self, symbol: str, floor_price: float, is_intraday: bool = False
+        self, symbol: str, floor_price: float, is_intraday: bool = False,
+        option_type: str = "PUT",
+        dte_min: Optional[int] = None, dte_max: Optional[int] = None,
+        strike_min: Optional[float] = None, strike_max: Optional[float] = None,
+        level_map: Optional[Dict[str, str]] = None,
+        iv_threshold: Optional[float] = None,
+        respect_30d_cap: bool = True,
+        with_suggestions: bool = True,
+        report: Optional[Dict[str, Any]] = None,
     ) -> List[LeapsSignal]:
+        """通用合约 EMA 触线扫描。默认参数 = 原 LEAPS Put 行为;
+        Wheel 时机复用:option_type/dte/strike 可定制,level_map 定制信号级别名,
+        iv_threshold=0 表示 IV 仅记录不作硬条件。
+        report(可选 dict)会被填入扫描明细,便于前端展示诊断。"""
         import futu
 
         signals: List[LeapsSignal] = []
+        level_map = level_map or {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
+        iv_thr = self.iv_threshold if iv_threshold is None else iv_threshold
+        rep = report if report is not None else {}
+        rep.update(spot=None, contracts=0, in_cooldown=0, no_history=0,
+                   bars_insufficient=0, iv_filtered=0, not_touching=0, signals=0, note=None)
 
-        # S3: 标的现价 > 接货底线
+        # S3: 标的现价 > 接货底线(floor_price <= 0 表示跳过该条件,如卖 Call)
         underlying_price = self._fetch_underlying_price(symbol)
         if underlying_price is None:
             logger.warning("%s: 无法获取标的价格，跳过", symbol)
+            rep["note"] = "无法获取标的价格"
             return signals
-        if underlying_price <= floor_price:
+        rep["spot"] = round(float(underlying_price), 2)
+        if floor_price > 0 and underlying_price <= floor_price:
             logger.info("%s: 现价 %.2f ≤ 底线 %.2f，S3 不满足，跳过", symbol, underlying_price, floor_price)
+            rep["note"] = f"现价 {underlying_price:.2f} ≤ 底线 {floor_price}"
             return signals
 
         # 30 天推送上限
-        if repo.count_symbol_signals_30d(symbol) >= self.max_30d:
+        if respect_30d_cap and repo.count_symbol_signals_30d(symbol) >= self.max_30d:
             logger.info("%s: 30 天推送已达上限 %d，跳过", symbol, self.max_30d)
+            rep["note"] = "30天推送已达上限"
             return signals
 
         # 获取符合条件的合约列表
-        contracts = self._fetch_eligible_contracts(symbol, underlying_price)
+        fetch_errors: List[str] = []
+        contracts = self._fetch_eligible_contracts(
+            symbol, underlying_price, option_type=option_type,
+            dte_min=dte_min, dte_max=dte_max,
+            strike_min=strike_min, strike_max=strike_max,
+            errors=fetch_errors,
+        )
+        rep["contracts"] = len(contracts)
         if not contracts:
-            logger.info("%s: 无符合条件的合约", symbol)
+            reason = ";".join(fetch_errors) if fetch_errors else "无符合条件的合约(DTE/strike 范围内)"
+            logger.info("%s: %s", symbol, reason)
+            rep["note"] = reason
             return signals
 
         today = date.today().isoformat()
@@ -164,6 +325,7 @@ class LeapsMonitor:
             # 合约级冷却
             if repo.is_contract_in_cooldown(code):
                 logger.debug("%s: 冷却中，跳过", code)
+                rep["in_cooldown"] += 1
                 continue
 
             # 更新价格缓存 & IV 历史
@@ -172,6 +334,7 @@ class LeapsMonitor:
             # 读取历史价格序列
             price_history = repo.get_option_price_history(code, limit=250)
             if not price_history:
+                rep["no_history"] += 1
                 continue
 
             df = pd.DataFrame(price_history)
@@ -198,8 +361,9 @@ class LeapsMonitor:
             else:
                 iv_rank = 0.0
 
-            if iv_rank < self.iv_threshold:
-                logger.debug("%s: IV rank %.1f < 阈值 %d，跳过", code, iv_rank, self.iv_threshold)
+            if iv_rank < iv_thr:
+                logger.debug("%s: IV rank %.1f < 阈值 %s，跳过", code, iv_rank, iv_thr)
+                rep["iv_filtered"] += 1
                 continue
 
             # S1: 价格触及 EMA200（二级强信号）
@@ -210,7 +374,7 @@ class LeapsMonitor:
             if len(closes) >= self.ema200_min:
                 ema200 = _compute_ema(closes, 200).iloc[-1]
                 if trigger_price >= ema200:
-                    signal_level = "SECONDARY"
+                    signal_level = level_map["EMA200"]
                     ema_type = "EMA200"
                     ema_value = float(ema200)
 
@@ -218,15 +382,19 @@ class LeapsMonitor:
             if signal_level is None and len(closes) >= self.ema50_min:
                 ema50 = _compute_ema(closes, 50).iloc[-1]
                 if trigger_price >= ema50:
-                    signal_level = "PRIMARY"
+                    signal_level = level_map["EMA50"]
                     ema_type = "EMA50"
                     ema_value = float(ema50)
 
             if signal_level is None:
+                if len(closes) < self.ema50_min:
+                    rep["bars_insufficient"] += 1
+                else:
+                    rep["not_touching"] += 1
                 continue
 
             # 获取 OTM put 建议
-            suggestions = self._fetch_suggestions(symbol, underlying_price, expiry)
+            suggestions = self._fetch_suggestions(symbol, underlying_price, expiry) if with_suggestions else []
 
             sig = LeapsSignal(
                 symbol=symbol,
@@ -275,34 +443,51 @@ class LeapsMonitor:
                 is_intraday=is_intraday,
             )
 
+        rep["signals"] = len(signals)
         return signals
 
     # ── 内部方法 ──────────────────────────────────────────────────────────────
 
     def _fetch_underlying_price(self, symbol: str) -> Optional[float]:
+        """用市场快照取现价(get_stock_quote 需要先订阅,快照不需要)"""
         import futu
-        futu_symbol = f"US.{symbol}"
+        futu_symbol = _to_futu_symbol(symbol)
         try:
+            _throttle()
             ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
-            ret, data = ctx.get_stock_quote([futu_symbol])
+            ret, data = ctx.get_market_snapshot([futu_symbol])
             ctx.close()
-            if ret == futu.RET_OK and not data.empty:
-                return float(data["last_price"].iloc[0])
+            if ret == futu.RET_OK and data is not None and not data.empty:
+                price = float(data["last_price"].iloc[0] or 0)
+                if price > 0:
+                    return price
+                # 休市等情况 last_price 可能为 0,退回昨收
+                prev = float(data["prev_close_price"].iloc[0] or 0) if "prev_close_price" in data.columns else 0
+                return prev if prev > 0 else None
+            logger.warning("fetch_underlying_price(%s): snapshot ret=%s %s", symbol, ret, data)
         except Exception as e:
             logger.error("fetch_underlying_price(%s): %s", symbol, e)
         return None
 
     def _fetch_eligible_contracts(
-        self, symbol: str, underlying_price: float
+        self, symbol: str, underlying_price: float,
+        option_type: str = "PUT",
+        dte_min: Optional[int] = None, dte_max: Optional[int] = None,
+        strike_min: Optional[float] = None, strike_max: Optional[float] = None,
+        errors: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         import futu
-        futu_symbol = f"US.{symbol}"
+        futu_symbol = _to_futu_symbol(symbol)
         contracts: List[Dict[str, Any]] = []
+        errs = errors if errors is not None else []
+        eff_dte_min = self.dte_min if dte_min is None else dte_min
         try:
             ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
             # 获取所有到期日
+            _throttle()
             ret, dates = ctx.get_option_expiration_date(futu_symbol)
             if ret != futu.RET_OK:
+                errs.append(f"获取到期日失败(可能限频): {dates}")
                 ctx.close()
                 return contracts
 
@@ -313,25 +498,36 @@ class LeapsMonitor:
                 try:
                     exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
                     dte = (exp_date - date.today()).days
-                    if dte >= self.dte_min:
+                    if dte >= eff_dte_min and (dte_max is None or dte <= dte_max):
                         eligible_expiries.append((exp_str, dte))
                 except Exception:
                     continue
 
             if not eligible_expiries:
+                errs.append("无 DTE 范围内的到期日")
                 ctx.close()
                 return contracts
 
             strike_lo = underlying_price * (1 - self.strike_range)
             strike_hi = underlying_price * (1 + self.strike_range)
+            if strike_min is not None:
+                strike_lo = max(strike_lo, strike_min)
+            if strike_max is not None:
+                strike_hi = min(strike_hi, strike_max)
 
+            futu_opt_type = futu.OptionType.CALL if option_type == "CALL" else futu.OptionType.PUT
             all_codes: List[str] = []
+            chain_fail = 0
             for exp_str, _ in eligible_expiries[:3]:  # 取最近 3 个符合条件的到期日
+                _throttle()
                 ret2, chain = ctx.get_option_chain(
                     futu_symbol, start=exp_str, end=exp_str,
-                    option_type=futu.OptionType.PUT
+                    option_type=futu_opt_type
                 )
                 if ret2 != futu.RET_OK or chain is None or chain.empty:
+                    if ret2 != futu.RET_OK:
+                        chain_fail += 1
+                        logger.warning("get_option_chain(%s %s) 失败: %s", futu_symbol, exp_str, chain)
                     continue
                 for _, row in chain.iterrows():
                     code = str(row.get("code", ""))
@@ -341,21 +537,32 @@ class LeapsMonitor:
                     all_codes.append(code)
 
             if not all_codes:
+                if chain_fail:
+                    errs.append(f"期权链获取失败 {chain_fail} 次(可能限频)")
+                else:
+                    errs.append("strike 范围内无合约")
                 ctx.close()
                 return contracts
 
             # 快照获取 OI、IV、delta 排序取前 N
             chunk_size = 80
             snapshots: Dict[str, Any] = {}
+            snap_fail = 0
             for i in range(0, len(all_codes), chunk_size):
                 chunk = all_codes[i: i + chunk_size]
+                _throttle()
                 ret3, snap = ctx.get_market_snapshot(chunk)
                 if ret3 == futu.RET_OK and snap is not None and not snap.empty:
                     for _, srow in snap.iterrows():
                         code = str(srow.get("code", ""))
                         snapshots[code] = srow
+                else:
+                    snap_fail += 1
+                    logger.warning("get_market_snapshot 批次失败: %s", snap)
 
             ctx.close()
+            if not snapshots and snap_fail:
+                errs.append(f"合约快照获取失败 {snap_fail} 批(可能限频)")
 
             # 组装合约信息
             raw: List[Dict] = []
@@ -382,9 +589,12 @@ class LeapsMonitor:
                     "high": high_price,
                 })
 
-            # 按 OI 降序，取前 max_contracts
+            # 按 OI 降序;max_contracts <= 0 表示不限制
             raw.sort(key=lambda x: x["oi"], reverse=True)
-            contracts = raw[: self.max_contracts]
+            if self.max_contracts and self.max_contracts > 0:
+                contracts = raw[: self.max_contracts]
+            else:
+                contracts = raw
 
         except Exception as e:
             logger.error("fetch_eligible_contracts(%s): %s", symbol, e)
@@ -421,12 +631,21 @@ class LeapsMonitor:
             repo.save_iv_snapshot(code, today, iv)
 
     def _fetch_kline_history(self, code: str, num: int = 250) -> List[Dict]:
+        """拉合约日K历史。注意:get_cur_kline 需要先订阅 K_DAY;
+        订阅随连接关闭自动释放,不占长期配额。"""
         import futu
         bars: List[Dict] = []
         try:
+            _throttle(1.0)  # 订阅接口限频较松,1 秒间隔即可
             ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
-            ret, data = ctx.get_cur_kline(code, futu.KLType.K_DAY, num=num)
-            ctx.close()
+            try:
+                ret_sub, sub_err = ctx.subscribe([code], [futu.SubType.K_DAY], subscribe_push=False)
+                if ret_sub != futu.RET_OK:
+                    logger.warning("subscribe K_DAY(%s) 失败: %s", code, sub_err)
+                    return bars
+                ret, data = ctx.get_cur_kline(code, num, futu.KLType.K_DAY)
+            finally:
+                ctx.close()
             if ret == futu.RET_OK and data is not None and not data.empty:
                 for _, row in data.iterrows():
                     ts = str(row.get("time_key", ""))[:10]
@@ -439,6 +658,8 @@ class LeapsMonitor:
                         "volume": float(row.get("volume", 0) or 0),
                         "iv": None,
                     })
+            elif ret != futu.RET_OK:
+                logger.warning("get_cur_kline(%s) 失败: %s", code, data)
         except Exception as e:
             logger.error("fetch_kline_history(%s): %s", code, e)
         return bars
@@ -449,7 +670,7 @@ class LeapsMonitor:
         """获取 delta 在目标区间的虚值 put 建议档位"""
         import futu
         suggestions: List[LeapsSuggestion] = []
-        futu_symbol = f"US.{symbol}"
+        futu_symbol = _to_futu_symbol(symbol)
         delta_lo, delta_hi = self.delta_range[0], self.delta_range[1]
 
         try:

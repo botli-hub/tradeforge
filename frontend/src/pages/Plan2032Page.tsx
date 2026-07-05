@@ -43,14 +43,6 @@ const CATEGORY_META: Record<CategoryKey, CategoryMeta> = {
   satellite: { name: '卫星期权', color: '#8b5cf6', light: 'rgba(139, 92, 246, 0.10)', targetRange: [0.03, 0.05] },
 }
 
-const DEFAULT_HOLDINGS: HoldingDraft[] = [
-  { id: 'NVDA', symbol: 'NVDA', name: '英伟达', shares: 88, target2032: 525, dividend_yield: 0.001, category: 'growth', pe: 22, moat: 'CUDA软件生态', risk: 2, note: 'AI算力基础设施', currency: 'USD' },
-  { id: 'AAPL', symbol: 'AAPL', name: '苹果', shares: 100, target2032: 522, dividend_yield: 0.005, category: 'growth', pe: 29, moat: '生态系统+品牌', risk: 2, note: '22亿台活跃设备数字生态', currency: 'USD' },
-  { id: 'TSLA', symbol: 'TSLA', name: '特斯拉', shares: 100, target2032: 940, dividend_yield: 0, category: 'aggressive', pe: 290, moat: '数据+垂直整合', risk: 4, note: 'EV/AI/机器人三重期权', currency: 'USD' },
-  { id: 'CNOOC', symbol: '00883.HK', name: '中国海油', shares: 10000, target2032: 33, dividend_yield: 0.06, category: 'defensive', pe: 6, moat: '低成本+国家战略', risk: 2, note: '桶油成本低，高股息', currency: 'HKD' },
-  { id: '600900.SH', symbol: '600900.SH', name: '长江电力', shares: 6000, target2032: 38.7, dividend_yield: 0.04, category: 'defensive', pe: 17, moat: '国家垄断水电', risk: 1, note: '全球最大水电上市公司', currency: 'CNY' },
-]
-
 function inferCurrency(symbol: string): Currency {
   const upper = symbol.toUpperCase()
   if (upper.endsWith('.HK')) return 'HKD'
@@ -109,7 +101,7 @@ function toDraft(holding: Plan2032Holding, fallbackId?: string): HoldingDraft {
 function Plan2032Page() {
   const [tab, setTab] = useState<PlanTab>('overview')
   const [advisorTab, setAdvisorTab] = useState<AdvisorTab>('valuation')
-  const [holdings, setHoldings] = useState<HoldingDraft[]>(DEFAULT_HOLDINGS)
+  const [holdings, setHoldings] = useState<HoldingDraft[]>([])
   const [quotes, setQuotes] = useState<Record<string, QuoteState>>({})
   const quoteCacheRef = useRef<Record<string, { at: number; data: QuoteState }>>({})
   const quoteBatchRunningRef = useRef(false)
@@ -132,12 +124,10 @@ function Plan2032Page() {
 
     getPlan2032Holdings()
       .then((rows) => {
-        if (rows.length > 0) {
-          setHoldings(rows.map((row, index) => toDraft(row, `db-${index}`)))
-        }
+        setHoldings(rows.map((row, index) => toDraft(row, `db-${index}`)))
       })
       .catch(() => {
-        setHoldings(DEFAULT_HOLDINGS)
+        setHoldings([])
       })
   }, [])
 

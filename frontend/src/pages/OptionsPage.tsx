@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { getAppSettings, getOptionChain, getOptionExpirations, getOptionPayoff, subscribeSettings, type AppSettings } from '../services/api'
+import { getAppSettings, getOptionChain, getOptionExpirations, getOptionPayoff, getVolatilityProfile, subscribeSettings, type AppSettings, type VolatilityProfile } from '../services/api'
 import StockSelect from '../components/StockSelect'
 
 type StrategyType = 'long_call' | 'long_put' | 'bull_call_spread' | 'bear_put_spread'
@@ -42,6 +42,7 @@ export default function OptionsPage() {
   const [lowerStrike, setLowerStrike] = useState<number>(0)
   const [upperStrike, setUpperStrike] = useState<number>(0)
   const [payoff, setPayoff] = useState<any | null>(null)
+  const [volProfile, setVolProfile] = useState<VolatilityProfile | null>(null)
 
   useEffect(() => {
     const unsubscribe = subscribeSettings(next => setSettings(next))
@@ -98,6 +99,11 @@ export default function OptionsPage() {
     try {
       const res = await getOptionChain(nextSymbol, expiry, settings)
       setChain(res)
+      // 波动率档案(异步加载,不阻塞链表展示)
+      setVolProfile(null)
+      getVolatilityProfile(nextSymbol, settings.marketHost, settings.marketPort)
+        .then(setVolProfile)
+        .catch(() => setVolProfile(null))
       const rows = new Map<number, any>()
       ;(res.contracts || []).forEach((contract: any) => rows.set(contract.strike, true))
       const ordered = Array.from(rows.keys()).sort((a, b) => a - b)
@@ -214,6 +220,29 @@ export default function OptionsPage() {
             <span className="tag positive">现价：{formatMoney(chain.spot_price)}</span>
             <span className="tag draft">到期剩余：{chain.days_to_expiry} 天</span>
             <span className="tag draft">定价来源：{chain.pricing_source}</span>
+          </div>
+        )}
+        {chain && volProfile && (
+          <div className="status-line" style={{ marginTop: 8, fontSize: 12, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span>
+              IV Rank：
+              <b style={{ color: (volProfile.iv_rank ?? 0) >= 70 ? '#f87171' : (volProfile.iv_rank ?? 0) >= 50 ? '#fb923c' : undefined }}>
+                {volProfile.iv_rank != null ? volProfile.iv_rank : `积累中(${volProfile.iv_history_days}/60天)`}
+              </b>
+            </span>
+            <span>期望波动率(ATM IV)：<b>{volProfile.atm_iv != null ? `${volProfile.atm_iv}%` : '--'}</b></span>
+            <span>实际波动率：HV20 <b>{volProfile.hv20 != null ? `${volProfile.hv20}%` : '--'}</b> · HV60 <b>{volProfile.hv60 != null ? `${volProfile.hv60}%` : '--'}</b></span>
+            {volProfile.atm_iv != null && volProfile.hv20 != null && (
+              <span>
+                IV−HV20：
+                <b style={{ color: volProfile.atm_iv - volProfile.hv20 > 0 ? '#4ade80' : '#f87171' }}>
+                  {(volProfile.atm_iv - volProfile.hv20) > 0 ? '+' : ''}{(volProfile.atm_iv - volProfile.hv20).toFixed(1)}
+                </b>
+                <span style={{ color: 'var(--text-secondary)', marginLeft: 4 }}>
+                  {volProfile.atm_iv - volProfile.hv20 > 0 ? '(权利金偏贵,利于卖方)' : '(权利金偏便宜,利于买方)'}
+                </span>
+              </span>
+            )}
           </div>
         )}
         {chain?.detail && <div style={{ marginTop: 10, color: '#ffb066', fontSize: 12 }}>{chain.detail}</div>}

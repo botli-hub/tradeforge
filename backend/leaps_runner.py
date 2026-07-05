@@ -25,8 +25,6 @@ from pathlib import Path
 # 确保 backend 目录在 Python 路径中
 sys.path.insert(0, str(Path(__file__).parent))
 
-import yaml
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -34,13 +32,10 @@ logging.basicConfig(
 logger = logging.getLogger("leaps_runner")
 
 
-def load_config(path: str = "leaps_config.yaml") -> dict:
-    cfg_path = Path(__file__).parent / path
-    if not cfg_path.exists():
-        logger.warning("配置文件不存在: %s，使用空配置", cfg_path)
-        return {}
-    with open(cfg_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+def load_config() -> dict:
+    """配置统一从本地数据库读取(设置页保存),不再依赖 yaml 文件。"""
+    from app.api.leaps import _load_config
+    return _load_config()
 
 
 def main():
@@ -55,9 +50,6 @@ def main():
     init_db()
 
     cfg = load_config()
-
-    # 若配置中有白名单但 DB 为空，同步配置文件到 DB
-    _sync_watchlist_from_config(cfg)
 
     from app.core.leaps_monitor import LeapsMonitor
     from app.services.notifier import TelegramNotifier
@@ -93,24 +85,6 @@ def main():
                 notifier.send_signal(sig)
 
     logger.info("扫描结束")
-
-
-def _sync_watchlist_from_config(cfg: dict):
-    """将 YAML watchlist 中的条目同步到 DB（若 DB 中不存在）"""
-    from app.data import leaps_repository as repo
-    for item in cfg.get("watchlist", []):
-        symbol = item.get("symbol")
-        if not symbol:
-            continue
-        existing = repo.get_watchlist_item(symbol)
-        if existing is None:
-            repo.upsert_watchlist_item(
-                symbol=symbol,
-                name=item.get("name", symbol),
-                floor_price=float(item.get("floor_price", 0)),
-                enabled=bool(item.get("enabled", True)),
-            )
-            logger.info("同步白名单: %s (底线 %.2f)", symbol, item.get("floor_price", 0))
 
 
 if __name__ == "__main__":

@@ -1,64 +1,12 @@
-# LEAPS Put 权利金卖出信号监控配置
-# V1 — 仅 EOD 全量扫描 + 盘中 30 分钟增量扫描
-
-telegram:
-  # 从环境变量读取；不填写将跳过通知，仅记录到数据库
-  bot_token: ""       # 也可设置环境变量 TELEGRAM_BOT_TOKEN
-  chat_id: ""         # 也可设置环境变量 TELEGRAM_CHAT_ID
-
-futu:
-  host: "127.0.0.1"
-  port: 11111
-
-scan:
-  # 仅做 EOD 扫描时更稳定（二级信号 EMA200 推荐只用收盘确认）
-  # intraday: false = 仅收盘后扫描；true = 额外每 30 分钟增量扫描
-  intraday: false
-  intraday_interval_minutes: 30
-
-signal:
-  # S2: IV 百分位阈值 (0-100)
-  iv_percentile_threshold: 70
-  # EMA 最低所需数据量
-  ema50_min_bars: 60
-  ema200_min_bars: 210
-  # 冷却：同一合约触发后的交易日数
-  contract_cooldown_trading_days: 5
-  # 同一标的 30 天内最多推送次数
-  per_symbol_max_30d: 3
-  # S1 判断：盘中用最新价，EOD 用当日最高价
-  intraday_use_last_price: true
-  # 合约筛选：最短剩余天数
-  contract_dte_min: 180
-  # 每标的最多监控合约数（未平仓量前 N 档）
-  contract_max_per_symbol: 5
-  # 行权价范围：现价 ± X%
-  strike_range_pct: 0.20
-
-# 建议交易参数（OTM put 建议档位）
-suggestions:
-  # Delta 目标区间 [低, 高]
-  delta_range: [0.20, 0.30]
-  # 年化收益率口径: premium_over_strike（权利金/行权价）或 premium_over_margin（权利金/保证金）
-  yield_method: "premium_over_strike"
-
-# 白名单：仅限愿意按行权价接货的标的
-# floor_price: 接货底线价（跌破则 S3 过滤，不推送信号）
-watchlist:
-  - symbol: "AAPL"
-    name: "Apple"
-    floor_price: 200.0
-    enabled: true
-  - symbol: "NVDA"
-    name: "NVIDIA"
-    floor_price: 80.0
-    enabled: true
-  - symbol: "GOOG"
-    name: "Alphabet"
-    floor_price: 130.0
-    enabled: true
-  # TSLA 在减仓考虑期内，暂排除
-  # - symbol: "TSLA"
-  #   name: "Tesla"
-  #   floor_price: 150.0
-  #   enabled: false
+# ⚠️ 本文件已停用,仅作历史存档 —— 后端不再读取此文件。
+#
+# 所有配置(Telegram、Finnhub/Yahoo/Futu 数据源、扫描/信号参数、Wheel 参数等)
+# 已迁移到「设置页」,保存在本地数据库(backend/app/tradeforge.db 的 app_kv 表)。
+# 请打开前端「设置」页面填写并保存,后端会立即读取数据库中的最新值。
+#
+# 安全提醒:本文件此前曾明文写入过一个 Telegram Bot Token 并被提交到代码仓库,
+# 已在此次清理中删除。该 token 已经暴露在 git 历史中,请尽快到 @BotFather
+# 执行 /revoke 或 /token 重置,并在设置页填入新的 token。
+#
+# 股票池/LEAPS 监控白名单也已改为完全由数据库管理,请在「股票池」「LEAPS」
+# 页面中手动添加标的,不再从本文件读取。

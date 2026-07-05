@@ -51,6 +51,16 @@ def upsert_watchlist_item(symbol: str, name: str, floor_price: float, enabled: b
         conn.close()
 
 
+def delete_watchlist_item(symbol: str) -> bool:
+    conn = get_db()
+    try:
+        cur = conn.execute("DELETE FROM leaps_watchlist WHERE symbol = ?", (symbol,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def update_watchlist_item(symbol: str, **kwargs):
     fields = {k: v for k, v in kwargs.items() if k in ("floor_price", "enabled", "name")}
     if not fields:
@@ -208,19 +218,21 @@ def log_signal(
     return signal_id
 
 
-def get_recent_signals(symbol: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+def get_recent_signals(symbol: Optional[str] = None, limit: int = 50,
+                       levels: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     conn = get_db()
     try:
+        sql = "SELECT * FROM leaps_signals WHERE 1=1"
+        params: list = []
         if symbol:
-            rows = conn.execute(
-                "SELECT * FROM leaps_signals WHERE symbol = ? ORDER BY created_at DESC LIMIT ?",
-                (symbol, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM leaps_signals ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+            sql += " AND symbol = ?"
+            params.append(symbol)
+        if levels:
+            sql += f" AND signal_level IN ({','.join('?' * len(levels))})"
+            params.extend(levels)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(sql, params).fetchall()
         result = []
         for r in rows:
             d = dict(r)
@@ -240,6 +252,61 @@ def count_symbol_signals_30d(symbol: str) -> int:
             (symbol, cutoff),
         ).fetchone()
         return row["cnt"] if row else 0
+    finally:
+        conn.close()
+
+
+# ── Wheel 开仓时机历史(按合约去重合并)────────────────────────────────────────
+
+def upsert_timing_history(sig) -> None:
+    """sig: LeapsSignal(dataclass)。同合约已存在则更新最新数据并累计次数"""
+    side = "CALL" if "CALL" in (sig.signal_level or "") else "PUT"
+    now = _now_iso()
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO wheel_timing_history
+                (contract_code, symbol, side, strike, expiry, ema_type, ema_value,
+                 trigger_price, iv_rank, underlying_price, times_triggered, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(contract_code) DO UPDATE SET
+                strike = excluded.strike, expiry = excluded.expiry,
+                ema_type = excluded.ema_type, ema_value = excluded.ema_value,
+                trigger_price = excluded.trigger_price, iv_rank = excluded.iv_rank,
+                underlying_price = excluded.underlying_price,
+                times_triggered = wheel_timing_history.times_triggered + 1,
+                last_seen = excluded.last_seen
+            """,
+            (sig.contract_code, sig.symbol, side, sig.strike, sig.expiry,
+             sig.ema_type, sig.ema_value, sig.trigger_price, sig.iv_rank,
+             sig.underlying_price, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_timing_history(page: int = 1, page_size: int = 20,
+                       symbol: Optional[str] = None) -> Dict[str, Any]:
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    conn = get_db()
+    try:
+        where, params = "", []
+        if symbol:
+            where = " WHERE symbol = ?"
+            params.append(symbol)
+        total = conn.execute(
+            f"SELECT COUNT(1) AS c FROM wheel_timing_history{where}", params
+        ).fetchone()["c"]
+        rows = conn.execute(
+            f"""SELECT * FROM wheel_timing_history{where}
+                ORDER BY last_seen DESC LIMIT ? OFFSET ?""",
+            params + [page_size, (page - 1) * page_size],
+        ).fetchall()
+        return {"total": total, "page": page, "page_size": page_size,
+                "items": [dict(r) for r in rows]}
     finally:
         conn.close()
 

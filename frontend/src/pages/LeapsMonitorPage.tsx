@@ -2,22 +2,30 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   getLeapsWatchlist, getLeapsSignals, getLeapsCooldowns, getLeapsStatus,
   triggerLeapsScan, updateLeapsWatchlistItem, resendLeapsSignal,
-  LeapsWatchlistItem, LeapsSignal, LeapsCooldown, LeapsStatus,
+  getLeapsCandidates, addLeapsWatchlistItem, deleteLeapsWatchlistItem,
+  LeapsWatchlistItem, LeapsSignal, LeapsCooldown, LeapsStatus, LeapsCandidate,
 } from '../services/api'
 
+const BADGE_STYLES: Record<string, { label: string; bg: string; color: string }> = {
+  PRIMARY: { label: '一级 EMA50', bg: '#0ea5e922', color: '#38bdf8' },
+  SECONDARY: { label: '二级 EMA200', bg: '#7c3aed22', color: '#a78bfa' },
+  WHEEL_PUT: { label: 'Wheel 卖Put时机', bg: '#38bdf822', color: '#38bdf8' },
+  WHEEL_CALL: { label: 'Wheel 卖Call时机', bg: '#fbbf2422', color: '#fbbf24' },
+}
+
 function Badge({ level }: { level: string }) {
-  const isSecondary = level === 'SECONDARY'
+  const s = BADGE_STYLES[level] || BADGE_STYLES.PRIMARY
   return (
     <span style={{
       padding: '2px 8px',
       borderRadius: 4,
       fontSize: 11,
       fontWeight: 700,
-      background: isSecondary ? '#7c3aed22' : '#0ea5e922',
-      color: isSecondary ? '#a78bfa' : '#38bdf8',
-      border: `1px solid ${isSecondary ? '#7c3aed55' : '#0ea5e955'}`,
+      background: s.bg,
+      color: s.color,
+      border: `1px solid ${s.color}55`,
     }}>
-      {isSecondary ? '二级 EMA200' : '一级 EMA50'}
+      {s.label}
     </span>
   )
 }
@@ -41,21 +49,27 @@ export default function LeapsMonitorPage() {
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editingFloor, setEditingFloor] = useState<Record<string, string>>({})
+  const [candidates, setCandidates] = useState<LeapsCandidate[]>([])
+  const [addSymbol, setAddSymbol] = useState('')
+  const [addFloor, setAddFloor] = useState('')
+  const [adding, setAdding] = useState(false)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [s, wl, sigs, cd] = await Promise.all([
+      const [s, wl, sigs, cd, cands] = await Promise.all([
         getLeapsStatus().catch(() => null),
         getLeapsWatchlist().catch(() => []),
         getLeapsSignals(undefined, 30).catch(() => []),
         getLeapsCooldowns().catch(() => []),
+        getLeapsCandidates().catch(() => []),
       ])
       setStatus(s)
       setWatchlist(wl)
       setSignals(sigs)
       setCooldowns(cd)
+      setCandidates(cands)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -88,6 +102,36 @@ export default function LeapsMonitorPage() {
     await updateLeapsWatchlistItem(symbol, { floor_price: val })
     setEditingFloor(prev => { const n = { ...prev }; delete n[symbol]; return n })
     await loadAll()
+  }
+
+  async function handleAdd() {
+    const symbol = addSymbol.trim().toUpperCase()
+    const floor = parseFloat(addFloor)
+    if (!symbol) { setError('请选择或输入标的代码'); return }
+    if (isNaN(floor) || floor <= 0) { setError('请填写有效的接货底线价'); return }
+    setAdding(true)
+    setError(null)
+    try {
+      const cand = candidates.find(c => c.symbol === symbol)
+      await addLeapsWatchlistItem({ symbol, name: cand?.name, floor_price: floor })
+      setAddSymbol('')
+      setAddFloor('')
+      await loadAll()
+    } catch (e: any) {
+      setError('添加失败：' + e.message)
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function handleDelete(symbol: string) {
+    if (!confirm(`确定把 ${symbol} 从白名单移除?`)) return
+    try {
+      await deleteLeapsWatchlistItem(symbol)
+      await loadAll()
+    } catch (e: any) {
+      setError('删除失败：' + e.message)
+    }
   }
 
   async function handleResend(id: string) {
@@ -167,6 +211,35 @@ export default function LeapsMonitorPage() {
       {/* 白名单 */}
       {tab === 'watchlist' && (
         <div>
+          {/* 添加标的(候选来自股票池的美股/港股) */}
+          <div className="card" style={{ padding: '14px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>添加标的</span>
+            <input
+              list="leaps-candidates"
+              value={addSymbol}
+              onChange={e => setAddSymbol(e.target.value)}
+              placeholder="选择或输入代码,如 AAPL / 00700.HK"
+              style={{ width: 220, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
+            />
+            <datalist id="leaps-candidates">
+              {candidates.map(c => (
+                <option key={c.symbol} value={c.symbol}>{`${c.name}(${c.market === 'US' ? '美股' : '港股'})`}</option>
+              ))}
+            </datalist>
+            <input
+              type="number"
+              value={addFloor}
+              onChange={e => setAddFloor(e.target.value)}
+              placeholder="接货底线价"
+              style={{ width: 110, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
+            />
+            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }} disabled={adding} onClick={handleAdd}>
+              {adding ? '添加中...' : '添加'}
+            </button>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+              候选列表与股票池的美股/港股打通,共 {candidates.length} 个可选;也可手动输入任意代码
+            </span>
+          </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
@@ -176,6 +249,9 @@ export default function LeapsMonitorPage() {
               </tr>
             </thead>
             <tbody>
+              {watchlist.length === 0 && (
+                <tr><td colSpan={5} style={{ padding: '20px 12px', color: 'var(--text-secondary)', textAlign: 'center' }}>白名单为空,从上方添加标的</td></tr>
+              )}
               {watchlist.map(item => (
                 <tr key={item.symbol} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '10px 12px', fontWeight: 600 }}>{item.symbol}</td>
@@ -219,6 +295,13 @@ export default function LeapsMonitorPage() {
                         onClick={() => handleScan(item.symbol)}
                       >
                         扫描
+                      </button>
+                      <button
+                        className="btn"
+                        style={{ fontSize: 12, padding: '3px 10px', color: '#f87171' }}
+                        onClick={() => handleDelete(item.symbol)}
+                      >
+                        删除
                       </button>
                     </div>
                   </td>

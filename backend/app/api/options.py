@@ -216,3 +216,33 @@ async def get_option_payoff(req: PayoffRequest):
     if not req.legs:
         raise HTTPException(status_code=400, detail='至少需要一条期权腿')
     return calculate_payoff(req.strategy, req.underlying_price, req.legs)
+
+
+@router.get('/volatility')
+async def get_volatility(
+    symbol: str = Query(..., description='标的代码'),
+    expiry: Optional[str] = Query(None, description='用于取 ATM IV 的到期日,缺省取 DTE>=20 的最近到期日'),
+    host: str = Query('127.0.0.1'),
+    port: int = Query(11111),
+):
+    """标的波动率档案:ATM IV(期望) / HV20/60(实际) / IV Rank"""
+    from app.core.volatility import build_profile
+
+    display = _display_symbol(_normalize_futu_symbol(symbol))
+    expirations = _load_option_expirations(symbol, host, port)
+    if not expirations:
+        raise HTTPException(status_code=502, detail='未获取到期权到期日')
+    target_expiry = expiry
+    if not target_expiry:
+        for exp in expirations:
+            try:
+                if (date.fromisoformat(exp[:10]) - date.today()).days >= 20:
+                    target_expiry = exp
+                    break
+            except Exception:
+                continue
+        target_expiry = target_expiry or expirations[0]
+    chain = _load_option_chain(symbol, target_expiry, host, port)
+    profile = build_profile(display, chain['spot_price'], chain_contracts=chain['contracts'])
+    profile['expiry_used'] = target_expiry
+    return profile
