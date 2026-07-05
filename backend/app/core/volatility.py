@@ -47,6 +47,27 @@ def compute_hv(closes: List[float], window: int) -> Optional[float]:
     return round(math.sqrt(var) * math.sqrt(252) * 100, 2)
 
 
+def hv_rank(closes: List[float], window: int = 20, min_points: int = 40) -> Optional[float]:
+    """当前 HV 在其自身滚动历史中的百分位(0-100)。
+
+    IV 历史积累不足 MIN_HISTORY_DAYS 天时的冷启动替代:实际波动率(HV)与隐含
+    波动率高度相关,用 HV rank 近似 IV rank,让"IV 高位偏好低 delta"等逻辑在
+    没有 IV 历史的前两个月也能工作。min_points 为滚动 HV 序列所需最少样本数。
+    """
+    if len(closes) < window + min_points:
+        return None
+    series: List[float] = []
+    for end in range(window + 1, len(closes) + 1):
+        hv = compute_hv(closes[:end], window)
+        if hv is not None:
+            series.append(hv)
+    if len(series) < min_points:
+        return None
+    current = series[-1]
+    rank = sum(1 for v in series if v <= current) / len(series) * 100
+    return round(rank, 1)
+
+
 def compute_ema(closes: List[float], period: int) -> Optional[float]:
     if len(closes) < period:
         return None
@@ -134,6 +155,7 @@ def build_profile(symbol: str, spot: float,
         "hv60": hv60,              # 实际波动率(60日) %
         "ema20": ema20,
         "iv_rank": None,
+        "iv_rank_source": None,    # iv_history(真实) | hv_proxy(冷启动近似) | None
         "iv_history_days": 0,
         "iv_hv_ratio": None,       # IV/HV20,历史不足时的富余度替代指标
         "kline_days": len(closes),
@@ -141,8 +163,17 @@ def build_profile(symbol: str, spot: float,
     if atm_iv is not None:
         save_iv_snapshot(symbol, atm_iv, spot)
         rank = get_iv_rank(symbol, atm_iv)
-        result["iv_rank"] = rank["iv_rank"]
         result["iv_history_days"] = rank["history_days"]
+        if rank["iv_rank"] is not None:
+            # IV 历史足够:用真实 IV Rank
+            result["iv_rank"] = rank["iv_rank"]
+            result["iv_rank_source"] = "iv_history"
+        else:
+            # 冷启动:IV 历史不足 MIN_HISTORY_DAYS,回退到 HV rank 近似
+            proxy = hv_rank(closes, window=20)
+            if proxy is not None:
+                result["iv_rank"] = proxy
+                result["iv_rank_source"] = "hv_proxy"
         if hv20:
             result["iv_hv_ratio"] = round(atm_iv / hv20, 3)
     return result

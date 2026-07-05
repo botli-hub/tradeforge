@@ -214,8 +214,8 @@ def resend_signal_notification(signal_id: str):
     cfg = _load_config()
     notifier = TelegramNotifier.from_config(cfg)
     text = format_leaps_signal_from_dict(sig)
-    ok = notifier.send(text)
-    return {"sent": ok, "message": text}
+    result = notifier.send_detailed(text)
+    return {"sent": result["ok"], "reason": result["reason"], "message": text}
 
 
 # ── 冷却状态 ──────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 import threading
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import strategies, backtest, market, formula, trading, options, history, runtime, stocks, leaps, wheel, settings_api
+from app.api import strategies, backtest, market, formula, trading, options, history, runtime, stocks, leaps, wheel, settings_api, plan2032
 from app.data.database import init_db
 from app.data.history_scheduler import get_history_scheduler
 
@@ -172,6 +172,7 @@ app.include_router(runtime.router, prefix="/api/runtime", tags=["runtime"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(leaps.router, prefix="/api/leaps", tags=["leaps"])
 app.include_router(wheel.router, prefix="/api/wheel", tags=["wheel"])
+app.include_router(plan2032.router, prefix="/api/plan2032", tags=["plan2032"])
 app.include_router(settings_api.router, prefix="/api/config", tags=["config"])
 
 @app.get("/health")

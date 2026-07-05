@@ -323,7 +323,8 @@ def _suggest(symbol: str, side: str, host: str, port: int,
             suggestions.append({
                 "contract_code": c["option_symbol"],
                 "expiry": exp, "dte": dte, "strike": strike,
-                "delta": round(d, 4), "bid": bid, "ask": c.get("ask"),
+                "delta": round(d, 4), "delta_source": c.get("delta_source", "futu"),
+                "bid": bid, "ask": c.get("ask"),
                 "iv": c.get("iv"), "open_interest": c.get("open_interest"),
                 "volume": c.get("volume"), "contract_size": size,
                 "annualized": ann,
@@ -352,6 +353,8 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     if iv_high:
         suggestions.sort(key=lambda x: x["annualized"] * (1 - x["delta"]), reverse=True)
         delta_preference = "IV 高位:同等年化优先更低 delta(更远离行权价)"
+        if volatility and volatility.get("iv_rank_source") == "hv_proxy":
+            delta_preference += "(IV 历史不足,当前用 HV rank 近似)"
 
     from datetime import date as _date2
     days_to_earn = None

@@ -145,6 +145,23 @@ def _load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[s
             intrinsic = max(spot_price - strike, 0.0) if option_type == 'CALL' else max(strike - spot_price, 0.0)
             time_value = max(last - intrinsic, 0.0)
 
+            iv_val = _normalize_iv(snap.get('option_implied_volatility'))
+            delta_val = round(float(snap.get('option_delta') or 0), 6)
+            delta_source = 'futu'
+            # 兜底:行情源没给 delta(限频/冷门合约/港股快照缺字段)时用 BS 反算,
+            # 避免这些合约在 wheel 的 delta 区间筛选里被直接丢弃
+            if abs(delta_val) < 1e-9 and iv_val > 0 and spot_price > 0 and strike > 0:
+                try:
+                    from app.core.greeks import bs_delta
+                    exp_str = str(snap.get('strike_time') or row.get('strike_time') or expiry)[:10]
+                    dte = (date.fromisoformat(exp_str) - date.today()).days
+                    bs = bs_delta(option_type, spot_price, strike, dte, iv_val)
+                    if bs is not None:
+                        delta_val = bs
+                        delta_source = 'bs'
+                except Exception:
+                    pass
+
             contracts.append({
                 'option_symbol': code,
                 'underlying_symbol': display,
@@ -154,8 +171,9 @@ def _load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[s
                 'bid': bid,
                 'ask': ask,
                 'last': last,
-                'iv': _normalize_iv(snap.get('option_implied_volatility')),
-                'delta': round(float(snap.get('option_delta') or 0), 6),
+                'iv': iv_val,
+                'delta': delta_val,
+                'delta_source': delta_source,
                 'gamma': round(float(snap.get('option_gamma') or 0), 6),
                 'theta': round(float(snap.get('option_theta') or 0), 6),
                 'vega': round(float(snap.get('option_vega') or 0), 6),

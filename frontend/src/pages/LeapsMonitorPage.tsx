@@ -137,7 +137,7 @@ export default function LeapsMonitorPage() {
   async function handleResend(id: string) {
     try {
       const r = await resendLeapsSignal(id)
-      alert(r.sent ? '已重新推送到 Telegram' : '推送失败（Telegram 未配置？）\n\n' + r.message)
+      alert(r.sent ? '已重新推送到 Telegram' : '推送失败：' + (r.reason || '未知原因'))
     } catch (e: any) {
       alert('推送异常：' + e.message)
     }

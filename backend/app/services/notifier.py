@@ -88,38 +88,57 @@ def format_leaps_signal_from_dict(signal: Dict[str, Any]) -> str:
 
 
 class TelegramNotifier:
-    def __init__(self, bot_token: str, chat_id: str):
+    def __init__(self, bot_token: str, chat_id: str, proxy: Optional[str] = None):
         self.bot_token = bot_token
         self.chat_id = chat_id
+        self.proxy = (proxy or "").strip() or None
         self._enabled = bool(bot_token and chat_id)
+        self.last_error: Optional[str] = None
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "TelegramNotifier":
         tg = config.get("telegram", {})
         token = os.environ.get("TELEGRAM_BOT_TOKEN") or tg.get("bot_token", "")
         chat = os.environ.get("TELEGRAM_CHAT_ID") or tg.get("chat_id", "")
-        return cls(token, chat)
+        # 代理:设置页 telegram.proxy 优先,其次环境变量。中国大陆访问 api.telegram.org 需科学上网。
+        proxy = os.environ.get("TELEGRAM_PROXY") or tg.get("proxy") or config.get("proxy")
+        return cls(token, chat, proxy)
 
-    def send(self, text: str) -> bool:
+    def send_detailed(self, text: str) -> Dict[str, Any]:
+        """发送并返回明确原因,避免把网络失败误报为"未配置"。返回 {ok, reason}。"""
         if not self._enabled:
-            logger.info("Telegram 未配置，跳过推送：\n%s", text)
-            return False
+            reason = "Telegram 未配置:Bot Token 或 Chat ID 为空(请到设置页填写并保存)"
+            self.last_error = reason
+            logger.info("Telegram 未配置，跳过推送")
+            return {"ok": False, "reason": reason}
         try:
             import httpx
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            resp = httpx.post(
-                url,
-                json={"chat_id": self.chat_id, "text": text, "parse_mode": ""},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                logger.info("Telegram 推送成功")
-                return True
+            payload = {"chat_id": self.chat_id, "text": text}
+            if self.proxy:
+                with httpx.Client(proxy=self.proxy, timeout=10) as client:
+                    resp = client.post(url, json=payload)
             else:
-                logger.error("Telegram 推送失败: %s %s", resp.status_code, resp.text)
+                resp = httpx.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                self.last_error = None
+                logger.info("Telegram 推送成功")
+                return {"ok": True, "reason": "ok"}
+            reason = f"Telegram 拒绝(HTTP {resp.status_code}): {resp.text[:300]}"
+            self.last_error = reason
+            logger.error("Telegram 推送失败: %s %s", resp.status_code, resp.text)
+            return {"ok": False, "reason": reason}
         except Exception as e:
+            hint = ""
+            if not self.proxy:
+                hint = "。若在中国大陆,api.telegram.org 被墙,需在设置页 Telegram 代理填入本地代理(如 http://127.0.0.1:7890)"
+            reason = f"无法连接 Telegram({type(e).__name__}: {e}){hint}"
+            self.last_error = reason
             logger.error("Telegram 推送异常: %s", e)
-        return False
+            return {"ok": False, "reason": reason}
+
+    def send(self, text: str) -> bool:
+        return self.send_detailed(text)["ok"]
 
     def send_signal(self, signal: Any) -> bool:
         text = format_leaps_signal(signal)

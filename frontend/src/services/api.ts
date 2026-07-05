@@ -642,7 +642,7 @@ export interface WheelRollOptions {
 // ── 后端配置(存本地数据库,含敏感信息) ─────────────────────────────────────────
 
 export interface BackendConfig {
-  telegram: { bot_token: string; chat_id: string }
+  telegram: { bot_token: string; chat_id: string; proxy?: string }
   finnhub_api_key: string
   finnhub_base_url: string
   yahoo_base_url: string
@@ -893,7 +893,7 @@ export async function triggerLeapsScan(symbol?: string, is_intraday = false) {
 }
 
 export async function resendLeapsSignal(signalId: string) {
-  return request<{ sent: boolean; message: string }>(
+  return request<{ sent: boolean; reason?: string; message: string }>(
     `/api/leaps/signals/${encodeURIComponent(signalId)}/notify`
   )
 }

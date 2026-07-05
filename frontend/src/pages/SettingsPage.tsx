@@ -296,6 +296,11 @@ function BackendConfigCard() {
             onChange={e => up('telegram', 'chat_id', e.target.value)} />
         </div>
         <div className="settings-row">
+          <label>Telegram 代理(可选)</label>
+          <input value={cfg.telegram.proxy || ''} placeholder="中国大陆需填,如 http://127.0.0.1:7890"
+            onChange={e => up('telegram', 'proxy', e.target.value)} />
+        </div>
+        <div className="settings-row">
           <label>Finnhub API Key(报价/财报日历)</label>
           <input type="password" value={cfg.finnhub_api_key}
             onChange={e => setCfg(p => p ? { ...p, finnhub_api_key: e.target.value } : p)} />
