@@ -368,6 +368,538 @@ export async function setStockSubscribed(symbol: string, subscribed: boolean) {
   })
 }
 
+// ── LEAPS 信号监控 ────────────────────────────────────────────────────────────
+
+export interface LeapsWatchlistItem {
+  symbol: string
+  name: string
+  floor_price: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface LeapsSuggestion {
+  contract_code: string
+  strike: number
+  expiry: string
+  premium: number
+  delta: number
+  annualized_yield: number
+  cost_basis: number
+  dte: number
+}
+
+export interface LeapsSignal {
+  id: string
+  symbol: string
+  contract_code: string
+  signal_level: 'PRIMARY' | 'SECONDARY' | 'WHEEL_PUT' | 'WHEEL_CALL'
+  trigger_price: number
+  ema_value: number
+  ema_type: string
+  iv_rank: number
+  underlying_price: number
+  floor_price: number
+  suggestions: LeapsSuggestion[]
+  is_intraday: boolean
+  created_at: string
+}
+
+export interface LeapsCooldown {
+  contract_code: string
+  symbol: string
+  cooldown_until: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LeapsStatus {
+  watchlist_total: number
+  watchlist_enabled: number
+  recent_signals: LeapsSignal[]
+  active_cooldowns: number
+}
+
+export interface LeapsCandidate {
+  symbol: string
+  name: string
+  market: string
+}
+
+export async function getLeapsWatchlist() {
+  return request<LeapsWatchlistItem[]>('/api/leaps/watchlist')
+}
+
+export async function getLeapsCandidates() {
+  return request<LeapsCandidate[]>('/api/leaps/watchlist/candidates')
+}
+
+export async function addLeapsWatchlistItem(body: {
+  symbol: string
+  name?: string
+  floor_price: number
+  enabled?: boolean
+}) {
+  return request<LeapsWatchlistItem>('/api/leaps/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteLeapsWatchlistItem(symbol: string) {
+  return request<{ ok: boolean }>(`/api/leaps/watchlist/${encodeURIComponent(symbol)}`, {
+    method: 'DELETE',
+  })
+}
+
+// ── Wheel 策略 ────────────────────────────────────────────────────────────────
+
+export type WheelCycleStatus = 'IDLE' | 'CSP_OPEN' | 'HOLDING' | 'CC_OPEN' | 'CLOSED'
+
+export type WheelTradeType =
+  | 'SELL_PUT' | 'BUY_PUT_CLOSE' | 'SELL_CALL' | 'BUY_CALL_CLOSE'
+  | 'EXPIRE' | 'ASSIGNED' | 'CALLED_AWAY' | 'SELL_SHARES'
+
+export interface WheelCycle {
+  id: string
+  symbol: string
+  status: WheelCycleStatus
+  shares: number
+  share_cost: number
+  total_premium: number
+  total_fees: number
+  realized_pnl: number | null
+  open_contract_code: string | null
+  open_option_type: 'PUT' | 'CALL' | null
+  open_strike: number | null
+  open_expiry: string | null
+  open_qty: number
+  open_price: number
+  open_contract_size: number
+  started_at: string
+  closed_at: string | null
+  cost_basis: number | null
+  open_dte: number | null
+  duration_days: number | null
+}
+
+export interface WheelTarget {
+  symbol: string
+  name: string
+  market: string
+  floor_price: number
+  max_capital: number
+  delta_min: number
+  delta_max: number
+  dte_min: number
+  dte_max: number
+  min_annualized: number
+  min_open_interest: number
+  enabled: boolean | number
+  active_cycles?: WheelCycle[]
+  idle_days?: number | null
+}
+
+export interface WheelTrade {
+  id: string
+  cycle_id: string
+  symbol: string
+  trade_type: WheelTradeType
+  contract_code: string | null
+  strike: number | null
+  expiry: string | null
+  qty: number
+  price: number
+  fee: number
+  contract_size: number
+  note: string | null
+  traded_at: string
+}
+
+export interface WheelCapital {
+  per_symbol: Record<string, { csp_collateral: number; holding_cost: number }>
+  csp_collateral: number
+  holding_cost: number
+  total_committed: number
+  assignment_stress: number
+}
+
+export interface WheelStats {
+  active_cycles: number
+  closed_cycles: number
+  premium_month: number
+  premium_total: number
+  realized_pnl_total: number
+  expiring_soon: { symbol: string; open_contract_code: string; open_option_type: string; open_strike: number; open_expiry: string; dte: number }[]
+  capital?: WheelCapital
+}
+
+export interface WheelSuggestion {
+  contract_code: string
+  expiry: string
+  dte: number
+  strike: number
+  delta: number
+  bid: number
+  ask: number | null
+  iv: number | null
+  open_interest: number
+  volume: number
+  contract_size: number
+  annualized: number
+  annualized_margin?: number | null
+  covers_earnings?: boolean
+  otm_pct: number
+  assigned_cost?: number
+  if_called_total?: number
+}
+
+export interface VolatilityProfile {
+  symbol: string
+  spot: number
+  atm_iv: number | null       // 期望波动率(隐含) %
+  hv20: number | null         // 实际波动率 20日 %
+  hv60: number | null         // 实际波动率 60日 %
+  ema20: number | null
+  iv_rank: number | null      // 0-100,IV 历史不足时为 null
+  iv_history_days: number
+  iv_hv_ratio: number | null
+  kline_days: number
+  expiry_used?: string
+}
+
+export interface WheelSuggestResponse {
+  symbol: string
+  side: 'PUT' | 'CALL'
+  spot_price: number | null
+  cost_basis: number | null
+  filters: Record<string, unknown>
+  suggestions: WheelSuggestion[]
+  message?: string
+  volatility?: VolatilityProfile | null
+  margin_ratio?: number
+  earnings_date?: string | null
+  days_to_earnings?: number | null
+  earnings_warn?: boolean
+  delta_preference?: string | null
+}
+
+export interface WheelOpenPositionItem {
+  cycle_id: string
+  symbol: string
+  side: 'PUT' | 'CALL'
+  contract_code: string
+  strike: number
+  expiry: string | null
+  dte: number | null
+  open_price: number
+  current_price: number
+  buyback_ask: number
+  profit_pct: number | null
+  spot: number
+  itm: boolean
+  profit_hit: boolean
+  expiring: boolean
+}
+
+export async function checkWheelOpenPositions(host: string, port: number) {
+  return request<{ items: WheelOpenPositionItem[]; profit_target_pct: number }>(
+    `/api/wheel/open-positions/check?host=${encodeURIComponent(host)}&port=${port}`
+  )
+}
+
+export interface WheelRollCandidate {
+  contract_code: string
+  expiry: string
+  dte: number
+  strike: number
+  delta: number
+  bid: number
+  net_credit_per_contract: number
+  annualized: number | null
+}
+
+export interface WheelRollOptions {
+  cycle_id: string
+  symbol: string
+  side: 'PUT' | 'CALL'
+  current: {
+    contract_code: string
+    strike: number
+    expiry: string
+    dte: number | null
+    open_price: number
+    buyback_ask: number
+    delta: number
+    contract_size: number
+  }
+  candidates: WheelRollCandidate[]
+  warnings?: string[]
+}
+
+// ── 后端配置(存本地数据库,含敏感信息) ─────────────────────────────────────────
+
+export interface BackendConfig {
+  telegram: { bot_token: string; chat_id: string; proxy?: string }
+  finnhub_api_key: string
+  finnhub_base_url: string
+  yahoo_base_url: string
+  futu: { host: string; port: number }
+  wheel_timing: {
+    dte_min: number
+    dte_max: number
+    contract_max_per_symbol: number
+    iv_percentile_threshold: number
+    cooldown_trading_days: number
+    auto_scan_minutes: number
+  }
+  wheel_position: {
+    profit_target_pct: number
+    margin_ratio: number
+    earnings_warn_days: number
+    weekly_report: boolean
+  }
+}
+
+export async function getBackendConfig() {
+  return request<BackendConfig>('/api/config/backend')
+}
+
+export async function saveBackendConfig(body: Partial<BackendConfig>) {
+  return request<BackendConfig>('/api/config/backend', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function getWheelRollOptions(cycleId: string, host: string, port: number) {
+  return request<WheelRollOptions>(
+    `/api/wheel/roll-options?cycle_id=${encodeURIComponent(cycleId)}&host=${encodeURIComponent(host)}&port=${port}`
+  )
+}
+
+export async function getWheelTargets() {
+  return request<WheelTarget[]>('/api/wheel/targets')
+}
+
+export async function getWheelCandidates() {
+  return request<LeapsCandidate[]>('/api/wheel/targets/candidates')
+}
+
+export async function addWheelTarget(body: Partial<WheelTarget> & { symbol: string; floor_price: number }) {
+  return request<WheelTarget>('/api/wheel/targets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function updateWheelTarget(symbol: string, body: Partial<WheelTarget>) {
+  return request<WheelTarget>(`/api/wheel/targets/${encodeURIComponent(symbol)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteWheelTarget(symbol: string) {
+  return request<{ ok: boolean }>(`/api/wheel/targets/${encodeURIComponent(symbol)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function getWheelCycles(symbol?: string) {
+  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''
+  return request<WheelCycle[]>(`/api/wheel/cycles${qs}`)
+}
+
+export async function getWheelTrades(params?: { cycle_id?: string; symbol?: string }) {
+  const qs = new URLSearchParams()
+  if (params?.cycle_id) qs.set('cycle_id', params.cycle_id)
+  if (params?.symbol) qs.set('symbol', params.symbol)
+  const s = qs.toString()
+  return request<WheelTrade[]>(`/api/wheel/trades${s ? '?' + s : ''}`)
+}
+
+export async function recordWheelTrade(body: {
+  symbol: string
+  trade_type: WheelTradeType
+  contract_code?: string
+  strike?: number
+  expiry?: string
+  qty?: number
+  price?: number
+  fee?: number
+  contract_size?: number
+  note?: string
+  cycle_id?: string
+  new_cycle?: boolean
+}) {
+  return request<WheelCycle>('/api/wheel/trades', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function updateWheelTrade(tradeId: string, body: {
+  trade_type?: WheelTradeType
+  contract_code?: string
+  strike?: number
+  expiry?: string
+  qty?: number
+  price?: number
+  fee?: number
+  contract_size?: number
+  note?: string
+  traded_at?: string
+}) {
+  return request<WheelCycle>(`/api/wheel/trades/${encodeURIComponent(tradeId)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteWheelTrade(tradeId: string) {
+  return request<{ deleted: boolean }>(`/api/wheel/trades/${encodeURIComponent(tradeId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function getWheelStats() {
+  return request<WheelStats>('/api/wheel/stats')
+}
+
+export async function getWheelSuggest(symbol: string, side: 'put' | 'call', host: string, port: number, cycleId?: string) {
+  const extra = cycleId ? `&cycle_id=${encodeURIComponent(cycleId)}` : ''
+  return request<WheelSuggestResponse>(
+    `/api/wheel/suggest/${side}?symbol=${encodeURIComponent(symbol)}&host=${encodeURIComponent(host)}&port=${port}${extra}`
+  )
+}
+
+export async function updateLeapsWatchlistItem(
+  symbol: string,
+  data: { floor_price?: number; enabled?: boolean; name?: string }
+) {
+  return request<LeapsWatchlistItem>(`/api/leaps/watchlist/${encodeURIComponent(symbol)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getVolatilityProfile(symbol: string, host: string, port: number) {
+  return request<VolatilityProfile>(
+    `/api/options/volatility?symbol=${encodeURIComponent(symbol)}&host=${encodeURIComponent(host)}&port=${port}`
+  )
+}
+
+export async function triggerWheelTimingScan(symbol?: string) {
+  return request<{ status: string }>('/api/leaps/wheel-scan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol: symbol || null }),
+  })
+}
+
+export interface WheelScanReportRow {
+  symbol: string
+  side: 'PUT' | 'CALL' | '-'
+  spot?: number | null
+  contracts?: number
+  in_cooldown?: number
+  no_history?: number
+  bars_insufficient?: number
+  iv_filtered?: number
+  not_touching?: number
+  signals?: number
+  note?: string | null
+}
+
+export interface WheelScanStatus {
+  running: boolean
+  started_at: string | null
+  finished_at: string | null
+  signals_found: number
+  report: WheelScanReportRow[]
+  error: string | null
+  telegram_configured?: boolean
+  telegram_sent?: number
+}
+
+export async function getWheelScanStatus() {
+  return request<WheelScanStatus>('/api/leaps/wheel-scan/status')
+}
+
+export interface WheelTimingHistoryItem {
+  contract_code: string
+  symbol: string
+  side: 'PUT' | 'CALL'
+  strike: number | null
+  expiry: string | null
+  ema_type: string | null
+  ema_value: number | null
+  trigger_price: number | null
+  iv_rank: number | null
+  underlying_price: number | null
+  times_triggered: number
+  first_seen: string
+  last_seen: string
+}
+
+export interface WheelTimingHistoryPage {
+  total: number
+  page: number
+  page_size: number
+  items: WheelTimingHistoryItem[]
+}
+
+export async function getWheelTimingHistory(page = 1, pageSize = 20, symbol?: string) {
+  const qs = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (symbol) qs.set('symbol', symbol)
+  return request<WheelTimingHistoryPage>(`/api/leaps/wheel-timing/history?${qs}`)
+}
+
+export async function getWheelTimingSignals(limit = 20) {
+  return request<LeapsSignal[]>(`/api/leaps/signals?levels=WHEEL_PUT,WHEEL_CALL&limit=${limit}`)
+}
+
+export async function getLeapsSignals(symbol?: string, limit = 50) {
+  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}&limit=${limit}` : `?limit=${limit}`
+  return request<LeapsSignal[]>(`/api/leaps/signals${qs}`)
+}
+
+export async function getLeapsCooldowns() {
+  return request<LeapsCooldown[]>('/api/leaps/cooldowns')
+}
+
+export async function getLeapsStatus() {
+  return request<LeapsStatus>('/api/leaps/status')
+}
+
+export async function triggerLeapsScan(symbol?: string, is_intraday = false) {
+  return request<{ status: string; symbol: string | null; is_intraday: boolean }>(
+    '/api/leaps/scan',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol: symbol ?? null, is_intraday }),
+    }
+  )
+}
+
+export async function resendLeapsSignal(signalId: string) {
+  return request<{ sent: boolean; reason?: string; message: string }>(
+    `/api/leaps/signals/${encodeURIComponent(signalId)}/notify`
+  )
+}
+
+// ── 2032 投资计划 ─────────────────────────────────────────────────────────────
+
 export async function getPlan2032Holdings() {
   return request<Plan2032Holding[]>(`/api/plan2032/holdings`)
 }

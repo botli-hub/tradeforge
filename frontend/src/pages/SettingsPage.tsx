@@ -1,11 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AppSettings,
+  BackendConfig,
   connectTrading,
   disconnectTrading,
   getAppSettings,
+  getBackendConfig,
   getMarketStatus,
   saveAppSettings,
+  saveBackendConfig,
 } from '../services/api'
 
 export default function SettingsPage() {
@@ -140,7 +143,7 @@ export default function SettingsPage() {
           </div>
           {settings.marketDataSource === 'finnhub' && (
             <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 12 }}>
-              Finnhub 模式下，后端会读取环境变量 <code>FINNHUB_API_KEY</code>。
+              Finnhub 模式下，后端会使用下方「数据源」卡片中保存到本地数据库的 API Key。
             </div>
           )}
           <div className="status-row">
@@ -233,6 +236,163 @@ export default function SettingsPage() {
             {saving ? '保存中...' : '保存设置'}
           </button>
         </div>
+      </div>
+
+      <BackendConfigCard />
+    </div>
+  )
+}
+
+// ── 后端服务配置(存本地数据库,不进代码仓库)────────────────────────────────────
+function BackendConfigCard() {
+  const [cfg, setCfg] = useState<BackendConfig | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+
+  useEffect(() => {
+    getBackendConfig().then(setCfg).catch(e => setMsg('加载后端配置失败:' + e.message))
+  }, [])
+
+  function up<K extends keyof BackendConfig>(section: K, key: string, value: any) {
+    setCfg(prev => prev ? {
+      ...prev,
+      [section]: typeof prev[section] === 'object'
+        ? { ...(prev[section] as any), [key]: value }
+        : value,
+    } : prev)
+  }
+
+  async function save() {
+    if (!cfg) return
+    setSaving(true)
+    setMsg('')
+    try {
+      setCfg(await saveBackendConfig(cfg))
+      setMsg('后端配置已保存并立即生效(存本地数据库)')
+      setTimeout(() => setMsg(''), 3000)
+    } catch (e: any) {
+      setMsg('保存失败:' + e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!cfg) return <div className="card">{msg || '正在加载后端配置...'}</div>
+
+  return (
+    <div className="card">
+      {msg && <div style={{ marginBottom: 10, color: '#cde4ff', fontSize: 13 }}>{msg}</div>}
+
+      <div className="editor-section">
+        <h4>通知与数据源(敏感信息,仅存本地数据库)</h4>
+        <div className="settings-row">
+          <label>Telegram Bot Token</label>
+          <input type="password" value={cfg.telegram.bot_token} placeholder="123456:ABC-DEF..."
+            onChange={e => up('telegram', 'bot_token', e.target.value)} />
+        </div>
+        <div className="settings-row">
+          <label>Telegram Chat ID</label>
+          <input value={cfg.telegram.chat_id} placeholder="-100xxxx 或用户ID"
+            onChange={e => up('telegram', 'chat_id', e.target.value)} />
+        </div>
+        <div className="settings-row">
+          <label>Telegram 代理(可选)</label>
+          <input value={cfg.telegram.proxy || ''} placeholder="中国大陆需填,如 http://127.0.0.1:7890"
+            onChange={e => up('telegram', 'proxy', e.target.value)} />
+        </div>
+        <div className="settings-row">
+          <label>Finnhub API Key(报价/财报日历)</label>
+          <input type="password" value={cfg.finnhub_api_key}
+            onChange={e => setCfg(p => p ? { ...p, finnhub_api_key: e.target.value } : p)} />
+        </div>
+        <div className="settings-row">
+          <label>Finnhub Base URL</label>
+          <input value={cfg.finnhub_base_url} placeholder="https://finnhub.io/api/v1"
+            onChange={e => setCfg(p => p ? { ...p, finnhub_base_url: e.target.value } : p)} />
+        </div>
+        <div className="settings-row">
+          <label>Yahoo Finance Base URL(美股K线)</label>
+          <input value={cfg.yahoo_base_url} placeholder="https://query1.finance.yahoo.com/v8/finance/chart"
+            onChange={e => setCfg(p => p ? { ...p, yahoo_base_url: e.target.value } : p)} />
+        </div>
+        <div className="settings-row">
+          <label>后台任务 OpenD Host</label>
+          <input value={cfg.futu.host} onChange={e => up('futu', 'host', e.target.value)} />
+        </div>
+        <div className="settings-row">
+          <label>后台任务 OpenD Port</label>
+          <input type="number" value={cfg.futu.port} onChange={e => up('futu', 'port', Number(e.target.value))} />
+        </div>
+      </div>
+
+      <div className="editor-section">
+        <h4>Wheel 时机扫描</h4>
+        <div className="settings-row">
+          <label>合约 DTE 范围(天)</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_min}
+              onChange={e => up('wheel_timing', 'dte_min', Number(e.target.value))} />
+            ~
+            <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_max}
+              onChange={e => up('wheel_timing', 'dte_max', Number(e.target.value))} />
+          </div>
+        </div>
+        <div className="settings-row">
+          <label>每标的合约上限(0=不限)</label>
+          <input type="number" value={cfg.wheel_timing.contract_max_per_symbol}
+            onChange={e => up('wheel_timing', 'contract_max_per_symbol', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>IV 分位硬条件(0=仅记录)</label>
+          <input type="number" value={cfg.wheel_timing.iv_percentile_threshold}
+            onChange={e => up('wheel_timing', 'iv_percentile_threshold', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>合约冷却(交易日)</label>
+          <input type="number" value={cfg.wheel_timing.cooldown_trading_days}
+            onChange={e => up('wheel_timing', 'cooldown_trading_days', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>自动扫描间隔(分钟,0=关闭)</label>
+          <input type="number" value={cfg.wheel_timing.auto_scan_minutes}
+            onChange={e => up('wheel_timing', 'auto_scan_minutes', Number(e.target.value))} />
+        </div>
+      </div>
+
+      <div className="editor-section">
+        <h4>Wheel 持仓管理</h4>
+        <div className="settings-row">
+          <label>平仓利润目标(%)</label>
+          <input type="number" value={cfg.wheel_position.profit_target_pct}
+            onChange={e => up('wheel_position', 'profit_target_pct', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>保证金估算比例(0~1)</label>
+          <input type="number" step="0.05" value={cfg.wheel_position.margin_ratio}
+            onChange={e => up('wheel_position', 'margin_ratio', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>财报警示提前天数</label>
+          <input type="number" value={cfg.wheel_position.earnings_warn_days}
+            onChange={e => up('wheel_position', 'earnings_warn_days', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>每周一 Telegram 周报</label>
+          <select value={cfg.wheel_position.weekly_report ? '1' : '0'}
+            onChange={e => up('wheel_position', 'weekly_report', e.target.value === '1')}>
+            <option value="1">开启</option>
+            <option value="0">关闭</option>
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          保存后立即生效,无需重启;所有配置均存本地数据库,不再读取任何配置文件
+        </span>
+        <button className="btn" onClick={save} disabled={saving}>
+          {saving ? '保存中...' : '保存后端配置'}
+        </button>
       </div>
     </div>
   )

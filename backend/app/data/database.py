@@ -502,69 +502,202 @@ def init_db():
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_risk_events_symbol ON risk_events(symbol, created_at)")
 
+    # LEAPS 监控表
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_watchlist (
+            symbol TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            floor_price REAL NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_option_price_cache (
+            contract_code TEXT NOT NULL,
+            date TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume REAL,
+            iv REAL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (contract_code, date)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_iv_history (
+            contract_code TEXT NOT NULL,
+            date TEXT NOT NULL,
+            iv REAL NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (contract_code, date)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_signals (
+            id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            contract_code TEXT NOT NULL,
+            signal_level TEXT NOT NULL,
+            trigger_price REAL NOT NULL,
+            ema_value REAL NOT NULL,
+            ema_type TEXT NOT NULL,
+            iv_rank REAL NOT NULL,
+            underlying_price REAL NOT NULL,
+            floor_price REAL NOT NULL,
+            suggestions TEXT,
+            is_intraday INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS leaps_cooldowns (
+            contract_code TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            cooldown_until TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_leaps_signals_symbol ON leaps_signals(symbol, created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_leaps_cooldowns_symbol ON leaps_cooldowns(symbol, cooldown_until)")
+
+    # ── Wheel 策略表 ──────────────────────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_targets (
+            symbol TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            market TEXT NOT NULL DEFAULT 'US',
+            floor_price REAL NOT NULL,
+            max_capital REAL DEFAULT 0,
+            delta_min REAL DEFAULT 0.15,
+            delta_max REAL DEFAULT 0.30,
+            dte_min INTEGER DEFAULT 21,
+            dte_max INTEGER DEFAULT 45,
+            min_annualized REAL DEFAULT 15.0,
+            min_open_interest INTEGER DEFAULT 100,
+            enabled INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_cycles (
+            id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'IDLE',
+            shares REAL DEFAULT 0,
+            share_cost REAL DEFAULT 0,
+            total_premium REAL DEFAULT 0,
+            total_fees REAL DEFAULT 0,
+            realized_pnl REAL,
+            open_contract_code TEXT,
+            open_option_type TEXT,
+            open_strike REAL,
+            open_expiry TEXT,
+            open_qty REAL DEFAULT 0,
+            open_price REAL DEFAULT 0,
+            open_contract_size INTEGER DEFAULT 100,
+            started_at TEXT NOT NULL,
+            closed_at TEXT,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_trades (
+            id TEXT PRIMARY KEY,
+            cycle_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            trade_type TEXT NOT NULL,
+            contract_code TEXT,
+            strike REAL,
+            expiry TEXT,
+            qty REAL DEFAULT 1,
+            price REAL DEFAULT 0,
+            fee REAL DEFAULT 0,
+            contract_size INTEGER DEFAULT 100,
+            note TEXT,
+            traded_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (cycle_id) REFERENCES wheel_cycles(id)
+        )
+    """)
+
+    # 通用 KV(周报标记等)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS app_kv (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_at TEXT
+        )
+    """)
+
+    # Wheel 开仓时机历史(按合约代码去重合并)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_timing_history (
+            contract_code TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            strike REAL,
+            expiry TEXT,
+            ema_type TEXT,
+            ema_value REAL,
+            trigger_price REAL,
+            iv_rank REAL,
+            underlying_price REAL,
+            times_triggered INTEGER DEFAULT 1,
+            first_seen TEXT NOT NULL,
+            last_seen TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_timing_last_seen ON wheel_timing_history(last_seen DESC)")
+
+    # 一次性回填:历史表为空时,从既有 WHEEL 信号导入(按合约合并)
+    try:
+        row = cursor.execute("SELECT COUNT(1) AS c FROM wheel_timing_history").fetchone()
+        if row and row["c"] == 0:
+            cursor.execute("""
+                INSERT INTO wheel_timing_history
+                    (contract_code, symbol, side, strike, expiry, ema_type, ema_value,
+                     trigger_price, iv_rank, underlying_price, times_triggered, first_seen, last_seen)
+                SELECT contract_code, symbol,
+                       CASE WHEN signal_level LIKE '%CALL%' THEN 'CALL' ELSE 'PUT' END,
+                       NULL, NULL, ema_type, ema_value,
+                       trigger_price, iv_rank, underlying_price,
+                       COUNT(1), MIN(created_at), MAX(created_at)
+                FROM leaps_signals
+                WHERE signal_level LIKE 'WHEEL%'
+                GROUP BY contract_code
+            """)
+    except Exception:
+        pass
+
+    # 标的层面 ATM IV 快照(用于 IV Rank 历史积累)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS underlying_iv_history (
+            symbol TEXT NOT NULL,
+            date TEXT NOT NULL,
+            iv REAL NOT NULL,
+            spot REAL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (symbol, date)
+        )
+    """)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_cycles_symbol ON wheel_cycles(symbol, status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_trades_cycle ON wheel_trades(cycle_id, traded_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_trades_symbol ON wheel_trades(symbol, traded_at)")
+
     seed_demo_strategies(conn)
-    seed_stocks(conn)
     conn.commit()
     conn.close()
-
-
-_SEED_STOCKS: List[Dict[str, str]] = [
-    # 美股
-    {"symbol": "AAPL",  "name": "Apple",            "market": "US"},
-    {"symbol": "MSFT",  "name": "Microsoft",         "market": "US"},
-    {"symbol": "GOOGL", "name": "Alphabet",          "market": "US"},
-    {"symbol": "AMZN",  "name": "Amazon",            "market": "US"},
-    {"symbol": "NVDA",  "name": "NVIDIA",            "market": "US"},
-    {"symbol": "TSLA",  "name": "Tesla",             "market": "US"},
-    {"symbol": "META",  "name": "Meta",              "market": "US"},
-    {"symbol": "JPM",   "name": "JPMorgan Chase",    "market": "US"},
-    {"symbol": "V",     "name": "Visa",              "market": "US"},
-    {"symbol": "BRK.B", "name": "Berkshire Hathaway","market": "US"},
-    # 港股
-    {"symbol": "00700.HK", "name": "腾讯控股", "market": "HK"},
-    {"symbol": "09988.HK", "name": "阿里巴巴", "market": "HK"},
-    {"symbol": "00941.HK", "name": "中国移动", "market": "HK"},
-    {"symbol": "01810.HK", "name": "小米集团", "market": "HK"},
-    {"symbol": "02318.HK", "name": "中国平安", "market": "HK"},
-    {"symbol": "09618.HK", "name": "京东集团", "market": "HK"},
-    {"symbol": "00005.HK", "name": "汇丰控股", "market": "HK"},
-    {"symbol": "01211.HK", "name": "比亚迪股份", "market": "HK"},
-    {"symbol": "00388.HK", "name": "香港交易所", "market": "HK"},
-    {"symbol": "02269.HK", "name": "药明生物", "market": "HK"},
-    # A股
-    {"symbol": "600519.SH", "name": "贵州茅台", "market": "CN"},
-    {"symbol": "000858.SZ", "name": "五粮液",   "market": "CN"},
-    {"symbol": "601318.SH", "name": "中国平安", "market": "CN"},
-    {"symbol": "600036.SH", "name": "招商银行", "market": "CN"},
-    {"symbol": "000333.SZ", "name": "美的集团", "market": "CN"},
-    {"symbol": "600900.SH", "name": "长江电力", "market": "CN"},
-    {"symbol": "002594.SZ", "name": "比亚迪",   "market": "CN"},
-    {"symbol": "300750.SZ", "name": "宁德时代", "market": "CN"},
-    {"symbol": "601899.SH", "name": "紫金矿业", "market": "CN"},
-    {"symbol": "688981.SH", "name": "中芯国际", "market": "CN"},
-]
-
-
-def seed_stocks(conn: sqlite3.Connection):
-    cursor = conn.cursor()
-    now = _now_iso()
-    for s in _SEED_STOCKS:
-        currency = 'USD' if s['market'] == 'US' else ('HKD' if s['market'] == 'HK' else 'CNY')
-        cursor.execute(
-            """
-            INSERT INTO stocks
-            (symbol, name, market, enabled, subscribed, asset_type, source_symbol, currency, lot_size, status, created_at, updated_at)
-            VALUES (?, ?, ?, 1, 0, 'STOCK', ?, ?, NULL, 'active', ?, ?)
-            ON CONFLICT(symbol) DO UPDATE SET
-                name = CASE
-                    WHEN stocks.name IS NULL OR TRIM(stocks.name) = '' OR stocks.name = stocks.symbol THEN excluded.name
-                    ELSE stocks.name
-                END,
-                market = COALESCE(stocks.market, excluded.market),
-                source_symbol = COALESCE(stocks.source_symbol, excluded.source_symbol),
-                currency = COALESCE(stocks.currency, excluded.currency),
-                updated_at = excluded.updated_at
-            """,
-            (s["symbol"], s["name"], s["market"], s["symbol"], currency, now, now),
-        )
-    conn.commit()

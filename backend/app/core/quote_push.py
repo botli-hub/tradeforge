@@ -19,7 +19,6 @@ from typing import Set, Optional, Callable, Dict, Any
 
 from app.data.adapter import get_adapter, FutuAdapter
 from app.core.market_state import get_market_state_manager
-from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 

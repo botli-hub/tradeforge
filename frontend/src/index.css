@@ -954,3 +954,529 @@ h4 {
 /* inline positive/negative colors used without class */
 .positive { color: var(--green); }
 .negative { color: var(--red); }
+
+/* ══════════════════════════════════════════════════════════════
+   2032 Plan page
+   ══════════════════════════════════════════════════════════════ */
+.plan2032-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.plan2032-header h2 {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.plan2032-subtitle {
+  margin-top: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  max-width: 720px;
+}
+
+/* ── Tabs ── */
+.plan2032-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.plan2032-tabs button {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  padding: 10px 4px;
+  margin-right: 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.plan2032-tabs button:hover {
+  color: var(--text-primary);
+}
+
+.plan2032-tabs button.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--green);
+}
+
+/* ── Metric cards ── */
+.plan2032-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.plan2032-metric-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan2032-metric-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.plan2032-metric-value {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* ── Panels & layout ── */
+.plan2032-panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.plan2032-layout-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.plan2032-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
+.plan2032-muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+/* ── Category list ── */
+.plan2032-category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan2032-category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.plan2032-category-row:last-child {
+  border-bottom: none;
+}
+
+.plan2032-category-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+
+.plan2032-color-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.plan2032-category-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.plan2032-category-right strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.plan2032-category-right span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* ── Module cards (CAGR compare) ── */
+.plan2032-module-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan2032-module-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.plan2032-module-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ── Progress bars ── */
+.plan2032-progress-track {
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.plan2032-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+/* ── Projection ── */
+.plan2032-projection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.plan2032-projection-row {
+  display: grid;
+  grid-template-columns: 48px 1fr 110px;
+  align-items: center;
+  gap: 16px;
+  font-size: 13px;
+}
+
+.plan2032-projection-row > span {
+  color: var(--text-secondary);
+}
+
+.plan2032-projection-row strong {
+  text-align: right;
+  font-weight: 600;
+}
+
+.plan2032-projection-bar-track {
+  height: 20px;
+  background: var(--bg-input);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.plan2032-projection-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--green-dim), var(--green));
+  border-radius: 6px;
+  transition: width 0.3s ease;
+}
+
+/* ── Holdings toolbar ── */
+.plan2032-add-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.plan2032-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.plan2032-search-bar select {
+  min-width: 240px;
+}
+
+.plan2032-inline-sort {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.plan2032-inline-sort button {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.plan2032-inline-sort button:hover {
+  color: var(--text-primary);
+}
+
+.plan2032-inline-sort button.active {
+  background: var(--green);
+  color: #000;
+  font-weight: 600;
+}
+
+.plan2032-toolbar-note {
+  margin-top: 16px;
+}
+
+/* ── Holdings table ── */
+.plan2032-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.plan2032-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 900px;
+}
+
+.plan2032-table th {
+  text-align: left;
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.plan2032-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--divider);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.plan2032-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.plan2032-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.plan2032-table input,
+.plan2032-table select {
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+.plan2032-text-input {
+  width: 120px;
+}
+
+.plan2032-share-input {
+  width: 92px;
+}
+
+.plan2032-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.3;
+}
+
+.plan2032-error-text {
+  color: var(--red);
+  font-size: 11px;
+}
+
+.plan2032-green {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.plan2032-delete-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+/* ── Advisor ── */
+.plan2032-advisor-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.plan2032-advisor-tabs button {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.plan2032-advisor-tabs button:hover {
+  color: var(--text-primary);
+}
+
+.plan2032-advisor-tabs button.active {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: var(--green);
+  font-weight: 600;
+}
+
+.plan2032-advisor-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.plan2032-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.plan2032-form-grid select {
+  width: 100%;
+}
+
+.plan2032-field-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.plan2032-advisor-grid input[type='range'] {
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+
+/* ── Advice box ── */
+.plan2032-advice-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.plan2032-advice-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plan2032-advice-item strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.plan2032-advice-item p {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.plan2032-pill {
+  align-self: flex-start;
+  background: var(--green-dim);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  margin-bottom: 4px;
+}
+
+/* ── Macro buttons ── */
+.plan2032-macro-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.plan2032-macro-buttons button {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.plan2032-macro-buttons button:hover {
+  color: var(--text-primary);
+}
+
+.plan2032-macro-buttons button.active {
+  background: var(--green-dim);
+  border-color: var(--green);
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* ── Discipline ── */
+.plan2032-discipline-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.plan2032-discipline-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .plan2032-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plan2032-layout-two,
+  .plan2032-form-grid,
+  .plan2032-discipline-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .plan2032-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+}
