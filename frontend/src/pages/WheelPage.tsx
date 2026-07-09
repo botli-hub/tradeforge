@@ -5,6 +5,7 @@ import {
   getWheelCycles, getWheelTrades, recordWheelTrade, updateWheelTrade, deleteWheelTrade,
   getWheelStats, getWheelSuggest, triggerWheelTimingScan, getWheelTimingSignals,
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
+  getWheelPoolScan, pushWheelPoolScan, WheelScanResult,
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
   WheelScanStatus, WheelTimingHistoryPage, WheelOpenPositionItem, WheelRollOptions,
@@ -276,6 +277,10 @@ export default function WheelPage() {
   // Roll 弹窗
   const [rollData, setRollData] = useState<WheelRollOptions | null>(null)
   const [rollLoading, setRollLoading] = useState(false)
+  // 全池扫描
+  const [poolScan, setPoolScan] = useState<WheelScanResult | null>(null)
+  const [poolScanLoading, setPoolScanLoading] = useState(false)
+  const [poolPushing, setPoolPushing] = useState(false)
 
   // 添加标的表单
   const [addSymbol, setAddSymbol] = useState('')
@@ -313,6 +318,34 @@ export default function WheelPage() {
       setError(e.message)
     }
   }, [])
+
+  async function handlePoolScan(refresh = false) {
+    setPoolScanLoading(true)
+    setError(null)
+    try {
+      const st = getAppSettings()
+      setPoolScan(await getWheelPoolScan(st.marketHost, st.marketPort, refresh))
+    } catch (e: any) {
+      setError('全池扫描失败:' + e.message)
+    } finally {
+      setPoolScanLoading(false)
+    }
+  }
+
+  async function handlePoolPush() {
+    setPoolPushing(true)
+    setError(null)
+    try {
+      const st = getAppSettings()
+      const r = await pushWheelPoolScan(st.marketHost, st.marketPort)
+      setPoolScan(r)
+      if (!r.telegram_sent) setError('扫描完成,但 Telegram 未配置或发送失败(前往「设置」页检查)')
+    } catch (e: any) {
+      setError('扫描推送失败:' + e.message)
+    } finally {
+      setPoolPushing(false)
+    }
+  }
 
   async function handleRoll(cycleId: string) {
     setRollLoading(true)
@@ -497,6 +530,86 @@ export default function WheelPage() {
       {/* ── 看板 ── */}
       {tab === 'board' && (
         <div>
+          {/* 全池扫描 */}
+          <div className="card" style={{ padding: '12px 18px', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>🎯 全池扫描</span>
+              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+                disabled={poolScanLoading || poolPushing} onClick={() => handlePoolScan(false)}>
+                {poolScanLoading ? '扫描中...' : '扫描全池'}
+              </button>
+              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+                disabled={poolScanLoading || poolPushing} onClick={() => handlePoolScan(true)}
+                title="清掉期权链缓存,强制拉最新行情">
+                强制刷新
+              </button>
+              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+                disabled={poolScanLoading || poolPushing} onClick={handlePoolPush}>
+                {poolPushing ? '推送中...' : '扫描并推送 TG'}
+              </button>
+              <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                遍历全部启用标的,持股扫卖Call、有余量扫卖Put,按综合分(年化×流动性×趋势×财报×IV)跨标的排序
+              </span>
+            </div>
+            {poolScan && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                  {fmtDate(poolScan.scanned_at)} 扫描 {poolScan.targets_scanned} 个标的,
+                  命中 {poolScan.total_found} 个机会(展示前 {poolScan.opportunities.length})
+                  {poolScan.errors.length > 0 && <span style={{ color: '#fb923c' }}> · {poolScan.errors.length} 个获取失败</span>}
+                  {poolScan.skipped.length > 0 && <span> · 跳过:{poolScan.skipped.map(k => `${k.symbol}(${k.reason})`).join('、')}</span>}
+                </div>
+                {poolScan.opportunities.length === 0 ? (
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>没有满足条件的机会,可在「标的设置」放宽 delta/DTE/年化参数</div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr>
+                        {['标的', '方向', '到期(DTE)', 'Strike', 'Δ', 'Bid', '点差%', '年化%', '评分', '标签', ''].map(h => (
+                          <th key={h} style={{ textAlign: 'left', padding: '6px 8px' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {poolScan.opportunities.map((o, i) => (
+                        <tr key={`${o.symbol}-${o.contract_code}-${i}`} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '6px 8px', fontWeight: 600 }}>{o.symbol}</td>
+                          <td style={{ padding: '6px 8px', color: o.side === 'PUT' ? '#4ade80' : '#a78bfa' }}>
+                            {o.side === 'PUT' ? '卖Put' : '卖Call'}
+                          </td>
+                          <td style={{ padding: '6px 8px' }}>{o.expiry?.slice(0, 10)}({o.dte}天)</td>
+                          <td style={{ padding: '6px 8px' }}>${fmt(o.strike)}</td>
+                          <td style={{ padding: '6px 8px' }}>{o.delta?.toFixed(2)}</td>
+                          <td style={{ padding: '6px 8px' }}>${fmt(o.bid)}</td>
+                          <td style={{ padding: '6px 8px' }}>{o.spread_pct != null ? o.spread_pct : '--'}</td>
+                          <td style={{ padding: '6px 8px' }}>{fmt(o.annualized, 1)}</td>
+                          <td style={{ padding: '6px 8px', fontWeight: 700 }}
+                            title={o.score_factors ? `年化 ${o.score_factors.annualized} × 流动性 ${o.score_factors.liquidity} × 趋势 ${o.score_factors.trend} × 财报 ${o.score_factors.earnings} × IV加成 ${o.score_factors.iv_bonus} × delta偏好 ${o.score_factors.delta_pref}` : undefined}>
+                            {fmt(o.score, 1)}
+                          </td>
+                          <td style={{ padding: '6px 8px', fontSize: 11 }}>
+                            {o.trend === 'DOWN' && <span style={{ color: '#f87171', marginRight: 6 }}>⚠趋势弱</span>}
+                            {o.trend === 'WEAK' && <span style={{ color: '#fb923c', marginRight: 6 }}>↓EMA50</span>}
+                            {o.covers_earnings && <span style={{ color: '#fb923c', marginRight: 6 }}>含财报</span>}
+                            {o.exceeds_capital && <span style={{ color: '#f87171' }}>超上限</span>}
+                            {(o.iv_rank ?? 0) >= 70 && <span style={{ color: '#38bdf8' }}>IV高</span>}
+                          </td>
+                          <td style={{ padding: '6px 8px' }}>
+                            <button className="btn" style={{ fontSize: 11, padding: '2px 10px' }}
+                              disabled={suggestLoading}
+                              onClick={() => handleSuggest(o.symbol, o.side === 'PUT' ? 'put' : 'call', o.cycle_id ?? undefined)}>
+                              详情
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* 开仓时机 */}
           <div className="card" style={{ padding: '12px 18px', marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: timingSignals.length ? 8 : 0 }}>
@@ -700,13 +813,14 @@ export default function WheelPage() {
                   <VolatilityBar v={suggest.volatility} />
                 </div>
               )}
-              {(suggest.earnings_warn || suggest.delta_preference) && (
+              {(suggest.earnings_warn || suggest.delta_preference || suggest.trend_warning) && (
                 <div style={{ display: 'flex', gap: 16, fontSize: 12, marginBottom: 10, flexWrap: 'wrap' }}>
                   {suggest.earnings_warn && (
                     <span style={{ color: '#fb923c' }}>
                       ⚠ 财报 {suggest.earnings_date}(距今 {suggest.days_to_earnings} 天),标"含财报"的合约到期前将经历财报,权利金高但风险大
                     </span>
                   )}
+                  {suggest.trend_warning && <span style={{ color: '#f87171' }}>⚠ {suggest.trend_warning}</span>}
                   {suggest.delta_preference && <span style={{ color: '#38bdf8' }}>ℹ {suggest.delta_preference}</span>}
                 </div>
               )}
@@ -718,7 +832,7 @@ export default function WheelPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                      {['合约编号', 'Strike', 'Delta', 'DTE', 'Bid', '年化%(现金)', ...(suggest.side === 'PUT' ? ['年化%(保证金)'] : []), '虚值%', 'OI', suggest.side === 'PUT' ? '接货成本' : '若被行权赚', ''].map(h => (
+                      {['合约编号', 'Strike', 'Delta', 'DTE', 'Bid', '点差%', '年化%(现金)', ...(suggest.side === 'PUT' ? ['年化%(保证金)'] : []), '评分', '虚值%', 'OI', suggest.side === 'PUT' ? '接货成本' : '若被行权赚', ''].map(h => (
                         <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 500 }}>{h}</th>
                       ))}
                     </tr>
@@ -733,10 +847,15 @@ export default function WheelPage() {
                         <td style={{ padding: '7px 10px' }}>{s.delta}</td>
                         <td style={{ padding: '7px 10px' }}>{s.dte}</td>
                         <td style={{ padding: '7px 10px' }}>${fmt(s.bid)}</td>
+                        <td style={{ padding: '7px 10px', color: (s.spread_pct ?? 0) > 6 ? '#fb923c' : undefined }}>{s.spread_pct != null ? s.spread_pct : '--'}</td>
                         <td style={{ padding: '7px 10px', color: '#4ade80', fontWeight: 700 }}>{fmt(s.annualized, 1)}</td>
                         {suggest.side === 'PUT' && (
                           <td style={{ padding: '7px 10px', color: '#38bdf8' }}>{s.annualized_margin != null ? fmt(s.annualized_margin, 1) : '--'}</td>
                         )}
+                        <td style={{ padding: '7px 10px', fontWeight: 700 }}
+                          title={s.score_factors ? `年化 ${s.score_factors.annualized} × 流动性 ${s.score_factors.liquidity} × 趋势 ${s.score_factors.trend} × 财报 ${s.score_factors.earnings} × IV加成 ${s.score_factors.iv_bonus} × delta偏好 ${s.score_factors.delta_pref}` : undefined}>
+                          {s.score != null ? fmt(s.score, 1) : '--'}
+                        </td>
                         <td style={{ padding: '7px 10px' }}>{fmt(s.otm_pct, 1)}</td>
                         <td style={{ padding: '7px 10px' }}>{s.open_interest}</td>
                         <td style={{ padding: '7px 10px' }}>

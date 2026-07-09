@@ -550,10 +550,31 @@ export interface WheelSuggestion {
   contract_size: number
   annualized: number
   annualized_margin?: number | null
+  spread_pct?: number | null
   covers_earnings?: boolean
   otm_pct: number
   assigned_cost?: number
   if_called_total?: number
+  score?: number
+  score_factors?: {
+    annualized: number
+    liquidity: number
+    spread_pct: number | null
+    earnings: number
+    trend: number
+    iv_bonus: number
+    delta_pref: number
+  }
+}
+
+export interface TrendProfile {
+  ema50: number | null
+  ema200: number | null
+  above_ema50: boolean | null
+  above_ema200: boolean | null
+  trend: 'UP' | 'WEAK' | 'DOWN'
+  pct_vs_ema50: number | null
+  pct_vs_ema200: number | null
 }
 
 export interface VolatilityProfile {
@@ -584,6 +605,8 @@ export interface WheelSuggestResponse {
   days_to_earnings?: number | null
   earnings_warn?: boolean
   delta_preference?: string | null
+  trend?: TrendProfile | null
+  trend_warning?: string | null
 }
 
 export interface WheelOpenPositionItem {
@@ -660,6 +683,19 @@ export interface BackendConfig {
     margin_ratio: number
     earnings_warn_days: number
     weekly_report: boolean
+  }
+  wheel_scan?: {
+    max_spread_pct: number
+    spread_soft_pct: number
+    earnings_penalty: number
+    iv_rank_bonus: number
+    trend_penalty_below_ema50: number
+    trend_penalty_below_ema200: number
+    top_per_symbol: number
+    top_overall: number
+    chain_cache_ttl_sec: number
+    symbol_interval_sec: number
+    auto_push_minutes: number
   }
 }
 
@@ -772,6 +808,41 @@ export async function deleteWheelTrade(tradeId: string) {
 
 export async function getWheelStats() {
   return request<WheelStats>('/api/wheel/stats')
+}
+
+export interface WheelScanOpportunity extends WheelSuggestion {
+  symbol: string
+  name?: string | null
+  side: 'PUT' | 'CALL'
+  cycle_id?: string | null
+  spot_price: number | null
+  trend?: 'UP' | 'WEAK' | 'DOWN' | null
+  iv_rank?: number | null
+  earnings_warn?: boolean
+  exceeds_capital?: boolean
+}
+
+export interface WheelScanResult {
+  scanned_at: string
+  targets_scanned: number
+  opportunities: WheelScanOpportunity[]
+  total_found: number
+  skipped: { symbol: string; reason: string }[]
+  errors: { symbol: string; side: string; error: string }[]
+  telegram_sent?: boolean
+}
+
+export async function getWheelPoolScan(host: string, port: number, refresh = false, useLast = false) {
+  return request<WheelScanResult>(
+    `/api/wheel/scan?host=${encodeURIComponent(host)}&port=${port}&refresh=${refresh}&use_last=${useLast}`
+  )
+}
+
+export async function pushWheelPoolScan(host: string, port: number) {
+  return request<WheelScanResult>(
+    `/api/wheel/scan/push?host=${encodeURIComponent(host)}&port=${port}`,
+    { method: 'POST' }
+  )
 }
 
 export async function getWheelSuggest(symbol: string, side: 'put' | 'call', host: string, port: number, cycleId?: string) {

@@ -36,6 +36,9 @@ async def startup():
     threading.Thread(target=_iv_snapshot_loop, daemon=True).start()
     # 每周一 Telegram 周报
     threading.Thread(target=_weekly_report_loop, daemon=True).start()
+    # Wheel 全池扫描定时推送(wheel_scan.auto_push_minutes,0=关闭)
+    from app.services.wheel_scanner import auto_push_loop
+    threading.Thread(target=auto_push_loop, daemon=True).start()
 
 
 def _iv_snapshot_loop():

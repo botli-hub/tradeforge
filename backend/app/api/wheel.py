@@ -234,7 +234,11 @@ def _annualized(premium: float, collateral: float, dte: int) -> float:
 def _suggest(symbol: str, side: str, host: str, port: int,
              cycle_id: Optional[str] = None) -> Dict[str, Any]:
     """side: PUT | CALL"""
-    from app.api.options import _load_option_expirations, _load_option_chain
+    # 走扫描器的 TTL 缓存,单标的查询与全池扫描共享期权链,限频友好
+    from app.services.wheel_scanner import (
+        cached_expirations as _load_option_expirations,
+        cached_chain as _load_option_chain,
+    )
 
     target = repo.get_target(symbol)
     if target is None:
@@ -276,6 +280,9 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     pos_cfg = _wheel_cfg().get("wheel_position", {}) or {}
     margin_ratio = pos_cfg.get("margin_ratio", 0.25)
 
+    from app.core.wheel_score import get_scan_cfg, spread_pct, score_contract, trend_profile, is_iv_high
+    scan_cfg = get_scan_cfg(_wheel_cfg())
+
     # 财报标注
     from app.core.earnings import get_next_earnings
     earnings_date = get_next_earnings(symbol)
@@ -297,6 +304,10 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 continue
             bid = c.get("bid") or 0
             if bid <= 0:
+                continue
+            # 流动性:bid-ask spread 过宽的合约实际成交会吃掉大量收益,直接过滤
+            sp = spread_pct(bid, c.get("ask"))
+            if sp is not None and sp > scan_cfg["max_spread_pct"]:
                 continue
             strike = c["strike"]
             size = c.get("contract_size") or 100
@@ -329,12 +340,11 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 "volume": c.get("volume"), "contract_size": size,
                 "annualized": ann,
                 "annualized_margin": ann_margin,
+                "spread_pct": sp,
                 "covers_earnings": covers_earnings,
                 "otm_pct": round((spot - strike) / spot * 100 if side == "PUT" else (strike - spot) / spot * 100, 2),
                 **extra,
             })
-
-    suggestions.sort(key=lambda x: x["annualized"], reverse=True)
 
     # 波动率档案(用已拉取的链,不额外请求)
     volatility = None
@@ -345,16 +355,36 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         except Exception as e:
             logger.warning("volatility profile 失败: %s", e)
 
-    # 动态 delta:IV 高位(rank≥70 或 IV/HV≥1.3)时偏好更低 delta——
-    # 用 annualized×(1−delta) 重排,同等年化下低 delta 排前
+    # 趋势档案(本地日K EMA50/EMA200,无额外请求)
+    trend = None
+    try:
+        trend = trend_profile(symbol, spot)
+    except Exception as e:
+        logger.warning("trend profile 失败: %s", e)
+
+    # 综合打分:年化 × 流动性 × 趋势 × 财报 × IV加成 × (IV高位低delta偏好)
+    for s in suggestions:
+        scored = score_contract(
+            s["annualized"], side, s["delta"], s.get("spread_pct"),
+            s["covers_earnings"], volatility, trend, scan_cfg)
+        if scored:
+            s["score"] = scored["score"]
+            s["score_factors"] = scored["factors"]
+        else:
+            s["score"] = 0.0
+    suggestions.sort(key=lambda x: x.get("score") or 0, reverse=True)
+
     delta_preference = None
-    iv_high = bool(volatility and (
-        (volatility.get("iv_rank") or 0) >= 70 or (volatility.get("iv_hv_ratio") or 0) >= 1.3))
-    if iv_high:
-        suggestions.sort(key=lambda x: x["annualized"] * (1 - x["delta"]), reverse=True)
+    if is_iv_high(volatility):
         delta_preference = "IV 高位:同等年化优先更低 delta(更远离行权价)"
         if volatility and volatility.get("iv_rank_source") == "hv_proxy":
             delta_preference += "(IV 历史不足,当前用 HV rank 近似)"
+
+    trend_warning = None
+    if side == "PUT" and trend and trend.get("trend") == "DOWN":
+        trend_warning = f"现价低于 EMA200({trend.get('ema200')}),下跌趋势中卖 Put 接货风险高,评分已降权"
+    elif side == "PUT" and trend and trend.get("trend") == "WEAK":
+        trend_warning = f"现价低于 EMA50({trend.get('ema50')}),趋势转弱,评分已降权"
 
     from datetime import date as _date2
     days_to_earn = None
@@ -372,6 +402,8 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                     "floor_price": floor},
         "suggestions": suggestions[:20],
         "volatility": volatility,
+        "trend": trend,
+        "trend_warning": trend_warning,
         "margin_ratio": margin_ratio,
         "earnings_date": earnings_date,
         "days_to_earnings": days_to_earn,
@@ -548,6 +580,39 @@ def roll_options(cycle_id: str = Query(...), host: str = Query("127.0.0.1"), por
         "candidates": candidates[:10],
         "warnings": warnings,
     }
+
+
+# ── 全池扫描 ──────────────────────────────────────────────────────────────────
+
+@router.get("/scan")
+def scan_all(host: str = Query("127.0.0.1"), port: int = Query(11111),
+             refresh: bool = Query(False, description="true=清缓存强制拉最新期权链"),
+             use_last: bool = Query(False, description="true=直接返回上次扫描结果(秒回)")):
+    """扫描所有启用标的,自动判定卖 Put/卖 Call,按综合分跨标的排序输出 Top 机会"""
+    from app.services import wheel_scanner
+    if use_last:
+        last = wheel_scanner.get_last_result()
+        if last:
+            return last
+    try:
+        return wheel_scanner.run_scan(host, port, force_refresh=refresh)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"全池扫描失败(OpenD?): {e}")
+
+
+@router.post("/scan/push")
+def scan_and_push(host: str = Query("127.0.0.1"), port: int = Query(11111),
+                  refresh: bool = Query(False)):
+    """手动触发扫描并推送 Telegram"""
+    from app.services import wheel_scanner
+    try:
+        return wheel_scanner.push_scan(host, port, force_refresh=refresh)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"扫描推送失败: {e}")
 
 
 @router.get("/suggest/put")

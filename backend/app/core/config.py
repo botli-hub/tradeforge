@@ -60,6 +60,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "profit_target_pct": 50, "margin_ratio": 0.25,
         "earnings_warn_days": 14, "weekly_report": True,
     },
+    "wheel_scan": {
+        "max_spread_pct": 10.0, "spread_soft_pct": 4.0,
+        "earnings_penalty": 0.85, "iv_rank_bonus": 0.20,
+        "trend_penalty_below_ema50": 0.90, "trend_penalty_below_ema200": 0.70,
+        "top_per_symbol": 3, "top_overall": 20,
+        "chain_cache_ttl_sec": 900, "symbol_interval_sec": 2,
+        "auto_push_minutes": 0,
+    },
 }
 
 
