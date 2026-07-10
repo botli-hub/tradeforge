@@ -268,19 +268,28 @@ def upsert_timing_history(sig) -> None:
             """
             INSERT INTO wheel_timing_history
                 (contract_code, symbol, side, strike, expiry, ema_type, ema_value,
-                 trigger_price, iv_rank, underlying_price, times_triggered, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                 trigger_price, iv_rank, underlying_price,
+                 delta, bid, annualized, dte, below_floor,
+                 times_triggered, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
             ON CONFLICT(contract_code) DO UPDATE SET
                 strike = excluded.strike, expiry = excluded.expiry,
                 ema_type = excluded.ema_type, ema_value = excluded.ema_value,
                 trigger_price = excluded.trigger_price, iv_rank = excluded.iv_rank,
                 underlying_price = excluded.underlying_price,
+                delta = excluded.delta, bid = excluded.bid,
+                annualized = excluded.annualized, dte = excluded.dte,
+                below_floor = excluded.below_floor,
                 times_triggered = wheel_timing_history.times_triggered + 1,
                 last_seen = excluded.last_seen
             """,
             (sig.contract_code, sig.symbol, side, sig.strike, sig.expiry,
              sig.ema_type, sig.ema_value, sig.trigger_price, sig.iv_rank,
-             sig.underlying_price, now, now),
+             sig.underlying_price,
+             getattr(sig, "delta", None), getattr(sig, "bid", None),
+             getattr(sig, "annualized", None), getattr(sig, "dte", None),
+             1 if getattr(sig, "below_floor", False) else 0,
+             now, now),
         )
         conn.commit()
     finally:

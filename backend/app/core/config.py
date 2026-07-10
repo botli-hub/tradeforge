@@ -53,8 +53,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "wheel_timing": {
         "dte_min": 30, "dte_max": 500, "contract_max_per_symbol": 0,
-        "iv_percentile_threshold": 0, "cooldown_trading_days": 3,
+        "iv_percentile_threshold": 0, "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
+        # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
+        "strike_range_down": 0.20, "strike_range_up": 0.10,
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,

@@ -662,6 +662,19 @@ def init_db():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_timing_last_seen ON wheel_timing_history(last_seen DESC)")
 
+    # 兼容旧库:为时机历史增补合约收益字段(delta/bid/年化/DTE/底线警告)
+    for ddl in [
+        "ALTER TABLE wheel_timing_history ADD COLUMN delta REAL",
+        "ALTER TABLE wheel_timing_history ADD COLUMN bid REAL",
+        "ALTER TABLE wheel_timing_history ADD COLUMN annualized REAL",
+        "ALTER TABLE wheel_timing_history ADD COLUMN dte INTEGER",
+        "ALTER TABLE wheel_timing_history ADD COLUMN below_floor INTEGER DEFAULT 0",
+    ]:
+        try:
+            cursor.execute(ddl)
+        except Exception:
+            pass
+
     # 一次性回填:历史表为空时,从既有 WHEEL 信号导入(按合约合并)
     try:
         row = cursor.execute("SELECT COUNT(1) AS c FROM wheel_timing_history").fetchone()

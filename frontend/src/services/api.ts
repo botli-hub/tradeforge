@@ -917,6 +917,11 @@ export interface WheelTimingHistoryItem {
   trigger_price: number | null
   iv_rank: number | null
   underlying_price: number | null
+  delta: number | null
+  bid: number | null
+  annualized: number | null
+  dte: number | null
+  below_floor: number | null
   times_triggered: number
   first_seen: string
   last_seen: string

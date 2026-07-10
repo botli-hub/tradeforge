@@ -901,14 +901,14 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['最近发现', '方向', '标的', '合约', 'Strike', '到期', '触发价', '触及均线', 'IV分位', '标的价', '次数', '首次发现', '操作'].map(h => (
+                {['最近发现', '方向', '标的', '合约', 'Strike', '到期(DTE)', '触发价', 'Δ', '年化%', '触及均线', 'IV分位', '标的价', '次数', '首次发现', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {(!timingHistory || timingHistory.items.length === 0) && (
-                <tr><td colSpan={13} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无历史时机,去看板点「立即扫描」</td></tr>
+                <tr><td colSpan={15} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无历史时机,去看板点「立即扫描」</td></tr>
               )}
               {timingHistory?.items.map(item => (
                 <tr key={item.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
@@ -923,8 +923,13 @@ export default function WheelPage() {
                   <td style={{ padding: '7px 10px', fontWeight: 600 }}>{item.symbol}</td>
                   <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11 }}>{item.contract_code}</td>
                   <td style={{ padding: '7px 10px' }}>{item.strike != null ? `$${fmt(item.strike)}` : '--'}</td>
-                  <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{item.expiry || '--'}</td>
-                  <td style={{ padding: '7px 10px' }}>${fmt(item.trigger_price)}</td>
+                  <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{item.expiry || '--'}{item.dte != null ? `(${item.dte}天)` : ''}</td>
+                  <td style={{ padding: '7px 10px' }}>
+                    ${fmt(item.trigger_price)}
+                    {!!item.below_floor && <span title="信号触发时标的现价低于接货底线" style={{ color: '#f87171', fontSize: 10, marginLeft: 4 }}>低于底线</span>}
+                  </td>
+                  <td style={{ padding: '7px 10px' }}>{item.delta != null ? item.delta.toFixed(2) : '--'}</td>
+                  <td style={{ padding: '7px 10px', color: '#4ade80', fontWeight: 600 }}>{item.annualized != null ? fmt(item.annualized, 1) : '--'}</td>
                   <td style={{ padding: '7px 10px' }}>
                     {item.ema_type === 'EMA200' ? '🔥' : ''}{item.ema_type}({fmt(item.ema_value)})
                   </td>
