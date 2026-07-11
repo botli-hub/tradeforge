@@ -373,6 +373,12 @@ export default function WheelPage() {
   const [rollLoading, setRollLoading] = useState(false)
   // 看板主从布局:当前选中标的
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  // 看板行内编辑标的参数
+  const [editParams, setEditParams] = useState<{
+    floor_price: string; delta_min: string; delta_max: string
+    dte_min: string; dte_max: string; min_annualized: string
+  } | null>(null)
+  const [savingParams, setSavingParams] = useState(false)
   // 全池扫描
   const [poolScan, setPoolScan] = useState<WheelScanResult | null>(null)
   const [poolScanLoading, setPoolScanLoading] = useState(false)
@@ -804,7 +810,7 @@ export default function WheelPage() {
                     const hasProfit = cs.some(c => openChecks[c.id]?.profit_hit)
                     const isIdle = t.idle_days != null && t.idle_days >= 5
                     return (
-                      <div key={t.symbol} onClick={() => setSelectedSymbol(t.symbol)} style={{
+                      <div key={t.symbol} onClick={() => { setSelectedSymbol(t.symbol); setEditParams(null) }} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '9px 10px', borderRadius: 6, cursor: 'pointer', marginBottom: 2,
                         background: isSel ? 'var(--accent)22' : 'transparent',
@@ -838,35 +844,93 @@ export default function WheelPage() {
 
                 {/* ── 右:选中标的详情 ── */}
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {/* 标的头部 */}
-                  <div className="card" style={{ padding: '12px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 700, fontSize: 18 }}>{sel.symbol}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{sel.name}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>底线 ${fmt(sel.floor_price)}</span>
-                      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        Δ {sel.delta_min}~{sel.delta_max} · DTE {sel.dte_min}~{sel.dte_max} · 年化≥{sel.min_annualized}%
-                      </span>
-                      {sel.idle_days != null && sel.idle_days >= 5 && (
-                        <span style={{ fontSize: 12, color: '#fb923c' }}>⏸ 空转 {sel.idle_days} 天</span>
+                  {/* 标的头部(参数可行内编辑) */}
+                  <div className="card" style={{ padding: '10px 16px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 700, fontSize: 17 }}>{sel.symbol}</span>
+                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{sel.name}</span>
+                        {!editParams && (
+                          <>
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                              底线 <b style={{ color: 'var(--text)' }}>${fmt(sel.floor_price)}</b>
+                              {' · '}Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
+                              {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
+                              {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
+                            </span>
+                            <button title="修改找货参数" onClick={() => setEditParams({
+                              floor_price: String(sel.floor_price), delta_min: String(sel.delta_min),
+                              delta_max: String(sel.delta_max), dte_min: String(sel.dte_min),
+                              dte_max: String(sel.dte_max), min_annualized: String(sel.min_annualized),
+                            })} style={{
+                              border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer',
+                              borderRadius: 6, padding: '1px 8px', fontSize: 11, color: 'var(--accent)',
+                            }}>✎ 编辑</button>
+                          </>
+                        )}
+                        {sel.idle_days != null && sel.idle_days >= 5 && !editParams && (
+                          <span style={{ fontSize: 12, color: '#fb923c' }}>⏸ 空转 {sel.idle_days} 天</span>
+                        )}
+                      </div>
+                      {!editParams && (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 14px' }}
+                            disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'put')}>找 Put</button>
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 14px', color: 'var(--accent)' }}
+                            onClick={() => setTradeModal({
+                              initial: { symbol: sel.symbol, trade_type: 'SELL_PUT' },
+                              status: 'NONE', newCycle: true,
+                            })}>
+                            + 新开轮子
+                          </button>
+                        </div>
                       )}
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 14px' }}
-                        disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'put')}>找 Put</button>
-                      <button className="btn" style={{ fontSize: 12, padding: '4px 14px', color: 'var(--accent)' }}
-                        onClick={() => setTradeModal({
-                          initial: { symbol: sel.symbol, trade_type: 'SELL_PUT' },
-                          status: 'NONE', newCycle: true,
-                        })}>
-                        + 新开轮子
-                      </button>
-                    </div>
+                    {editParams && (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+                        {([
+                          ['底线$', 'floor_price', 90], ['Δ min', 'delta_min', 64], ['Δ max', 'delta_max', 64],
+                          ['DTE min', 'dte_min', 64], ['DTE max', 'dte_max', 64], ['年化≥%', 'min_annualized', 64],
+                        ] as [string, keyof NonNullable<typeof editParams>, number][]).map(([lab, key, w]) => (
+                          <label key={key} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                            {lab}
+                            <input type="number" value={editParams[key]} style={{
+                              display: 'block', width: w, padding: '4px 6px', marginTop: 2,
+                              background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                              borderRadius: 4, color: 'var(--text)', fontSize: 12,
+                            }} onChange={e => setEditParams(f => f ? { ...f, [key]: e.target.value } : f)} />
+                          </label>
+                        ))}
+                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 14px' }}
+                          disabled={savingParams} onClick={async () => {
+                            setSavingParams(true)
+                            setError(null)
+                            try {
+                              await updateWheelTarget(sel.symbol, {
+                                floor_price: parseFloat(editParams.floor_price),
+                                delta_min: parseFloat(editParams.delta_min),
+                                delta_max: parseFloat(editParams.delta_max),
+                                dte_min: parseInt(editParams.dte_min),
+                                dte_max: parseInt(editParams.dte_max),
+                                min_annualized: parseFloat(editParams.min_annualized),
+                              })
+                              setEditParams(null)
+                              await loadAll()
+                            } catch (e: any) {
+                              setError('参数保存失败:' + e.message)
+                            } finally {
+                              setSavingParams(false)
+                            }
+                          }}>{savingParams ? '保存中...' : '保存'}</button>
+                        <button className="btn" style={{ fontSize: 12, padding: '4px 14px' }}
+                          onClick={() => setEditParams(null)}>取消</button>
+                      </div>
+                    )}
                   </div>
 
                   {/* 轮子列表 */}
                   {selCycles.length === 0 && (
-                    <div className="card" style={{ padding: '24px 18px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
+                    <div className="card" style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
                       该标的还没有进行中的轮子 —— 点「找 Put」筛选合约,成交后回来登记开轮
                     </div>
                   )}
@@ -877,20 +941,16 @@ export default function WheelPage() {
                     const dteVal = c.open_dte ?? null
                     return (
                       <div key={c.id} className="card" style={{
-                        padding: '14px 18px',
+                        padding: '10px 14px', display: 'flex', gap: 14, alignItems: 'stretch',
                         borderLeft: `3px solid ${STAGE_COLORS[status]}`,
                       }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)' }}>轮 #{idx + 1}</span>
-                            <span style={{
-                              padding: '2px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700,
-                              color: STAGE_COLORS[status], background: STAGE_COLORS[status] + '22',
-                              border: `1px solid ${STAGE_COLORS[status]}55`,
-                            }}>{STAGE_LABELS[status]}</span>
+                        {/* 左:信息区 */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+                            {selCycles.length > 1 && (
+                              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>轮 #{idx + 1}</span>
+                            )}
                             <StageIndicator status={status} />
-                          </div>
-                          <span style={{ display: 'flex', gap: 6 }}>
                             {check?.itm && (
                               <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#f8717122', color: '#f87171', border: '1px solid #f8717155' }}>ITM</span>
                             )}
@@ -900,79 +960,80 @@ export default function WheelPage() {
                             {check?.profit_hit && (
                               <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#4ade8022', color: '#4ade80', border: '1px solid #4ade8055' }}>达标</span>
                             )}
-                          </span>
-                        </div>
-
-                        {/* 在场合约 */}
-                        {(status === 'CSP_OPEN' || status === 'CC_OPEN') && (
-                          <div style={{ background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 12px', fontSize: 12, marginBottom: 10 }}>
-                            <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                              {c.open_contract_code || `${c.open_option_type} $${c.open_strike}`}
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(76px, 1fr))', gap: '8px 10px' }}>
-                              {([
-                                ['Strike', `$${fmt(c.open_strike)}`, undefined],
-                                ['到期', `${(c.open_expiry || '').slice(5)}`, undefined],
-                                ['DTE', dteVal != null ? `${dteVal}天` : '--', dteVal != null && dteVal <= 7 ? '#fb923c' : undefined],
-                                ['开仓价', `$${fmt(c.open_price)}`, undefined],
-                                ...(check ? [
-                                  ['现价', `$${fmt(check.current_price)}`, undefined],
-                                  ['浮盈', profitPct != null ? `${profitPct}%` : '--',
-                                    (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : undefined],
-                                  ['买回价', `$${fmt(check.buyback_ask)}`, undefined],
-                                ] as [string, string, string | undefined][] : []),
-                              ] as [string, string, string | undefined][]).map(([lab, val, color]) => (
-                                <div key={lab}>
-                                  <div style={{ color: 'var(--text-secondary)', fontSize: 10, marginBottom: 1 }}>{lab}</div>
-                                  <div style={{ fontWeight: 600, color: color || 'var(--text)' }}>{val}</div>
-                                </div>
-                              ))}
-                            </div>
-                            {profitPct != null && profitPct > 0 && (
-                              <div style={{ marginTop: 8 }}>
-                                <div style={{ height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
-                                  <div style={{
-                                    height: '100%', borderRadius: 2,
-                                    width: `${Math.min(profitPct / profitTarget * 100, 100)}%`,
-                                    background: profitPct >= profitTarget ? '#4ade80' : '#38bdf8',
-                                    transition: 'width .3s',
-                                  }} />
-                                </div>
-                                <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>
-                                  止盈进度 {profitPct}% / {profitTarget}%
-                                </div>
-                              </div>
-                            )}
                           </div>
-                        )}
 
-                        {/* 数据 chips */}
-                        <div style={{ display: 'flex', gap: 6, fontSize: 11, marginBottom: 10, flexWrap: 'wrap' }}>
-                          {([
-                            ...(c.shares > 0 ? [[`持股 ${c.shares} @ $${fmt(c.share_cost)}`, undefined]] as [string, string | undefined][] : []),
-                            ...(c.cost_basis != null ? [[`Cost Basis $${fmt(c.cost_basis)}`, '#4ade80']] as [string, string | undefined][] : []),
-                            [[`本轮权利金 $${fmt(c.total_premium)}`, (c.total_premium ?? 0) > 0 ? '#4ade80' : undefined]][0],
-                          ] as [string, string | undefined][]).map(([txt, color]) => (
-                            <span key={txt} style={{
-                              padding: '2px 9px', borderRadius: 10, border: '1px solid var(--border)',
-                              color: color || 'var(--text-secondary)', background: 'var(--bg-secondary)',
-                              whiteSpace: 'nowrap',
-                            }}>{txt}</span>
-                          ))}
+                          {(status === 'CSP_OPEN' || status === 'CC_OPEN') && (
+                            <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '8px 10px', fontSize: 12, marginBottom: 8 }}>
+                              <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                                {c.open_contract_code || `${c.open_option_type} $${c.open_strike}`}
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))', gap: '6px 8px' }}>
+                                {([
+                                  ['Strike', `$${fmt(c.open_strike)}`, undefined],
+                                  ['到期', `${(c.open_expiry || '').slice(5)}`, undefined],
+                                  ['DTE', dteVal != null ? `${dteVal}天` : '--', dteVal != null && dteVal <= 7 ? '#fb923c' : undefined],
+                                  ['开仓价', `$${fmt(c.open_price)}`, undefined],
+                                  ...(check ? [
+                                    ['现价', `$${fmt(check.current_price)}`, undefined],
+                                    ['浮盈', profitPct != null ? `${profitPct}%` : '--',
+                                      (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : undefined],
+                                    ['买回价', `$${fmt(check.buyback_ask)}`, undefined],
+                                  ] as [string, string, string | undefined][] : []),
+                                ] as [string, string, string | undefined][]).map(([lab, val, color]) => (
+                                  <div key={lab}>
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{lab}</div>
+                                    <div style={{ fontWeight: 600, color: color || 'var(--text)', fontSize: 12 }}>{val}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              {profitPct != null && profitPct > 0 && (
+                                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+                                    <div style={{
+                                      height: '100%', borderRadius: 2,
+                                      width: `${Math.min(profitPct / profitTarget * 100, 100)}%`,
+                                      background: profitPct >= profitTarget ? '#4ade80' : '#38bdf8',
+                                      transition: 'width .3s',
+                                    }} />
+                                  </div>
+                                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                    止盈 {profitPct}%/{profitTarget}%
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div style={{ display: 'flex', gap: 6, fontSize: 11, flexWrap: 'wrap' }}>
+                            {([
+                              ...(c.shares > 0 ? [[`持股 ${c.shares} @ $${fmt(c.share_cost)}`, undefined]] as [string, string | undefined][] : []),
+                              ...(c.cost_basis != null ? [[`Cost Basis $${fmt(c.cost_basis)}`, '#4ade80']] as [string, string | undefined][] : []),
+                              [[`本轮权利金 $${fmt(c.total_premium)}`, (c.total_premium ?? 0) > 0 ? '#4ade80' : undefined]][0],
+                            ] as [string, string | undefined][]).map(([txt, color]) => (
+                              <span key={txt} style={{
+                                padding: '2px 9px', borderRadius: 10, border: '1px solid var(--border)',
+                                color: color || 'var(--text-secondary)', background: 'var(--bg-secondary)',
+                                whiteSpace: 'nowrap',
+                              }}>{txt}</span>
+                            ))}
+                          </div>
                         </div>
 
-                        {/* 操作按钮 */}
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {/* 右:操作按钮列 */}
+                        <div style={{
+                          display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center',
+                          flexShrink: 0, width: 92, borderLeft: '1px solid var(--border)', paddingLeft: 12,
+                        }}>
                           {status === 'IDLE' && (
-                            <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }}
+                            <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'put', c.id)}>找 Put</button>
                           )}
                           {status === 'HOLDING' && (
-                            <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }}
+                            <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'call', c.id)}>找 Call</button>
                           )}
                           {(status === 'CSP_OPEN' || status === 'CC_OPEN') && check?.profit_hit && (
-                            <button className="btn" style={{ fontSize: 12, padding: '4px 12px', color: '#4ade80', fontWeight: 700 }}
+                            <button className="btn" style={{ fontSize: 12, padding: '4px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
                               onClick={() => setTradeModal({
                                 initial: {
                                   symbol: sel.symbol,
@@ -983,14 +1044,14 @@ export default function WheelPage() {
                                 },
                                 status, cycleId: c.id,
                               })}>
-                              💰 平仓锁定
+                              💰 平仓
                             </button>
                           )}
                           {(status === 'CSP_OPEN' || status === 'CC_OPEN') && (
-                            <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }}
+                            <button className="btn" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
                               disabled={rollLoading} onClick={() => handleRoll(c.id)}>看 Roll</button>
                           )}
-                          <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }}
+                          <button className="btn" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
                             onClick={() => setTradeModal({ initial: { symbol: sel.symbol }, status, cycleId: c.id })}>
                             登记交易
                           </button>
