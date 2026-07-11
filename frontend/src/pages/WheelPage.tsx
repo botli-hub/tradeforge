@@ -14,6 +14,10 @@ import {
 const STAGE_LABELS: Record<string, string> = {
   IDLE: '空仓', CSP_OPEN: '卖Put中', HOLDING: '持股', CC_OPEN: '卖Call中', CLOSED: '已结束',
 }
+// 轮子列表排序:在场合约(有风险要盯)优先,其次持股(该卖Call),空仓最后
+const CYCLE_STATUS_ORDER: Record<string, number> = {
+  CSP_OPEN: 0, CC_OPEN: 1, HOLDING: 2, IDLE: 3,
+}
 const STAGE_COLORS: Record<string, string> = {
   IDLE: 'var(--text-secondary)', CSP_OPEN: '#38bdf8', HOLDING: '#fbbf24', CC_OPEN: '#a78bfa', CLOSED: '#4ade80',
 }
@@ -76,13 +80,14 @@ function StageIndicator({ status }: { status: string }) {
       {stages.map((s, i) => (
         <span key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span style={{
-            padding: '2px 8px', borderRadius: 10, fontSize: 11,
+            padding: '1px 7px', borderRadius: 9, fontSize: 10,
             background: i === idx ? STAGE_COLORS[s] + '33' : 'transparent',
             color: i === idx ? STAGE_COLORS[s] : 'var(--text-secondary)',
             border: `1px solid ${i === idx ? STAGE_COLORS[s] : 'var(--border)'}`,
             fontWeight: i === idx ? 700 : 400,
+            whiteSpace: 'nowrap',
           }}>{STAGE_LABELS[s]}</span>
-          {i < stages.length - 1 && <span style={{ color: 'var(--text-secondary)', fontSize: 10 }}>→</span>}
+          {i < stages.length - 1 && <span style={{ color: 'var(--text-secondary)', fontSize: 9 }}>→</span>}
         </span>
       ))}
     </div>
@@ -799,7 +804,8 @@ export default function WheelPage() {
             const enabled = targets.filter(t => t.enabled)
             if (enabled.length === 0) return null
             const sel = enabled.find(t => t.symbol === selectedSymbol) || enabled[0]
-            const selCycles = sel.active_cycles || []
+            const selCycles = [...(sel.active_cycles || [])].sort(
+              (a, b) => (CYCLE_STATUS_ORDER[a.status] ?? 9) - (CYCLE_STATUS_ORDER[b.status] ?? 9))
             return (
               <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
                 {/* ── 左:标的列表 ── */}
@@ -943,101 +949,85 @@ export default function WheelPage() {
                     const check = openChecks[c.id]
                     const profitPct = check?.profit_pct ?? null
                     const dteVal = c.open_dte ?? null
+                    const hasOpen = status === 'CSP_OPEN' || status === 'CC_OPEN'
                     return (
                       <div key={c.id} className="card" style={{
-                        padding: '10px 14px', display: 'flex', gap: 14, alignItems: 'stretch',
+                        padding: '8px 12px', display: 'flex', gap: 12, alignItems: 'center',
                         borderLeft: `3px solid ${STAGE_COLORS[status]}`,
                       }}>
                         {/* 左:信息区 */}
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+                          {/* 行1:流程 + 徽章 + 汇总 chips */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             {selCycles.length > 1 && (
-                              <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)' }}>轮 #{idx + 1}</span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>#{idx + 1}</span>
                             )}
                             <StageIndicator status={status} />
                             {check?.itm && (
-                              <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#f8717122', color: '#f87171', border: '1px solid #f8717155' }}>ITM</span>
+                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#f8717122', color: '#f87171', border: '1px solid #f8717155' }}>ITM</span>
                             )}
                             {dteVal != null && dteVal <= 7 && (
-                              <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#fb923c22', color: '#fb923c', border: '1px solid #fb923c55' }}>临期</span>
+                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#fb923c22', color: '#fb923c', border: '1px solid #fb923c55' }}>临期</span>
                             )}
                             {check?.profit_hit && (
-                              <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#4ade8022', color: '#4ade80', border: '1px solid #4ade8055' }}>达标</span>
+                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#4ade8022', color: '#4ade80', border: '1px solid #4ade8055' }}>达标</span>
                             )}
+                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                              {c.shares > 0 && <>持股 {c.shares} @ ${fmt(c.share_cost)}{' · '}</>}
+                              {c.cost_basis != null && <>CB <b style={{ color: '#4ade80' }}>${fmt(c.cost_basis)}</b>{' · '}</>}
+                              权利金 <b style={{ color: (c.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(c.total_premium)}</b>
+                            </span>
                           </div>
-
-                          {(status === 'CSP_OPEN' || status === 'CC_OPEN') && (
-                            <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '8px 10px', fontSize: 12, marginBottom: 8 }}>
-                              <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                          {/* 行2:在场合约(单行内联) */}
+                          {hasOpen && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 6, fontSize: 12 }}>
+                              <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
                                 {c.open_contract_code || `${c.open_option_type} $${c.open_strike}`}
-                              </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(70px, 1fr))', gap: '6px 8px' }}>
-                                {([
-                                  ['Strike', `$${fmt(c.open_strike)}`, undefined],
-                                  ['到期', `${(c.open_expiry || '').slice(5)}`, undefined],
-                                  ['DTE', dteVal != null ? `${dteVal}天` : '--', dteVal != null && dteVal <= 7 ? '#fb923c' : undefined],
-                                  ['开仓价', `$${fmt(c.open_price)}`, undefined],
-                                  ...(check ? [
-                                    ['现价', `$${fmt(check.current_price)}`, undefined],
-                                    ['浮盈', profitPct != null ? `${profitPct}%` : '--',
-                                      (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : undefined],
-                                    ['买回价', `$${fmt(check.buyback_ask)}`, undefined],
-                                  ] as [string, string, string | undefined][] : []),
-                                ] as [string, string, string | undefined][]).map(([lab, val, color]) => (
-                                  <div key={lab}>
-                                    <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{lab}</div>
-                                    <div style={{ fontWeight: 600, color: color || 'var(--text)', fontSize: 12 }}>{val}</div>
-                                  </div>
-                                ))}
-                              </div>
+                              </span>
+                              <span style={{ color: 'var(--text-secondary)' }}>
+                                ${fmt(c.open_strike)}
+                                {' · '}{(c.open_expiry || '').slice(5)}
+                                {' · '}<b style={{ color: dteVal != null && dteVal <= 7 ? '#fb923c' : 'var(--text)' }}>{dteVal != null ? `${dteVal}天` : '--'}</b>
+                                {' · '}开 ${fmt(c.open_price)}
+                                {check && <>
+                                  {' · '}现 ${fmt(check.current_price)}
+                                  {' · '}浮盈 <b style={{
+                                    color: (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : 'var(--text)',
+                                  }}>{profitPct != null ? `${profitPct}%` : '--'}</b>
+                                  {' · '}买回 ${fmt(check.buyback_ask)}
+                                </>}
+                              </span>
                               {profitPct != null && profitPct > 0 && (
-                                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
-                                  <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
-                                    <div style={{
-                                      height: '100%', borderRadius: 2,
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                  <span style={{ width: 56, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden', display: 'inline-block' }}>
+                                    <span style={{
+                                      display: 'block', height: '100%', borderRadius: 2,
                                       width: `${Math.min(profitPct / profitTarget * 100, 100)}%`,
                                       background: profitPct >= profitTarget ? '#4ade80' : '#38bdf8',
-                                      transition: 'width .3s',
                                     }} />
-                                  </div>
-                                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                                    止盈 {profitPct}%/{profitTarget}%
                                   </span>
-                                </div>
+                                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{profitPct}/{profitTarget}%</span>
+                                </span>
                               )}
                             </div>
                           )}
-
-                          <div style={{ display: 'flex', gap: 6, fontSize: 11, flexWrap: 'wrap' }}>
-                            {([
-                              ...(c.shares > 0 ? [[`持股 ${c.shares} @ $${fmt(c.share_cost)}`, undefined]] as [string, string | undefined][] : []),
-                              ...(c.cost_basis != null ? [[`Cost Basis $${fmt(c.cost_basis)}`, '#4ade80']] as [string, string | undefined][] : []),
-                              [[`本轮权利金 $${fmt(c.total_premium)}`, (c.total_premium ?? 0) > 0 ? '#4ade80' : undefined]][0],
-                            ] as [string, string | undefined][]).map(([txt, color]) => (
-                              <span key={txt} style={{
-                                padding: '2px 9px', borderRadius: 10, border: '1px solid var(--border)',
-                                color: color || 'var(--text-secondary)', background: 'var(--bg-secondary)',
-                                whiteSpace: 'nowrap',
-                              }}>{txt}</span>
-                            ))}
-                          </div>
                         </div>
 
                         {/* 右:操作按钮列 */}
                         <div style={{
-                          display: 'flex', flexDirection: 'column', gap: 6, justifyContent: 'center',
-                          flexShrink: 0, width: 92, borderLeft: '1px solid var(--border)', paddingLeft: 12,
+                          display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center',
+                          flexShrink: 0, width: 84, borderLeft: '1px solid var(--border)', paddingLeft: 10,
                         }}>
                           {status === 'IDLE' && (
-                            <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
+                            <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'put', c.id)}>找 Put</button>
                           )}
                           {status === 'HOLDING' && (
-                            <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
+                            <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'call', c.id)}>找 Call</button>
                           )}
-                          {(status === 'CSP_OPEN' || status === 'CC_OPEN') && check?.profit_hit && (
-                            <button className="btn" style={{ fontSize: 12, padding: '4px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
+                          {hasOpen && check?.profit_hit && (
+                            <button className="btn" style={{ fontSize: 11, padding: '3px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
                               onClick={() => setTradeModal({
                                 initial: {
                                   symbol: sel.symbol,
@@ -1051,11 +1041,11 @@ export default function WheelPage() {
                               💰 平仓
                             </button>
                           )}
-                          {(status === 'CSP_OPEN' || status === 'CC_OPEN') && (
-                            <button className="btn" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
+                          {hasOpen && (
+                            <button className="btn" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
                               disabled={rollLoading} onClick={() => handleRoll(c.id)}>看 Roll</button>
                           )}
-                          <button className="btn" style={{ fontSize: 12, padding: '4px 0', width: '100%' }}
+                          <button className="btn" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
                             onClick={() => setTradeModal({ initial: { symbol: sel.symbol }, status, cycleId: c.id })}>
                             登记交易
                           </button>
