@@ -865,9 +865,6 @@ export default function WheelPage() {
                             {hasProfit && <span title="浮盈达标,可平仓" style={{ fontSize: 11 }}>💰</span>}
                             {isIdle && <span title={`空转 ${t.idle_days} 天`} style={{ fontSize: 11 }}>⏸</span>}
                           </div>
-                          <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
-                            {t.name}
-                          </div>
                           <div style={{ fontSize: 10, marginTop: 1 }}>
                             <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)' }}>
                               占用 ${fmtMoney(targetCapital(cs))}
@@ -900,7 +897,20 @@ export default function WheelPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 700, fontSize: 17 }}>{sel.symbol}</span>
-                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{sel.name}</span>
+                        {sel.volatility_brief && (sel.volatility_brief.atm_iv != null || sel.volatility_brief.hv20 != null) && (
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
+                            title={`预期IV:最近一次ATM隐含波动率快照(${sel.volatility_brief.iv_date || '--'});实际IV:20日历史波动率;IVR:IV在自身252日历史中的百分位${sel.volatility_brief.iv_rank_source === 'hv_proxy' ? '(IV历史不足,HV近似)' : ''}`}>
+                            IV <b style={{ color: 'var(--text)' }}>{sel.volatility_brief.atm_iv != null ? sel.volatility_brief.atm_iv.toFixed(1) : '--'}</b>
+                            {' / HV '}<b style={{ color: 'var(--text)' }}>{sel.volatility_brief.hv20 != null ? sel.volatility_brief.hv20.toFixed(1) : '--'}</b>
+                            {sel.volatility_brief.iv_rank != null && <>
+                              {' · IVR '}
+                              <b style={{ color: sel.volatility_brief.iv_rank >= 70 ? '#f87171' : sel.volatility_brief.iv_rank >= 50 ? '#fb923c' : 'var(--text)' }}>
+                                {sel.volatility_brief.iv_rank.toFixed(0)}
+                              </b>
+                              {sel.volatility_brief.iv_rank_source === 'hv_proxy' && <span style={{ fontSize: 10 }}>≈</span>}
+                            </>}
+                          </span>
+                        )}
                         {!editParams && (
                           <>
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -1042,42 +1052,54 @@ export default function WheelPage() {
                               累计权利金 <b style={{ color: (c.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(c.total_premium)}</b>
                             </span>
                           </div>
-                          {/* 行2:在场合约(单行内联) */}
+                          {/* 行2:在场合约(标签网格) */}
                           {hasOpen && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 6, fontSize: 12 }}>
-                              <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
-                                {c.open_contract_code || c.open_option_type}
-                              </span>
-                              <span style={{ color: 'var(--text-secondary)' }}>
-                                ${fmt(c.open_strike)}
-                                {' · '}{(c.open_expiry || '').slice(5)}(<b style={{ color: dteVal != null && dteVal <= 7 ? '#fb923c' : 'var(--text)' }}>{dteVal != null ? `${dteVal}天` : '--'}</b>)
-                                {' · '}开 ${fmt(c.open_price)}
-                                {check && <>
-                                  {' · '}现 ${fmt(check.current_price)}
-                                  <span title="当前期权总价值 = 现价 × 张数 × 乘数,即买回平仓成本">(值 ${fmtMoney(check.current_price * (c.open_qty || 1) * (c.open_contract_size || 100))})</span>
-                                  {' · '}浮盈 <b style={{
-                                    color: (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : 'var(--text)',
-                                  }}>{profitPct != null ? `${profitPct}%` : '--'}</b>
-                                  {(check.delta ?? 0) > 0 && <>{' · '}Δ{check.delta!.toFixed(2)}</>}
-                                  {(check.theta ?? 0) > 0 && <span title="每日 theta 衰减收入 = |θ| × 张数 × 乘数">
-                                    {' · '}θ <b style={{ color: '#4ade80' }}>${fmt(check.theta! * (c.open_qty || 1) * (c.open_contract_size || 100), 0)}/天</b>
-                                  </span>}
-                                  {check.remaining_annualized != null && <>
-                                    {' · '}剩余年化 <b style={{ color: check.low_yield ? '#38bdf8' : 'var(--text)' }}>{check.remaining_annualized}%</b>
-                                  </>}
-                                </>}
-                              </span>
+                            <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '8px 10px', marginTop: 6 }}
+                              title={c.open_contract_code || undefined}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+                                <span style={{
+                                  padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700,
+                                  background: (c.open_option_type === 'PUT' ? '#38bdf8' : '#a78bfa') + '22',
+                                  color: c.open_option_type === 'PUT' ? '#38bdf8' : '#a78bfa',
+                                  border: `1px solid ${c.open_option_type === 'PUT' ? '#38bdf8' : '#a78bfa'}55`,
+                                }}>{c.open_option_type}</span>
+                                <b style={{ fontSize: 13 }}>${fmt(c.open_strike)}</b>
+                                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                  {(c.open_expiry || '').slice(5)} · <b style={{ color: dteVal != null && dteVal <= 7 ? '#fb923c' : 'var(--text)' }}>{dteVal != null ? `${dteVal}天` : '--'}</b>
+                                  {(c.open_qty || 1) > 1 && <> · {c.open_qty}张</>}
+                                </span>
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px 8px' }}>
+                                {([
+                                  ['开仓', `$${fmt(c.open_price)}`, undefined],
+                                  ['现价', check ? `$${fmt(check.current_price)}` : '--', undefined],
+                                  ['价值', check ? `$${fmtMoney(check.current_price * (c.open_qty || 1) * (c.open_contract_size || 100))}` : '--', undefined],
+                                  ['浮盈', profitPct != null ? `${profitPct}%` : '--',
+                                    profitPct == null ? undefined : profitPct >= profitTarget ? '#4ade80' : profitPct < 0 ? '#f87171' : undefined],
+                                  ['Δ', check && (check.delta ?? 0) > 0 ? check.delta!.toFixed(2) : '--', undefined],
+                                  ['θ/天', check && (check.theta ?? 0) > 0
+                                    ? `$${fmt(check.theta! * (c.open_qty || 1) * (c.open_contract_size || 100), 0)}` : '--',
+                                    check && (check.theta ?? 0) > 0 ? '#4ade80' : undefined],
+                                  ['剩余年化', check?.remaining_annualized != null ? `${check.remaining_annualized}%` : '--',
+                                    check?.low_yield ? '#38bdf8' : undefined],
+                                ] as [string, string, string | undefined][]).map(([lab, val, color]) => (
+                                  <div key={lab}>
+                                    <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{lab}</div>
+                                    <div style={{ fontWeight: 600, fontSize: 12, color: color || 'var(--text)' }}>{val}</div>
+                                  </div>
+                                ))}
+                              </div>
                               {profitPct != null && profitPct > 0 && (
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                                  <span style={{ width: 56, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden', display: 'inline-block' }}>
-                                    <span style={{
-                                      display: 'block', height: '100%', borderRadius: 2,
+                                <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+                                    <div style={{
+                                      height: '100%', borderRadius: 2,
                                       width: `${Math.min(profitPct / profitTarget * 100, 100)}%`,
                                       background: profitPct >= profitTarget ? '#4ade80' : '#38bdf8',
                                     }} />
-                                  </span>
-                                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{profitPct}/{profitTarget}%</span>
-                                </span>
+                                  </div>
+                                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>止盈 {profitPct}/{profitTarget}%</span>
+                                </div>
                               )}
                             </div>
                           )}

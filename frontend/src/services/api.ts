@@ -501,6 +501,14 @@ export interface WheelTarget {
   enabled: boolean | number
   active_cycles?: WheelCycle[]
   idle_days?: number | null
+  volatility_brief?: {
+    atm_iv: number | null
+    iv_date: string | null
+    hv20: number | null
+    iv_rank: number | null
+    iv_rank_source: 'iv_history' | 'hv_proxy' | null
+    iv_hv_ratio: number | null
+  } | null
 }
 
 export interface WheelTrade {

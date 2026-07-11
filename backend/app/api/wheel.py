@@ -39,6 +39,11 @@ def list_targets():
             except Exception:
                 idle_days = None
         t["idle_days"] = idle_days
+        try:
+            from app.core.volatility import brief_profile
+            t["volatility_brief"] = brief_profile(t["symbol"])
+        except Exception:
+            t["volatility_brief"] = None
     return targets
 
 
