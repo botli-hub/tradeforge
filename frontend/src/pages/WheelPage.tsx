@@ -20,11 +20,12 @@ const STAGE_COLORS: Record<string, string> = {
 const TRADE_LABELS: Record<WheelTradeType, string> = {
   SELL_PUT: '卖出 Put', BUY_PUT_CLOSE: '买回 Put 平仓', SELL_CALL: '卖出 Call', BUY_CALL_CLOSE: '买回 Call 平仓',
   EXPIRE: '到期作废', ASSIGNED: '被行权接货', CALLED_AWAY: '被行权交货', SELL_SHARES: '卖出股票结束',
+  BUY_SHARES: '已持正股入轮',
 }
 // 各状态允许的登记类型
 const ALLOWED_TRADES: Record<string, WheelTradeType[]> = {
-  NONE: ['SELL_PUT'],
-  IDLE: ['SELL_PUT'],
+  NONE: ['SELL_PUT', 'BUY_SHARES'],
+  IDLE: ['SELL_PUT', 'BUY_SHARES'],
   CSP_OPEN: ['EXPIRE', 'BUY_PUT_CLOSE', 'ASSIGNED'],
   HOLDING: ['SELL_CALL', 'SELL_SHARES'],
   CC_OPEN: ['EXPIRE', 'BUY_CALL_CLOSE', 'CALLED_AWAY'],
@@ -157,6 +158,7 @@ function TradeModal({
 
   const needContract = ['SELL_PUT', 'SELL_CALL'].includes(form.trade_type)
   const needPrice = !['EXPIRE', 'ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type)
+  const isShares = ['BUY_SHARES', 'SELL_SHARES'].includes(form.trade_type)
 
   // 实时预览:本笔现金流
   const qtyN = parseFloat(form.qty) || 0
@@ -168,6 +170,7 @@ function TradeModal({
   const cashFlow = isSell ? qtyN * priceN * sizeN - feeN
     : isBuy ? -(qtyN * priceN * sizeN + feeN)
     : form.trade_type === 'SELL_SHARES' ? qtyN * priceN - feeN
+    : form.trade_type === 'BUY_SHARES' ? -(qtyN * priceN + feeN)
     : null
 
   const expiryChips: [string, string][] = [
@@ -271,16 +274,17 @@ function TradeModal({
             </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            {needContract && (
+            {(needContract || form.trade_type === 'BUY_SHARES') && (
               <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                张数
+                {form.trade_type === 'BUY_SHARES' ? '股数' : '张数'}
                 <input type="number" value={form.qty} style={inputStyle}
+                  placeholder={form.trade_type === 'BUY_SHARES' ? '如 100' : undefined}
                   onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
               </label>
             )}
             {needPrice && (
               <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {form.trade_type === 'SELL_SHARES' ? '每股卖价' : '权利金/张'}
+                {form.trade_type === 'SELL_SHARES' ? '每股卖价' : form.trade_type === 'BUY_SHARES' ? '每股成本' : '权利金/张'}
                 <input type="number" value={form.price} style={inputStyle}
                   onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
               </label>
@@ -314,8 +318,8 @@ function TradeModal({
                 {cashFlow >= 0 ? '+' : ''}{cashFlow.toLocaleString('en-US', { maximumFractionDigits: 2 })}
               </b>
               <span style={{ color: 'var(--text-secondary)', marginLeft: 8, fontSize: 11 }}>
-                {form.trade_type === 'SELL_SHARES'
-                  ? `${qtyN} 股 × ${priceN} − 手续费 ${feeN}`
+                {isShares
+                  ? `${qtyN} 股 × ${priceN}${form.trade_type === 'SELL_SHARES' ? ` − 手续费 ${feeN}` : ` + 手续费 ${feeN}`}`
                   : `${qtyN} 张 × ${priceN} × ${sizeN}${isSell ? ` − 手续费 ${feeN}` : ` + 手续费 ${feeN}`}`}
               </span>
             </div>

@@ -2,6 +2,7 @@
 
 状态机:
   IDLE --SELL_PUT--> CSP_OPEN --EXPIRE/BUY_PUT_CLOSE--> IDLE
+  IDLE --BUY_SHARES--> HOLDING(已持正股直接进轮,qty=股数,price=每股成本)
                      CSP_OPEN --ASSIGNED--> HOLDING
   HOLDING --SELL_CALL--> CC_OPEN --EXPIRE/BUY_CALL_CLOSE--> HOLDING
                          CC_OPEN --CALLED_AWAY--> CLOSED
@@ -20,7 +21,7 @@ from app.data.database import get_db, _now_iso
 
 TRADE_TYPES = (
     "SELL_PUT", "BUY_PUT_CLOSE", "SELL_CALL", "BUY_CALL_CLOSE",
-    "EXPIRE", "ASSIGNED", "CALLED_AWAY", "SELL_SHARES",
+    "EXPIRE", "ASSIGNED", "CALLED_AWAY", "SELL_SHARES", "BUY_SHARES",
 )
 
 
@@ -141,7 +142,18 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
         s.update(open_contract_code=None, open_option_type=None, open_strike=None,
                  open_expiry=None, open_qty=0.0, open_price=0.0)
 
-    if tt == "SELL_PUT":
+    if tt == "BUY_SHARES":
+        need("IDLE")
+        if not price or price <= 0:
+            raise WheelError("BUY_SHARES 需要 price(每股成本)")
+        if not qty or qty <= 0:
+            raise WheelError("BUY_SHARES 需要 qty(股数)")
+        s["shares"] = qty
+        s["share_cost"] = price
+        s["total_fees"] += fee
+        s["status"] = "HOLDING"
+
+    elif tt == "SELL_PUT":
         need("IDLE")
         if not strike or not expiry:
             raise WheelError("SELL_PUT 需要 strike 和 expiry")
@@ -348,7 +360,7 @@ def record_trade(
     new_cycle: bool = False,
 ) -> Dict[str, Any]:
     """登记一笔交易。cycle_id 指定操作哪个轮子;
-    SELL_PUT + new_cycle=True 强制新开一个并行轮子。返回重放后的 cycle。"""
+    SELL_PUT/BUY_SHARES + new_cycle=True 强制新开一个并行轮子。返回重放后的 cycle。"""
     if trade_type not in TRADE_TYPES:
         raise WheelError(f"未知交易类型: {trade_type}")
     symbol = symbol.strip().upper()
@@ -369,7 +381,7 @@ def record_trade(
                 "SELECT * FROM wheel_cycles WHERE symbol = ? AND status != 'CLOSED' ORDER BY started_at",
                 (symbol,),
             ).fetchall()
-            if trade_type == "SELL_PUT":
+            if trade_type in ("SELL_PUT", "BUY_SHARES"):
                 idle = [r for r in actives if r["status"] == "IDLE"]
                 if new_cycle or not idle:
                     cycle_id = str(uuid.uuid4())

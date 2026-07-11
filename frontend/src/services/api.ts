@@ -460,7 +460,7 @@ export type WheelCycleStatus = 'IDLE' | 'CSP_OPEN' | 'HOLDING' | 'CC_OPEN' | 'CL
 
 export type WheelTradeType =
   | 'SELL_PUT' | 'BUY_PUT_CLOSE' | 'SELL_CALL' | 'BUY_CALL_CLOSE'
-  | 'EXPIRE' | 'ASSIGNED' | 'CALLED_AWAY' | 'SELL_SHARES'
+  | 'EXPIRE' | 'ASSIGNED' | 'CALLED_AWAY' | 'SELL_SHARES' | 'BUY_SHARES'
 
 export interface WheelCycle {
   id: string
