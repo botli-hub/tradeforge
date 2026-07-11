@@ -828,7 +828,12 @@ export default function WheelPage() {
             </div>
           )}
           {(() => {
-            const enabled = targets.filter(t => t.enabled)
+            const premiumBySymbol: Record<string, number> = {}
+            cycles.forEach(c => {
+              premiumBySymbol[c.symbol] = (premiumBySymbol[c.symbol] || 0) + (c.total_premium || 0)
+            })
+            const enabled = [...targets.filter(t => t.enabled)].sort(
+              (a, b) => targetCapital(b.active_cycles || []) - targetCapital(a.active_cycles || []))
             if (enabled.length === 0) return null
             const sel = enabled.find(t => t.symbol === selectedSymbol) || enabled[0]
             const selCycles = [...(sel.active_cycles || [])].sort(
@@ -863,9 +868,14 @@ export default function WheelPage() {
                           <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
                             {t.name}
                           </div>
-                          <div style={{ fontSize: 10, color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)', marginTop: 1 }}>
-                            占用 ${fmtMoney(targetCapital(cs))}
-                            {(t.max_capital ?? 0) > 0 && <span style={{ color: 'var(--text-secondary)' }}> / {fmtMoney(t.max_capital)}</span>}
+                          <div style={{ fontSize: 10, marginTop: 1 }}>
+                            <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)' }}>
+                              占用 ${fmtMoney(targetCapital(cs))}
+                              {(t.max_capital ?? 0) > 0 && <span style={{ color: 'var(--text-secondary)' }}>/{fmtMoney(t.max_capital)}</span>}
+                            </span>
+                            <span style={{ color: (premiumBySymbol[t.symbol] || 0) > 0 ? '#4ade80' : 'var(--text-secondary)', marginLeft: 8 }}>
+                              权利金 ${fmtMoney(premiumBySymbol[t.symbol] || 0)}
+                            </span>
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
