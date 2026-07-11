@@ -623,6 +623,7 @@ export interface WheelOpenPositionItem {
   current_price: number
   buyback_ask: number
   delta?: number
+  theta?: number
   remaining_annualized?: number | null
   low_yield?: boolean
   roll_21dte?: boolean

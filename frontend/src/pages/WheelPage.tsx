@@ -1039,28 +1039,29 @@ export default function WheelPage() {
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                               {c.shares > 0 && <>持股 {c.shares} @ ${fmt(c.share_cost)}{' · '}</>}
                               {c.cost_basis != null && <>CB <b style={{ color: '#4ade80' }}>${fmt(c.cost_basis)}</b>{' · '}</>}
-                              权利金 <b style={{ color: (c.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(c.total_premium)}</b>
+                              累计权利金 <b style={{ color: (c.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(c.total_premium)}</b>
                             </span>
                           </div>
                           {/* 行2:在场合约(单行内联) */}
                           {hasOpen && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 6, fontSize: 12 }}>
                               <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
-                                {c.open_contract_code || `${c.open_option_type} $${c.open_strike}`}
+                                {c.open_contract_code || c.open_option_type}
                               </span>
                               <span style={{ color: 'var(--text-secondary)' }}>
                                 ${fmt(c.open_strike)}
-                                {' · '}{(c.open_expiry || '').slice(5)}
-                                {' · '}<b style={{ color: dteVal != null && dteVal <= 7 ? '#fb923c' : 'var(--text)' }}>{dteVal != null ? `${dteVal}天` : '--'}</b>
+                                {' · '}{(c.open_expiry || '').slice(5)}(<b style={{ color: dteVal != null && dteVal <= 7 ? '#fb923c' : 'var(--text)' }}>{dteVal != null ? `${dteVal}天` : '--'}</b>)
                                 {' · '}开 ${fmt(c.open_price)}
                                 {check && <>
                                   {' · '}现 ${fmt(check.current_price)}
-                                  {' · '}值 <b>${fmtMoney(check.current_price * (c.open_qty || 1) * (c.open_contract_size || 100))}</b>
+                                  <span title="当前期权总价值 = 现价 × 张数 × 乘数,即买回平仓成本">(值 ${fmtMoney(check.current_price * (c.open_qty || 1) * (c.open_contract_size || 100))})</span>
                                   {' · '}浮盈 <b style={{
                                     color: (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : 'var(--text)',
                                   }}>{profitPct != null ? `${profitPct}%` : '--'}</b>
-                                  {' · '}买回 ${fmt(check.buyback_ask)}
                                   {(check.delta ?? 0) > 0 && <>{' · '}Δ{check.delta!.toFixed(2)}</>}
+                                  {(check.theta ?? 0) > 0 && <span title="每日 theta 衰减收入 = |θ| × 张数 × 乘数">
+                                    {' · '}θ <b style={{ color: '#4ade80' }}>${fmt(check.theta! * (c.open_qty || 1) * (c.open_contract_size || 100), 0)}/天</b>
+                                  </span>}
                                   {check.remaining_annualized != null && <>
                                     {' · '}剩余年化 <b style={{ color: check.low_yield ? '#38bdf8' : 'var(--text)' }}>{check.remaining_annualized}%</b>
                                   </>}

@@ -39,6 +39,21 @@ async def startup():
     # Wheel 全池扫描定时推送(wheel_scan.auto_push_minutes,0=关闭)
     from app.services.wheel_scanner import auto_push_loop
     threading.Thread(target=auto_push_loop, daemon=True).start()
+    # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
+    threading.Thread(target=_backfill_codes_once, daemon=True).start()
+
+
+def _backfill_codes_once():
+    import time
+    time.sleep(5)
+    try:
+        from app.api.wheel import backfill_missing_contract_codes
+        r = backfill_missing_contract_codes()
+        if r["updated"] or r["failed"]:
+            import logging
+            logging.getLogger(__name__).info("存量合约代码补全: %s", r)
+    except Exception:
+        pass
 
 
 def _iv_snapshot_loop():

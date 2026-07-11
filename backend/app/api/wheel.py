@@ -193,6 +193,36 @@ def record_trade(body: TradeIn):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def backfill_missing_contract_codes() -> Dict[str, Any]:
+    """为存量卖出交易补全合约代码(按 strike+到期日推导),并重放所属周期。
+    幂等:已有代码的交易跳过;推导失败(如港股无 OpenD)留空下次再试。"""
+    updated, failed = 0, 0
+    for t in repo.get_trades(limit=2000):
+        if t["trade_type"] not in ("SELL_PUT", "SELL_CALL"):
+            continue
+        if (t.get("contract_code") or "").strip():
+            continue
+        if not t.get("strike") or not t.get("expiry"):
+            continue
+        code = _resolve_contract_code(t["symbol"], t["trade_type"], t["strike"], t["expiry"])
+        if not code:
+            failed += 1
+            continue
+        try:
+            repo.update_trade(t["id"], contract_code=code)
+            updated += 1
+        except WheelError as e:
+            logger.warning("补全 %s 失败: %s", t["id"], e)
+            failed += 1
+    return {"updated": updated, "failed": failed}
+
+
+@router.post("/trades/backfill-codes")
+def backfill_codes():
+    """手动触发存量合约代码补全(OpenD 在线时港股也能补)"""
+    return backfill_missing_contract_codes()
+
+
 def _resolve_contract_code(symbol: str, trade_type: str, strike: float,
                            expiry: str) -> Optional[str]:
     """按 strike+到期日 推导期权代码。
@@ -547,6 +577,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
                         "ask": float(row.get("ask_price", 0) or 0),
                         "bid": float(row.get("bid_price", 0) or 0),
                         "delta": abs(float(row.get("option_delta", 0) or 0)),
+                        "theta": abs(float(row.get("option_theta", 0) or 0)),
                     }
     finally:
         ctx.close()
@@ -576,6 +607,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "open_price": open_price, "current_price": cur, "buyback_ask": buyback,
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
             "delta": q.get("delta") or 0,
+            "theta": q.get("theta") or 0,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
         }
