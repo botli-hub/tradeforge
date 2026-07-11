@@ -173,27 +173,42 @@ def _run_wheel_scan(symbol: Optional[str] = None):
                 logger.warning("wheel 信号推送失败: %s", e)
         _WHEEL_SCAN_STATE.update(signals_found=len(signals), telegram_sent=sent)
 
-        # 在场合约体检:利润达标 / 临期ITM 推送(每合约每日一次)
+        # 在场合约体检:止盈/深度ITM/21DTE/剩余年化衰减 推送(每合约每日一次)
         try:
             from app.api.wheel import check_open_positions_core
             futu_cfg = cfg.get("futu", {}) or {}
             check = check_open_positions_core(futu_cfg.get("host", "127.0.0.1"),
                                               futu_cfg.get("port", 11111))
             for item in check["items"]:
-                alerts = []
-                if item["profit_hit"]:
-                    alerts.append(f"浮盈 {item['profit_pct']}% ≥ 目标 {check['profit_target_pct']}%,可平仓锁定再开新轮")
-                if item["itm"] and item["expiring"]:
-                    alerts.append(f"已 ITM 且 DTE {item['dte']},注意被行权/考虑 Roll")
-                if not alerts:
+                if not item.get("action_hint"):
                     continue
                 key = f"ALERT.{item['contract_code']}"
                 if repo.is_contract_in_cooldown(key):
                     continue
+                extra = (f"  剩余年化 {item['remaining_annualized']}%"
+                         if item.get("remaining_annualized") is not None else "")
                 text = (f"💰 [持仓提醒] {item['symbol']} {item['side']} ${item['strike']} {item['expiry']}\n"
-                        f"开仓 {item['open_price']} → 现价 {item['current_price']}\n" + "\n".join(alerts))
+                        f"开仓 {item['open_price']} → 现价 {item['current_price']}"
+                        f"(浮盈 {item['profit_pct'] if item['profit_pct'] is not None else '--'}%){extra}\n"
+                        f"👉 {item['action_hint']}\n"
+                        + "\n".join(f"· {r}" for r in item.get("reasons", [])))
                 notifier.send(text)
                 repo.set_contract_cooldown(key, item["symbol"], 1)
+
+            # 持股裸奔提醒:HOLDING 且无在场 CC 超过 3 天(每轮每日一次)
+            from app.data import wheel_repository as wrepo
+            for cyc in wrepo.get_cycles(include_closed=False):
+                if cyc["status"] != "HOLDING" or (cyc.get("uncovered_days") or 0) < 3:
+                    continue
+                key = f"UNCOV.{cyc['id']}"
+                if repo.is_contract_in_cooldown(key):
+                    continue
+                cb = cyc.get("cost_basis")
+                notifier.send(
+                    f"🪑 [持股裸奔] {cyc['symbol']} 持股 {cyc['shares']:g} 股已 {cyc['uncovered_days']} 天未挂 Call\n"
+                    f"Cost Basis ${cb:.2f},theta 收入在流失 —— 去看板「找 Call」" if cb is not None else
+                    f"🪑 [持股裸奔] {cyc['symbol']} 持股 {cyc['shares']:g} 股已 {cyc['uncovered_days']} 天未挂 Call,去看板「找 Call」")
+                repo.set_contract_cooldown(key, cyc["symbol"], 1)
         except Exception as e:
             logger.info("在场合约体检跳过: %s", e)
     except Exception as e:

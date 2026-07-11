@@ -483,6 +483,7 @@ export interface WheelCycle {
   cost_basis: number | null
   open_dte: number | null
   duration_days: number | null
+  uncovered_days?: number | null
 }
 
 export interface WheelTarget {
@@ -516,6 +517,7 @@ export interface WheelTrade {
   contract_size: number
   note: string | null
   traded_at: string
+  is_roll?: boolean
 }
 
 export interface WheelCapital {
@@ -620,6 +622,14 @@ export interface WheelOpenPositionItem {
   open_price: number
   current_price: number
   buyback_ask: number
+  delta?: number
+  remaining_annualized?: number | null
+  low_yield?: boolean
+  roll_21dte?: boolean
+  deep_itm?: boolean
+  early_assign_risk?: boolean
+  action_hint?: string | null
+  reasons?: string[]
   profit_pct: number | null
   spot: number
   itm: boolean

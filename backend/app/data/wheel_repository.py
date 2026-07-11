@@ -296,7 +296,22 @@ def get_cycles(symbol: Optional[str] = None, status: Optional[str] = None,
             sql += " AND status != 'CLOSED'"
         sql += " ORDER BY started_at DESC"
         rows = conn.execute(sql, params).fetchall()
-        return [_enrich_cycle(dict(r)) for r in rows]
+        cycles = [_enrich_cycle(dict(r)) for r in rows]
+        # HOLDING 裸奔天数:持股但没挂 Call,theta 收入在流失
+        holding_ids = [c["id"] for c in cycles if c["status"] == "HOLDING"]
+        if holding_ids:
+            ph = ",".join("?" * len(holding_ids))
+            last_map = {r["cycle_id"]: r["t"] for r in conn.execute(
+                f"SELECT cycle_id, MAX(traded_at) AS t FROM wheel_trades WHERE cycle_id IN ({ph}) GROUP BY cycle_id",
+                holding_ids).fetchall()}
+            for c in cycles:
+                if c["status"] == "HOLDING" and last_map.get(c["id"]):
+                    try:
+                        c["uncovered_days"] = max(
+                            (datetime.now() - datetime.fromisoformat(str(last_map[c["id"]])[:19])).days, 0)
+                    except Exception:
+                        c["uncovered_days"] = None
+        return cycles
     finally:
         conn.close()
 
@@ -337,7 +352,23 @@ def get_trades(cycle_id: Optional[str] = None, symbol: Optional[str] = None,
         sql += " ORDER BY traded_at DESC, created_at DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        trades = [dict(r) for r in rows]
+        # Roll 配对识别(展示用,不落库):同 cycle 同日 BUY_*_CLOSE + SELL_* 同类型
+        pair_map = {"BUY_PUT_CLOSE": "SELL_PUT", "BUY_CALL_CLOSE": "SELL_CALL"}
+        by_key: Dict[str, List[Dict[str, Any]]] = {}
+        for t in trades:
+            by_key.setdefault(f"{t['cycle_id']}|{str(t['traded_at'])[:10]}", []).append(t)
+        for group in by_key.values():
+            for buy in group:
+                sell_type = pair_map.get(buy["trade_type"])
+                if not sell_type:
+                    continue
+                sell = next((x for x in group if x["trade_type"] == sell_type
+                             and not x.get("is_roll")), None)
+                if sell is not None:
+                    buy["is_roll"] = True
+                    sell["is_roll"] = True
+        return trades
     finally:
         conn.close()
 

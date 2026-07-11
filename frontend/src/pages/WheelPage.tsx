@@ -1020,6 +1020,22 @@ export default function WheelPage() {
                             {check?.profit_hit && (
                               <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#4ade8022', color: '#4ade80', border: '1px solid #4ade8055' }}>达标</span>
                             )}
+                            {check?.action_hint && !check.profit_hit && (
+                              <span style={{
+                                padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700,
+                                background: check.deep_itm ? '#f8717122' : check.low_yield && !check.roll_21dte ? '#38bdf822' : '#fb923c22',
+                                color: check.deep_itm ? '#f87171' : check.low_yield && !check.roll_21dte ? '#38bdf8' : '#fb923c',
+                                border: `1px solid ${check.deep_itm ? '#f87171' : check.low_yield && !check.roll_21dte ? '#38bdf8' : '#fb923c'}55`,
+                              }} title={(check.reasons || []).join(';')}>
+                                👉 {check.action_hint}
+                              </span>
+                            )}
+                            {status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3 && (
+                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#fb923c22', color: '#fb923c', border: '1px solid #fb923c55' }}
+                                title="持股但未挂 Call,theta 收入在流失">
+                                🪑 裸奔 {c.uncovered_days} 天
+                              </span>
+                            )}
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                               {c.shares > 0 && <>持股 {c.shares} @ ${fmt(c.share_cost)}{' · '}</>}
                               {c.cost_basis != null && <>CB <b style={{ color: '#4ade80' }}>${fmt(c.cost_basis)}</b>{' · '}</>}
@@ -1043,6 +1059,10 @@ export default function WheelPage() {
                                     color: (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : 'var(--text)',
                                   }}>{profitPct != null ? `${profitPct}%` : '--'}</b>
                                   {' · '}买回 ${fmt(check.buyback_ask)}
+                                  {(check.delta ?? 0) > 0 && <>{' · '}Δ{check.delta!.toFixed(2)}</>}
+                                  {check.remaining_annualized != null && <>
+                                    {' · '}剩余年化 <b style={{ color: check.low_yield ? '#38bdf8' : 'var(--text)' }}>{check.remaining_annualized}%</b>
+                                  </>}
                                 </>}
                               </span>
                               {profitPct != null && profitPct > 0 && (
@@ -1141,6 +1161,10 @@ export default function WheelPage() {
                                 <div style={{ minWidth: 0 }}>
                                   <div>
                                     <b>{TRADE_LABELS[t.trade_type]}</b>
+                                    {t.is_roll && (
+                                      <span style={{ padding: '0 6px', borderRadius: 7, fontSize: 9, fontWeight: 700, background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55', marginLeft: 6 }}
+                                        title="同日买回+再卖出,识别为一次 Roll">Roll</span>
+                                    )}
                                     <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 8 }}>{fmtDate(t.traded_at)}</span>
                                   </div>
                                   <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1405,7 +1429,13 @@ export default function WheelPage() {
                 <tr key={t.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '7px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{fmtDate(t.traded_at)}</td>
                   <td style={{ padding: '7px 10px', fontWeight: 600 }}>{t.symbol}</td>
-                  <td style={{ padding: '7px 10px' }}>{TRADE_LABELS[t.trade_type]}</td>
+                  <td style={{ padding: '7px 10px' }}>
+                    {TRADE_LABELS[t.trade_type]}
+                    {t.is_roll && (
+                      <span style={{ padding: '0 6px', borderRadius: 7, fontSize: 9, fontWeight: 700, background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55', marginLeft: 6 }}
+                        title="同日买回+再卖出,识别为一次 Roll">Roll</span>
+                    )}
+                  </td>
                   <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11 }}>
                     {t.contract_code || (t.strike ? `$${fmt(t.strike)}` : '--')}
                   </td>

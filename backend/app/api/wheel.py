@@ -414,8 +414,78 @@ def _suggest(symbol: str, side: str, host: str, port: int,
 
 # ── 在场合约体检(利润目标 / 临期 / ITM)────────────────────────────────────────
 
+def _position_hints(item: Dict[str, Any], min_annualized: float, profit_target: float) -> Dict[str, Any]:
+    """在场合约行动判定(纯函数,便于测试)。
+
+    输入 item 需含: side/strike/spot/dte/current_price/profit_pct/itm/delta。
+    输出: remaining_annualized/low_yield/roll_21dte/deep_itm/early_assign_risk
+          /action_hint(主建议)/reasons(全部命中的理由)。
+    """
+    strike = item.get("strike") or 0
+    spot = item.get("spot") or 0
+    dte = item.get("dte")
+    cur = item.get("current_price") or 0
+    delta = abs(item.get("delta") or 0)
+    itm = bool(item.get("itm"))
+    profit_pct = item.get("profit_pct")
+    profit_hit = profit_pct is not None and profit_pct >= profit_target
+    side = item.get("side")
+
+    # 剩余年化:留在场上继续赚剩余权利金的效率
+    remaining_ann = None
+    if strike > 0 and dte and dte > 0 and cur > 0:
+        remaining_ann = round(cur / strike * 365 / dte * 100, 2)
+
+    # 判定 1:剩余年化衰减(仅 OTM 时有意义,ITM 的高剩余价值是风险不是收益)
+    low_yield = bool(not itm and remaining_ann is not None
+                     and min_annualized > 0 and remaining_ann < min_annualized)
+    # 判定 2:21 DTE 规则(gamma 风险陡增,未止盈就该处理)
+    roll_21dte = bool(dte is not None and dte <= 21 and not profit_hit)
+    # 判定 3:ITM 深度分级(delta > 0.5 或价内深度 > 3%)
+    moneyness = 0.0
+    if spot > 0 and strike > 0:
+        moneyness = (strike - spot) / spot if side == "PUT" else (spot - strike) / spot
+    deep_itm = bool(itm and (delta > 0.5 or moneyness > 0.03))
+    # 判定 4:CC 深度价内的提前行权风险
+    early_assign = bool(side == "CALL" and itm and delta >= 0.8)
+
+    reasons: List[str] = []
+    if profit_hit:
+        reasons.append(f"浮盈 {profit_pct}% ≥ 止盈目标 {profit_target}%")
+    if deep_itm:
+        reasons.append(f"深度价内(Δ{delta:.2f}" + (f",价内 {moneyness*100:.1f}%" if moneyness > 0 else "") + ")")
+    elif itm:
+        reasons.append(f"已 ITM(Δ{delta:.2f})" if delta else "已 ITM")
+    if early_assign:
+        reasons.append("CC 深度价内,存在提前被行权风险(留意除息日)")
+    if roll_21dte:
+        reasons.append(f"DTE {dte} ≤ 21 且未达止盈,gamma 风险上升")
+    if low_yield:
+        reasons.append(f"剩余年化 {remaining_ann}% < 目标 {min_annualized}%,担保金低效")
+
+    if profit_hit:
+        hint = "止盈平仓"
+    elif deep_itm:
+        hint = "尽快 Roll(深度价内)"
+    elif itm and item.get("expiring"):
+        hint = "临期 ITM:Roll 或准备接货/交货"
+    elif roll_21dte:
+        hint = "考虑 Roll(≤21DTE)"
+    elif low_yield:
+        hint = "平仓换仓(剩余年化低)"
+    else:
+        hint = None
+
+    return {
+        "remaining_annualized": remaining_ann, "low_yield": low_yield,
+        "roll_21dte": roll_21dte, "deep_itm": deep_itm,
+        "early_assign_risk": early_assign,
+        "action_hint": hint, "reasons": reasons,
+    }
+
+
 def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
-    """拉在场合约与标的快照,计算浮盈/DTE/ITM。供 API 和后台推送共用"""
+    """拉在场合约与标的快照,计算浮盈/DTE/ITM/delta 及行动建议。供 API 和后台推送共用"""
     import futu
     from datetime import date as _date
     from app.core.leaps_monitor import _throttle, _to_futu_symbol
@@ -443,10 +513,12 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
                         "last": float(row.get("last_price", 0) or 0),
                         "ask": float(row.get("ask_price", 0) or 0),
                         "bid": float(row.get("bid_price", 0) or 0),
+                        "delta": abs(float(row.get("option_delta", 0) or 0)),
                     }
     finally:
         ctx.close()
 
+    min_ann_by_symbol: Dict[str, float] = {}
     items = []
     for c in cycles:
         q = quotes.get(c["open_contract_code"], {})
@@ -461,15 +533,21 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             (c["open_option_type"] == "PUT" and spot < strike) or
             (c["open_option_type"] == "CALL" and spot > strike)))
         dte = c.get("open_dte")
-        items.append({
+        if c["symbol"] not in min_ann_by_symbol:
+            t = repo.get_target(c["symbol"])
+            min_ann_by_symbol[c["symbol"]] = float((t or {}).get("min_annualized") or 0)
+        item = {
             "cycle_id": c["id"], "symbol": c["symbol"], "side": c["open_option_type"],
             "contract_code": c["open_contract_code"], "strike": strike,
             "expiry": c.get("open_expiry"), "dte": dte,
             "open_price": open_price, "current_price": cur, "buyback_ask": buyback,
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
+            "delta": q.get("delta") or 0,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
-        })
+        }
+        item.update(_position_hints(item, min_ann_by_symbol[c["symbol"]], profit_target))
+        items.append(item)
     return {"items": items, "profit_target_pct": profit_target}
 
 
@@ -571,6 +649,11 @@ def roll_options(cycle_id: str = Query(...), host: str = Query("127.0.0.1"), por
                 "annualized": round(bid / (c["strike"] or 1) * 365 / dte * 100, 2) if dte else None,
             })
     candidates.sort(key=lambda x: x["net_credit_per_contract"], reverse=True)
+    # 只推荐 roll for credit:为守仓倒贴钱不如接货/平仓认损
+    total_before = len(candidates)
+    candidates = [x for x in candidates if x["net_credit_per_contract"] > 0]
+    if total_before > 0 and not candidates:
+        warnings.append("所有候选净权利金均为负(roll 要倒贴钱):不建议为守仓付费,考虑接货/交货或平仓认损")
     return {
         "cycle_id": cycle_id, "symbol": symbol, "side": side,
         "current": {"contract_code": code, "strike": cycle.get("open_strike"),
