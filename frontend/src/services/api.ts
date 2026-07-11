@@ -771,6 +771,7 @@ export async function recordWheelTrade(body: {
   fee?: number
   contract_size?: number
   note?: string
+  traded_at?: string
   cycle_id?: string
   new_cycle?: boolean
 }) {

@@ -100,6 +100,32 @@ interface TradeFormState {
   fee: string
   contract_size: string
   note: string
+  traded_at: string
+}
+
+/** 从今天起第 n 个周五(n=1 本周五或下周五) */
+function nthFriday(n: number): string {
+  const d = new Date()
+  let days = (5 - d.getDay() + 7) % 7
+  if (days === 0) days = 7 // 今天是周五则取下周五
+  d.setDate(d.getDate() + days + (n - 1) * 7)
+  return d.toISOString().slice(0, 10)
+}
+
+/** 距今约 targetDays 天的最近周五 */
+function fridayNear(targetDays: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + targetDays)
+  const dow = d.getDay()
+  const toFri = dow <= 5 ? 5 - dow : 6 // 周六→+6到下周五
+  d.setDate(d.getDate() + toFri)
+  return d.toISOString().slice(0, 10)
+}
+
+function nowLocal(): string {
+  const d = new Date()
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+  return d.toISOString().slice(0, 16)
 }
 
 function TradeModal({
@@ -118,18 +144,36 @@ function TradeModal({
     trade_type: (initial.trade_type as WheelTradeType) || allowed[0],
     contract_code: initial.contract_code || '',
     strike: initial.strike || '',
-    expiry: initial.expiry || '',
+    expiry: (initial.expiry || '').slice(0, 10),
     qty: initial.qty || '1',
     price: initial.price || '',
     fee: initial.fee || '0',
     contract_size: initial.contract_size || '100',
     note: initial.note || '',
+    traded_at: nowLocal(),
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const needContract = ['SELL_PUT', 'SELL_CALL'].includes(form.trade_type)
   const needPrice = !['EXPIRE', 'ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type)
+
+  // 实时预览:本笔现金流
+  const qtyN = parseFloat(form.qty) || 0
+  const priceN = parseFloat(form.price) || 0
+  const feeN = parseFloat(form.fee) || 0
+  const sizeN = parseInt(form.contract_size) || 100
+  const isSell = ['SELL_PUT', 'SELL_CALL'].includes(form.trade_type)
+  const isBuy = ['BUY_PUT_CLOSE', 'BUY_CALL_CLOSE'].includes(form.trade_type)
+  const cashFlow = isSell ? qtyN * priceN * sizeN - feeN
+    : isBuy ? -(qtyN * priceN * sizeN + feeN)
+    : form.trade_type === 'SELL_SHARES' ? qtyN * priceN - feeN
+    : null
+
+  const expiryChips: [string, string][] = [
+    ['本周五', nthFriday(1)], ['下周五', nthFriday(2)],
+    ['~30天', fridayNear(30)], ['~45天', fridayNear(45)],
+  ]
 
   async function submit() {
     setErr(null)
@@ -146,6 +190,7 @@ function TradeModal({
         fee: form.fee ? parseFloat(form.fee) : 0,
         contract_size: form.contract_size ? parseInt(form.contract_size) : 100,
         note: form.note || undefined,
+        traded_at: form.traded_at || undefined,
         cycle_id: cycleId,
         new_cycle: newCycle,
       })
@@ -172,17 +217,27 @@ function TradeModal({
         <h3 style={{ margin: '0 0 16px', fontSize: 16 }}>登记交易 — {form.symbol}</h3>
         {err && <div className="alert alert-error" style={{ marginBottom: 12 }}>{err}</div>}
         <div style={{ display: 'grid', gap: 12 }}>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
             类型
-            <select value={form.trade_type} style={inputStyle}
-              onChange={e => setForm(f => ({ ...f, trade_type: e.target.value as WheelTradeType }))}>
-              {allowed.map(t => <option key={t} value={t}>{TRADE_LABELS[t]}</option>)}
-            </select>
-          </label>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              {allowed.map(t => (
+                <button key={t} type="button" onClick={() => setForm(f => ({ ...f, trade_type: t }))}
+                  style={{
+                    padding: '5px 12px', borderRadius: 14, fontSize: 12, cursor: 'pointer',
+                    border: `1px solid ${form.trade_type === t ? 'var(--accent)' : 'var(--border)'}`,
+                    background: form.trade_type === t ? 'var(--accent)' : 'transparent',
+                    color: form.trade_type === t ? '#fff' : 'var(--text)',
+                    fontWeight: form.trade_type === t ? 700 : 400,
+                  }}>
+                  {TRADE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </div>
           {needContract && (
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               合约代码(选填)
-              <input value={form.contract_code} style={inputStyle}
+              <input value={form.contract_code} style={inputStyle} placeholder="如 US.AAPL260821P00200000"
                 onChange={e => setForm(f => ({ ...f, contract_code: e.target.value }))} />
             </label>
           )}
@@ -194,11 +249,25 @@ function TradeModal({
             </label>
           )}
           {needContract && (
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              到期日(YYYY-MM-DD)
-              <input value={form.expiry} placeholder="2026-08-21" style={inputStyle}
-                onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} />
-            </label>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              到期日
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+                <input type="date" value={form.expiry} style={{ ...inputStyle, width: 150 }}
+                  onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} />
+                {expiryChips.map(([label, val]) => (
+                  <button key={label} type="button" onClick={() => setForm(f => ({ ...f, expiry: val }))}
+                    title={val}
+                    style={{
+                      padding: '3px 8px', borderRadius: 10, fontSize: 11, cursor: 'pointer',
+                      border: `1px solid ${form.expiry === val ? 'var(--accent)' : 'var(--border)'}`,
+                      color: form.expiry === val ? 'var(--accent)' : 'var(--text-secondary)',
+                      background: 'transparent',
+                    }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
             {needContract && (
@@ -221,11 +290,34 @@ function TradeModal({
                 onChange={e => setForm(f => ({ ...f, fee: e.target.value }))} />
             </label>
           </div>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            备注
-            <input value={form.note} style={inputStyle}
-              onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
-          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              成交时间
+              <input type="datetime-local" value={form.traded_at} style={inputStyle}
+                onChange={e => setForm(f => ({ ...f, traded_at: e.target.value }))} />
+            </label>
+            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              备注
+              <input value={form.note} style={inputStyle}
+                onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
+            </label>
+          </div>
+          {cashFlow != null && priceN > 0 && (
+            <div style={{
+              padding: '8px 12px', borderRadius: 6, fontSize: 13,
+              background: cashFlow >= 0 ? '#4ade8011' : '#f8717111',
+              border: `1px solid ${cashFlow >= 0 ? '#4ade8044' : '#f8717144'}`,
+            }}>
+              本笔现金流:<b style={{ color: cashFlow >= 0 ? '#4ade80' : '#f87171' }}>
+                {cashFlow >= 0 ? '+' : ''}{cashFlow.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+              </b>
+              <span style={{ color: 'var(--text-secondary)', marginLeft: 8, fontSize: 11 }}>
+                {form.trade_type === 'SELL_SHARES'
+                  ? `${qtyN} 股 × ${priceN} − 手续费 ${feeN}`
+                  : `${qtyN} 张 × ${priceN} × ${sizeN}${isSell ? ` − 手续费 ${feeN}` : ` + 手续费 ${feeN}`}`}
+              </span>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
             <button className="btn" onClick={onClose}>取消</button>
             <button className="btn btn-primary" disabled={saving} onClick={submit}>
@@ -695,15 +787,27 @@ export default function WheelPage() {
                 cycles.length > 0 ? cycles.map((c, i) => ({ cycle: c, idx: i })) : [{ cycle: null, idx: 0 }]
               return cards.map(({ cycle: c, idx }) => {
                 const status = c?.status || 'IDLE'
+                const check = c ? openChecks[c.id] : undefined
+                const profitPct = check?.profit_pct ?? null
+                const dteVal = c?.open_dte ?? null
                 return (
-                  <div key={`${t.symbol}-${c?.id || 'empty'}`} className="card" style={{ padding: '16px 20px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <div key={`${t.symbol}-${c?.id || 'empty'}`} className="card" style={{
+                    padding: '16px 20px', display: 'flex', flexDirection: 'column',
+                    borderLeft: `3px solid ${c ? STAGE_COLORS[status] : 'var(--border)'}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                       <div>
-                        <span style={{ fontWeight: 700, fontSize: 16 }}>{t.symbol}</span>
+                        <span style={{ fontWeight: 700, fontSize: 18 }}>{t.symbol}</span>
                         {cycles.length > 1 && <span style={{ color: 'var(--accent)', fontSize: 12, marginLeft: 6 }}>轮 #{idx + 1}</span>}
-                        <span style={{ color: 'var(--text-secondary)', fontSize: 12, marginLeft: 8 }}>{t.name}</span>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginTop: 2 }}>{t.name}</div>
                       </div>
-                      <span style={{ color: STAGE_COLORS[status], fontWeight: 700, fontSize: 13 }}>
+                      <span style={{
+                        padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 700,
+                        color: c ? STAGE_COLORS[status] : 'var(--text-secondary)',
+                        background: c ? STAGE_COLORS[status] + '22' : 'var(--bg-secondary)',
+                        border: `1px solid ${c ? STAGE_COLORS[status] + '55' : 'var(--border)'}`,
+                        whiteSpace: 'nowrap',
+                      }}>
                         {c ? STAGE_LABELS[status] : '未开轮'}
                       </span>
                     </div>
@@ -711,43 +815,83 @@ export default function WheelPage() {
 
                     {/* 在场合约 */}
                     {c && (c.status === 'CSP_OPEN' || c.status === 'CC_OPEN') && (
-                      <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '8px 12px', fontSize: 12, marginBottom: 10 }}>
-                        <div style={{ fontFamily: 'monospace', marginBottom: 4 }}>{c.open_contract_code || `${c.open_option_type} $${c.open_strike}`}</div>
-                        <div style={{ display: 'flex', gap: 14, color: 'var(--text-secondary)', flexWrap: 'wrap' }}>
-                          <span>Strike ${fmt(c.open_strike)}</span>
-                          <span>到期 {c.open_expiry}</span>
-                          <span style={{ color: (c.open_dte ?? 99) <= 7 ? '#fb923c' : undefined }}>DTE {c.open_dte ?? '--'}</span>
-                          <span>开仓 ${fmt(c.open_price)}</span>
-                          {openChecks[c.id] && (
-                            <>
-                              <span>现价 ${fmt(openChecks[c.id].current_price)}</span>
-                              <span style={{
-                                fontWeight: 700,
-                                color: (openChecks[c.id].profit_pct ?? 0) >= profitTarget ? '#4ade80'
-                                  : (openChecks[c.id].profit_pct ?? 0) < 0 ? '#f87171' : 'var(--text)',
-                              }}>
-                                浮盈 {openChecks[c.id].profit_pct ?? '--'}%
-                              </span>
-                              {openChecks[c.id].itm && <span style={{ color: '#f87171', fontWeight: 700 }}>ITM</span>}
-                            </>
-                          )}
+                      <div style={{
+                        background: 'var(--bg-secondary)', borderRadius: 8, padding: '10px 12px',
+                        fontSize: 12, marginBottom: 10,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
+                            {c.open_contract_code || `${c.open_option_type} $${c.open_strike}`}
+                          </span>
+                          <span style={{ display: 'flex', gap: 6 }}>
+                            {check?.itm && (
+                              <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#f8717122', color: '#f87171', border: '1px solid #f8717155' }}>ITM</span>
+                            )}
+                            {dteVal != null && dteVal <= 7 && (
+                              <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#fb923c22', color: '#fb923c', border: '1px solid #fb923c55' }}>临期</span>
+                            )}
+                            {check?.profit_hit && (
+                              <span style={{ padding: '1px 8px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#4ade8022', color: '#4ade80', border: '1px solid #4ade8055' }}>达标</span>
+                            )}
+                          </span>
                         </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px 10px' }}>
+                          {([
+                            ['Strike', `$${fmt(c.open_strike)}`, undefined],
+                            ['到期', `${(c.open_expiry || '').slice(5)}`, undefined],
+                            ['DTE', dteVal != null ? `${dteVal}天` : '--', dteVal != null && dteVal <= 7 ? '#fb923c' : undefined],
+                            ['开仓价', `$${fmt(c.open_price)}`, undefined],
+                            ...(check ? [
+                              ['现价', `$${fmt(check.current_price)}`, undefined],
+                              ['浮盈', profitPct != null ? `${profitPct}%` : '--',
+                                (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : undefined],
+                              ['买回价', `$${fmt(check.buyback_ask)}`, undefined],
+                            ] as [string, string, string | undefined][] : []),
+                          ] as [string, string, string | undefined][]).map(([lab, val, color]) => (
+                            <div key={lab}>
+                              <div style={{ color: 'var(--text-secondary)', fontSize: 10, marginBottom: 1 }}>{lab}</div>
+                              <div style={{ fontWeight: 600, color: color || 'var(--text)' }}>{val}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {/* 浮盈进度条(相对止盈目标) */}
+                        {profitPct != null && profitPct > 0 && (
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ height: 4, borderRadius: 2, background: 'var(--border)', overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%', borderRadius: 2,
+                                width: `${Math.min(profitPct / profitTarget * 100, 100)}%`,
+                                background: profitPct >= profitTarget ? '#4ade80' : '#38bdf8',
+                                transition: 'width .3s',
+                              }} />
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>
+                              止盈进度 {profitPct}% / {profitTarget}%
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {/* 数据行 */}
-                    <div style={{ display: 'flex', gap: 16, fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, flexWrap: 'wrap' }}>
-                      <span>底线 ${fmt(t.floor_price)}</span>
-                      {t.idle_days != null && t.idle_days >= 5 && (
-                        <span style={{ color: '#fb923c' }}>⏸ 空转 {t.idle_days} 天(资金闲置)</span>
-                      )}
-                      {c && c.shares > 0 && <span>持股 {c.shares} @ ${fmt(c.share_cost)}</span>}
-                      {c && c.cost_basis != null && <span style={{ color: '#4ade80' }}>Cost Basis ${fmt(c.cost_basis)}</span>}
-                      {c && <span>本轮权利金 ${fmt(c.total_premium)}</span>}
+                    {/* 数据 chips */}
+                    <div style={{ display: 'flex', gap: 6, fontSize: 11, marginBottom: 12, flexWrap: 'wrap' }}>
+                      {([
+                        [`底线 $${fmt(t.floor_price)}`, undefined],
+                        ...(t.idle_days != null && t.idle_days >= 5 ? [[`⏸ 空转 ${t.idle_days} 天`, '#fb923c']] as [string, string | undefined][] : []),
+                        ...(c && c.shares > 0 ? [[`持股 ${c.shares} @ $${fmt(c.share_cost)}`, undefined]] as [string, string | undefined][] : []),
+                        ...(c && c.cost_basis != null ? [[`Cost Basis $${fmt(c.cost_basis)}`, '#4ade80']] as [string, string | undefined][] : []),
+                        ...(c ? [[`本轮权利金 $${fmt(c.total_premium)}`, (c.total_premium ?? 0) > 0 ? '#4ade80' : undefined]] as [string, string | undefined][] : []),
+                      ] as [string, string | undefined][]).map(([txt, color]) => (
+                        <span key={txt} style={{
+                          padding: '2px 9px', borderRadius: 10, border: '1px solid var(--border)',
+                          color: color || 'var(--text-secondary)', background: 'var(--bg-secondary)',
+                          whiteSpace: 'nowrap',
+                        }}>{txt}</span>
+                      ))}
                     </div>
 
                     {/* 操作按钮 */}
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 'auto' }}>
                       {status === 'IDLE' && (
                         <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }}
                           disabled={suggestLoading} onClick={() => handleSuggest(t.symbol, 'put', c?.id)}>找 Put</button>
@@ -1311,13 +1455,13 @@ function EditTradeModal({ trade, onClose, onSaved }: {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              到期日(YYYY-MM-DD)
-              <input value={form.expiry} style={inputStyle}
+              到期日
+              <input type="date" value={(form.expiry || '').slice(0, 10)} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} />
             </label>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              交易时间
-              <input value={form.traded_at} style={inputStyle}
+              成交时间
+              <input type="datetime-local" value={(form.traded_at || '').slice(0, 16)} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, traded_at: e.target.value }))} />
             </label>
           </div>
