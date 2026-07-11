@@ -101,6 +101,12 @@ def add_target(body: TargetIn):
         "min_open_interest": body.min_open_interest,
         "enabled": 1 if body.enabled else 0,
     })
+    # 自动订阅历史日K:HV/EMA/IV rank 等档案数据依赖本地K线积累
+    try:
+        from app.data.history_repository import upsert_subscription
+        upsert_subscription(symbol, name=name, enabled=True)
+    except Exception as e:
+        logger.warning("history 订阅失败(%s): %s", symbol, e)
     return repo.get_target(symbol)
 
 
@@ -196,6 +202,21 @@ def record_trade(body: TradeIn):
         return cycle
     except WheelError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def ensure_target_subscriptions() -> int:
+    """确保所有启用的 wheel 标的都有历史日K订阅(波动率档案依赖)。返回新增数"""
+    from app.data.history_repository import list_subscriptions, upsert_subscription
+    existing = {s["symbol"] for s in list_subscriptions()}
+    added = 0
+    for t in repo.get_targets():
+        if t.get("enabled") and t["symbol"] not in existing:
+            try:
+                upsert_subscription(t["symbol"], name=t.get("name"), enabled=True)
+                added += 1
+            except Exception:
+                pass
+    return added
 
 
 def backfill_missing_contract_codes() -> Dict[str, Any]:

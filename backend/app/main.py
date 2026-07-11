@@ -47,7 +47,11 @@ def _backfill_codes_once():
     import time
     time.sleep(5)
     try:
-        from app.api.wheel import backfill_missing_contract_codes
+        from app.api.wheel import backfill_missing_contract_codes, ensure_target_subscriptions
+        n = ensure_target_subscriptions()
+        if n:
+            import logging
+            logging.getLogger(__name__).info("wheel 标的补订阅历史日K: %d 个", n)
         r = backfill_missing_contract_codes()
         if r["updated"] or r["failed"]:
             import logging
@@ -60,7 +64,7 @@ def _iv_snapshot_loop():
     """每天为所有启用的 wheel 标的存一次 ATM IV 快照(缺今天的才补)"""
     import time
     from datetime import date
-    time.sleep(900)  # 启动 15 分钟后再开始,避开限频高峰
+    time.sleep(180)  # 启动 3 分钟后开始(错开启动补数即可),尽快积累 IV 档案
     while True:
         try:
             from app.api.leaps import _load_config

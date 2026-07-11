@@ -991,7 +991,7 @@ export default function WheelPage() {
 
                   {/* 轮子列表(窄列) + 交易明细(右) */}
                   <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                  <div style={{ flex: '0 0 400px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {selCycles.length === 0 && (
                     <div className="card" style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
                       该标的还没有进行中的轮子 —— 点「找 Put」筛选合约,成交后回来登记开轮
@@ -1069,7 +1069,7 @@ export default function WheelPage() {
                                   {(c.open_qty || 1) > 1 && <> · {c.open_qty}张</>}
                                 </span>
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px 8px' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '6px 8px' }}>
                                 {([
                                   ['开仓', `$${fmt(c.open_price)}`, undefined],
                                   ['现价', check ? `$${fmt(check.current_price)}` : '--', undefined],
@@ -1148,7 +1148,7 @@ export default function WheelPage() {
                   </div>
 
                   {/* 交易明细面板 */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ flex: selectedCycleId ? '0 0 400px' : '0 0 200px', minWidth: 0 }}>
                     {(() => {
                       const dc = selCycles.find(c => c.id === selectedCycleId)
                       if (selCycles.length === 0) return null
