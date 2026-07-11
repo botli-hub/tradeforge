@@ -219,16 +219,14 @@ def _parse_futu_contract(code: str) -> Tuple[str, str, float, str]:
     示例: US.AAPL260717C00300000 → ('AAPL', '260717', 300.0, 'C')
     """
     try:
+        import re
         parts = code.split(".")
         raw = parts[-1]          # AAPL260717C00300000
-        # 找到 C/P 分隔
-        for i, ch in enumerate(raw):
-            if ch in ("C", "P"):
-                underlying = raw[:i - 6]
-                expiry = raw[i - 6: i]
-                opt_type = ch
-                strike = int(raw[i + 1:]) / 1000.0
-                return underlying, expiry, strike, opt_type
+        # 从结构上解析:标的(可含C/P字母,如 AAPL) + 6位日期 + C/P + 行权价数字
+        m = re.match(r"^(.+?)(\d{6})([CP])(\d+)$", raw)
+        if m:
+            underlying, expiry, opt_type, strike_raw = m.groups()
+            return underlying, expiry, int(strike_raw) / 1000.0, opt_type
     except Exception:
         pass
     return ("", "", 0.0, "")

@@ -269,8 +269,8 @@ function TradeModal({
           </div>
           {needContract && (
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              合约代码(选填)
-              <input value={form.contract_code} style={inputStyle} placeholder="如 US.AAPL260821P00200000"
+              合约代码(选填,留空将按 Strike+到期日自动补全)
+              <input value={form.contract_code} style={inputStyle} placeholder="留空自动生成,如 US.AAPL260821P00200000"
                 onChange={e => setForm(f => ({ ...f, contract_code: e.target.value }))} />
             </label>
           )}
@@ -1055,6 +1055,7 @@ export default function WheelPage() {
                                 {' · '}开 ${fmt(c.open_price)}
                                 {check && <>
                                   {' · '}现 ${fmt(check.current_price)}
+                                  {' · '}值 <b>${fmtMoney(check.current_price * (c.open_qty || 1) * (c.open_contract_size || 100))}</b>
                                   {' · '}浮盈 <b style={{
                                     color: (profitPct ?? 0) >= profitTarget ? '#4ade80' : (profitPct ?? 0) < 0 ? '#f87171' : 'var(--text)',
                                   }}>{profitPct != null ? `${profitPct}%` : '--'}</b>

@@ -174,10 +174,16 @@ def record_trade(body: TradeIn):
                     detail=f"超出 {body.symbol} 资金上限:已占用 {committed:.0f} + 本单担保 {new_collateral:.0f} "
                            f"> 上限 {target['max_capital']:.0f}。可在标的设置调高上限(0=不限)",
                 )
+    # 卖出开仓且未填合约代码时,按 strike+到期日 自动补全
+    contract_code = body.contract_code
+    if (not contract_code and body.trade_type in ("SELL_PUT", "SELL_CALL")
+            and body.strike and body.expiry):
+        contract_code = _resolve_contract_code(
+            body.symbol.strip().upper(), body.trade_type, body.strike, body.expiry)
     try:
         cycle = repo.record_trade(
             symbol=body.symbol, trade_type=body.trade_type,
-            contract_code=body.contract_code, strike=body.strike, expiry=body.expiry,
+            contract_code=contract_code, strike=body.strike, expiry=body.expiry,
             qty=body.qty, price=body.price, fee=body.fee,
             contract_size=body.contract_size, note=body.note, traded_at=body.traded_at,
             cycle_id=body.cycle_id, new_cycle=body.new_cycle,
@@ -185,6 +191,33 @@ def record_trade(body: TradeIn):
         return cycle
     except WheelError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def _resolve_contract_code(symbol: str, trade_type: str, strike: float,
+                           expiry: str) -> Optional[str]:
+    """按 strike+到期日 推导期权代码。
+    优先富途期权链精确匹配(US/HK 通用,可校验合约存在);
+    OpenD 不可用时,美股按 OCC 规则合成(US.AAPL260821P00200000)。"""
+    side = "PUT" if trade_type == "SELL_PUT" else "CALL"
+    exp = str(expiry)[:10]
+    try:
+        from app.services.wheel_scanner import cached_chain
+        futu_cfg = _wheel_cfg().get("futu", {}) or {}
+        chain = cached_chain(symbol, exp,
+                             futu_cfg.get("host", "127.0.0.1"), futu_cfg.get("port", 11111))
+        for c in chain.get("contracts", []):
+            if c.get("option_type") == side and abs((c.get("strike") or 0) - strike) < 1e-6:
+                return c.get("option_symbol")
+        logger.info("期权链中未找到 %s %s %s %s,回退合成", symbol, side, strike, exp)
+    except Exception as e:
+        logger.info("期权链补全代码不可用(%s): %s", symbol, e)
+    if not symbol.endswith(".HK"):
+        try:
+            yymmdd = exp[2:4] + exp[5:7] + exp[8:10]
+            return f"US.{symbol}{yymmdd}{'P' if side == 'PUT' else 'C'}{int(round(strike * 1000)):08d}"
+        except Exception:
+            pass
+    return None
 
 
 class TradeUpdate(BaseModel):
