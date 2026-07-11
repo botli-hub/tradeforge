@@ -1069,7 +1069,7 @@ export default function WheelPage() {
                                   {(c.open_qty || 1) > 1 && <> · {c.open_qty}张</>}
                                 </span>
                               </div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: '6px 8px' }}>
+                              <div style={{ display: 'flex', gap: '6px 22px', flexWrap: 'wrap' }}>
                                 {([
                                   ['开仓', `$${fmt(c.open_price)}`, undefined],
                                   ['现价', check ? `$${fmt(check.current_price)}` : '--', undefined],
