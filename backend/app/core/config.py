@@ -61,6 +61,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
         "earnings_warn_days": 14, "weekly_report": True,
+        # 通知模式:realtime=每条即时推;digest=每日一条汇总(深度ITM/临期ITM仍即时)
+        "notify_mode": "realtime",
     },
     "wheel_scan": {
         "max_spread_pct": 10.0, "spread_soft_pct": 4.0,

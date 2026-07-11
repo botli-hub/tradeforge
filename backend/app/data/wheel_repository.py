@@ -29,6 +29,19 @@ class WheelError(Exception):
     """状态机/校验错误,API 层转 400"""
 
 
+STATUS_LABELS_ZH = {
+    "IDLE": "空仓", "CSP_OPEN": "卖Put中", "HOLDING": "持股",
+    "CC_OPEN": "卖Call中", "CLOSED": "已结束",
+}
+TRADE_LABELS_ZH = {
+    "SELL_PUT": "卖出Put", "BUY_PUT_CLOSE": "买回Put平仓",
+    "SELL_CALL": "卖出Call", "BUY_CALL_CLOSE": "买回Call平仓",
+    "EXPIRE": "到期作废", "ASSIGNED": "被行权接货",
+    "CALLED_AWAY": "被行权交货", "SELL_SHARES": "卖出股票结束",
+    "BUY_SHARES": "已持正股入轮",
+}
+
+
 # ── targets ──────────────────────────────────────────────────────────────────
 
 def get_targets() -> List[Dict[str, Any]]:
@@ -125,7 +138,7 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
     if tt not in TRADE_TYPES:
         raise WheelError(f"未知交易类型: {tt}")
     if s["status"] == "CLOSED":
-        raise WheelError("周期已结束,不能再登记交易")
+        raise WheelError("这个轮子已经结束结算,不能再登记交易;要开新一轮请用「+新开轮子」")
 
     qty = t.get("qty") or 1
     price = t.get("price") or 0
@@ -136,7 +149,10 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
 
     def need(status: str):
         if s["status"] != status:
-            raise WheelError(f"状态 {s['status']} 不能执行 {tt}(需 {status})")
+            raise WheelError(
+                f"当前轮子处于「{STATUS_LABELS_ZH.get(s['status'], s['status'])}」,"
+                f"不能登记「{TRADE_LABELS_ZH.get(tt, tt)}」"
+                f"——该操作需要轮子处于「{STATUS_LABELS_ZH.get(status, status)}」状态")
 
     def clear_open():
         s.update(open_contract_code=None, open_option_type=None, open_strike=None,
@@ -172,7 +188,7 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
 
     elif tt == "EXPIRE":
         if s["status"] not in ("CSP_OPEN", "CC_OPEN"):
-            raise WheelError("EXPIRE 需要有在场合约(CSP_OPEN 或 CC_OPEN)")
+            raise WheelError("「到期作废」需要有在场合约(轮子处于「卖Put中」或「卖Call中」)")
         s["status"] = "IDLE" if s["status"] == "CSP_OPEN" else "HOLDING"
         clear_open()
 
@@ -621,6 +637,42 @@ def get_stats() -> Dict[str, Any]:
                 d["dte"] = dte
                 expiring_soon.append(d)
 
+        # 月度净权利金(近 12 个月,复盘用)
+        monthly = [dict(r) for r in conn.execute(
+            """SELECT substr(traded_at, 1, 7) AS ym,
+                      ROUND(SUM(CASE
+                          WHEN trade_type IN ('SELL_PUT','SELL_CALL') THEN qty*price*contract_size - fee
+                          WHEN trade_type IN ('BUY_PUT_CLOSE','BUY_CALL_CLOSE') THEN -(qty*price*contract_size + fee)
+                          ELSE 0 END), 2) AS premium
+               FROM wheel_trades GROUP BY ym ORDER BY ym DESC LIMIT 12"""
+        ).fetchall()][::-1]
+
+        # 标的收益排行:谁值得继续轮,谁该踢出池子
+        ranking = [dict(r) for r in conn.execute(
+            """SELECT t.symbol,
+                      ROUND(COALESCE(SUM(CASE
+                          WHEN t.trade_type IN ('SELL_PUT','SELL_CALL') THEN t.qty*t.price*t.contract_size - t.fee
+                          WHEN t.trade_type IN ('BUY_PUT_CLOSE','BUY_CALL_CLOSE') THEN -(t.qty*t.price*t.contract_size + t.fee)
+                          ELSE 0 END), 0), 2) AS premium,
+                      MIN(t.traded_at) AS first_trade
+               FROM wheel_trades t GROUP BY t.symbol"""
+        ).fetchall()]
+        pnl_by_symbol = {r["symbol"]: (r["pnl"], r["closed"]) for r in conn.execute(
+            """SELECT symbol, ROUND(COALESCE(SUM(realized_pnl), 0), 2) AS pnl,
+                      COUNT(1) AS closed
+               FROM wheel_cycles WHERE status = 'CLOSED' GROUP BY symbol"""
+        ).fetchall()}
+        for r in ranking:
+            pnl, closed = pnl_by_symbol.get(r["symbol"], (0.0, 0))
+            r["realized_pnl"] = pnl
+            r["closed_cycles"] = closed
+            try:
+                days = max((date.today() - date.fromisoformat(str(r["first_trade"])[:10])).days, 1)
+                r["active_days"] = days
+            except Exception:
+                r["active_days"] = None
+        ranking.sort(key=lambda x: x["premium"], reverse=True)
+
         result = {
             "active_cycles": active,
             "closed_cycles": len(closed_rows),
@@ -628,6 +680,8 @@ def get_stats() -> Dict[str, Any]:
             "premium_total": round(_premium_since(None), 2),
             "realized_pnl_total": round(realized_total, 2),
             "expiring_soon": sorted(expiring_soon, key=lambda x: x["dte"]),
+            "monthly_premium": monthly,
+            "symbol_ranking": ranking,
         }
     finally:
         conn.close()

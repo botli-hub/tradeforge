@@ -5,7 +5,7 @@ import {
   getWheelCycles, getWheelTrades, recordWheelTrade, updateWheelTrade, deleteWheelTrade,
   getWheelStats, getWheelSuggest, triggerWheelTimingScan, getWheelTimingSignals,
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
-  getWheelPoolScan, pushWheelPoolScan, WheelScanResult,
+  getWheelPoolScan, pushWheelPoolScan, WheelScanResult, getBackendConfig,
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
   WheelScanStatus, WheelTimingHistoryPage, WheelOpenPositionItem, WheelRollOptions,
@@ -38,6 +38,41 @@ const ALLOWED_TRADES: Record<string, WheelTradeType[]> = {
 function fmt(v: number | null | undefined, digits = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return '--'
   return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+}
+
+// ── 颜色语义:绿=收益/安全 橙=注意 红=风险 蓝=信息 紫=中性标记 ──────────────────
+const C = { green: '#4ade80', orange: '#fb923c', red: '#f87171', blue: '#38bdf8', purple: '#a78bfa' } as const
+type SemColor = keyof typeof C
+
+function Badge({ color, children, title }: { color: SemColor; children: any; title?: string }) {
+  return (
+    <span title={title} style={{
+      padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700,
+      background: C[color] + '22', color: C[color], border: `1px solid ${C[color]}55`,
+      whiteSpace: 'nowrap',
+    }}>{children}</span>
+  )
+}
+
+function Stat({ label, value, color }: { label: string; value: string; color?: SemColor }) {
+  return (
+    <div>
+      <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{label}</div>
+      <div style={{ fontWeight: 600, fontSize: 12, color: color ? C[color] : 'var(--text)' }}>{value}</div>
+    </div>
+  )
+}
+
+function StatusDot({ ok, label }: { ok: boolean | null; label: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+      <span style={{
+        width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
+        background: ok == null ? 'var(--border)' : ok ? C.green : C.red,
+      }} />
+      {label}
+    </span>
+  )
 }
 
 function fmtMoney(v: number) {
@@ -409,6 +444,17 @@ export default function WheelPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   // 看板选中轮子(右侧交易明细)
   const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null)
+  // 数据新鲜度与连接状态
+  const [checksAt, setChecksAt] = useState<Date | null>(null)
+  const [opendOk, setOpendOk] = useState<boolean | null>(null)
+  const [tgOk, setTgOk] = useState<boolean | null>(null)
+  const [nowTick, setNowTick] = useState(Date.now())
+  // 今日行动过滤
+  const [actionFilter, setActionFilter] = useState<'close' | 'roll' | 'uncovered' | 'idle' | null>(null)
+  // 删除撤销
+  const [undoTrade, setUndoTrade] = useState<WheelTrade | null>(null)
+  // 标的快速筛选
+  const [symbolQuery, setSymbolQuery] = useState('')
   // 看板行内编辑标的参数
   const [editParams, setEditParams] = useState<{
     floor_price: string; delta_min: string; delta_max: string
@@ -445,17 +491,32 @@ export default function WheelPage() {
       setCandidates(cand)
       setTimingSignals(tim)
       // 在场合约体检(需 OpenD,失败静默)
-      const st = getAppSettings()
-      checkWheelOpenPositions(st.marketHost, st.marketPort).then(r => {
-        const map: Record<string, WheelOpenPositionItem> = {}
-        r.items.forEach(i => { map[i.cycle_id] = i })
-        setOpenChecks(map)
-        setProfitTarget(r.profit_target_pct)
-      }).catch(() => setOpenChecks({}))
+      refreshChecks()
+      // Telegram 配置状态
+      getBackendConfig().then(cfg => setTgOk(!!cfg.telegram?.bot_token)).catch(() => setTgOk(null))
     } catch (e: any) {
       setError(e.message)
     }
   }, [])
+
+  const refreshChecks = useCallback(() => {
+    const st = getAppSettings()
+    return checkWheelOpenPositions(st.marketHost, st.marketPort).then(r => {
+      const map: Record<string, WheelOpenPositionItem> = {}
+      r.items.forEach(i => { map[i.cycle_id] = i })
+      setOpenChecks(map)
+      setProfitTarget(r.profit_target_pct)
+      setChecksAt(new Date())
+      setOpendOk(true)
+    }).catch(() => { setOpenChecks({}); setOpendOk(false) })
+  }, [])
+
+  // 每 5 分钟自动刷新体检数据;每 30 秒重算新鲜度显示
+  useEffect(() => {
+    const t1 = setInterval(() => { refreshChecks() }, 5 * 60 * 1000)
+    const t2 = setInterval(() => setNowTick(Date.now()), 30 * 1000)
+    return () => { clearInterval(t1); clearInterval(t2) }
+  }, [refreshChecks])
 
   async function handlePoolScan(refresh = false) {
     setPoolScanLoading(true)
@@ -549,12 +610,31 @@ export default function WheelPage() {
   }
 
   async function handleDeleteTrade(t: WheelTrade) {
-    if (!confirm(`确定删除这笔「${TRADE_LABELS[t.trade_type]}」记录?周期状态会重新计算`)) return
     try {
       await deleteWheelTrade(t.id)
+      setUndoTrade(t)
+      setTimeout(() => setUndoTrade(u => (u && u.id === t.id ? null : u)), 12000)
       await loadAll()
     } catch (e: any) {
       setError('删除失败:' + e.message)
+    }
+  }
+
+  async function handleUndoDelete() {
+    if (!undoTrade) return
+    const t = undoTrade
+    setUndoTrade(null)
+    try {
+      await recordWheelTrade({
+        symbol: t.symbol, trade_type: t.trade_type,
+        contract_code: t.contract_code || undefined,
+        strike: t.strike ?? undefined, expiry: t.expiry || undefined,
+        qty: t.qty, price: t.price, fee: t.fee, contract_size: t.contract_size,
+        note: t.note || undefined, traded_at: t.traded_at, cycle_id: t.cycle_id,
+      })
+      await loadAll()
+    } catch (e: any) {
+      setError('撤销失败(周期状态可能已变化):' + e.message)
     }
   }
 
@@ -620,12 +700,45 @@ export default function WheelPage() {
 
   return (
     <div style={{ padding: '20px 24px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0, fontSize: 20 }}>Wheel 车轮策略</h2>
         <button className="btn" style={{ fontSize: 13, padding: '5px 12px' }} onClick={loadAll}>刷新</button>
+        <span style={{ display: 'flex', gap: 12, alignItems: 'center', marginLeft: 'auto' }}>
+          <StatusDot ok={opendOk} label="富途行情" />
+          <StatusDot ok={tgOk} label="Telegram" />
+          {(() => {
+            void nowTick
+            if (!checksAt) return <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>实时数据未加载</span>
+            const mins = Math.floor((Date.now() - checksAt.getTime()) / 60000)
+            const stale = mins >= 10
+            return (
+              <span style={{ fontSize: 11, color: stale ? C.orange : 'var(--text-secondary)' }}>
+                数据截至 {checksAt.toTimeString().slice(0, 5)}{mins > 0 ? `(${mins}分钟前)` : ''}
+                {stale && ' ⚠'}
+              </span>
+            )
+          })()}
+          <button className="btn" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => refreshChecks()}>↻ 刷新行情</button>
+        </span>
       </div>
 
-      {error && <div className="alert alert-error" style={{ marginBottom: 16 }}>{error}</div>}
+      {opendOk === false && (
+        <div style={{ marginBottom: 12, border: `1px solid ${C.orange}55`, background: C.orange + '11', padding: '8px 14px', borderRadius: 6, fontSize: 12 }}>
+          ⚠ 富途 OpenD 未连接:现价/浮盈/Δ/θ 等实时数据不可用,当前显示的是登记数据。启动 OpenD 后点「↻ 刷新行情」。
+        </div>
+      )}
+      {undoTrade && (
+        <div style={{ marginBottom: 12, border: '1px solid var(--border)', background: 'var(--bg-secondary)', padding: '8px 14px', borderRadius: 6, fontSize: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+          已删除「{TRADE_LABELS[undoTrade.trade_type]}」({undoTrade.symbol})
+          <button className="btn" style={{ fontSize: 11, padding: '2px 10px', color: 'var(--accent)' }} onClick={handleUndoDelete}>撤销</button>
+        </div>
+      )}
+      {error && (
+        <div className="alert alert-error" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ flex: 1 }}>{error}</span>
+          <button className="btn" style={{ fontSize: 11, padding: '2px 10px', flexShrink: 0 }} onClick={loadAll}>重试</button>
+        </div>
+      )}
 
       {/* 统计卡片 */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 20 }}>
@@ -669,6 +782,44 @@ export default function WheelPage() {
       {/* ── 看板 ── */}
       {tab === 'board' && (
         <div>
+          {/* 今日行动 */}
+          {(() => {
+            const checks = Object.values(openChecks)
+            const closeSyms = new Set(checks.filter(i => i.profit_hit || i.action_hint === '平仓换仓(剩余年化低)').map(i => i.symbol))
+            const rollSyms = new Set(checks.filter(i => (i.action_hint || '').includes('Roll')).map(i => i.symbol))
+            const uncovSyms = new Set(targets.filter(t =>
+              (t.active_cycles || []).some(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3)).map(t => t.symbol))
+            const idleSyms = new Set(targets.filter(t => t.enabled && (t.idle_days ?? 0) >= 5).map(t => t.symbol))
+            const items: [typeof actionFilter, string, number, SemColor][] = [
+              ['close', '💰 该平仓', closeSyms.size, 'green'],
+              ['roll', '🔄 该Roll', rollSyms.size, 'orange'],
+              ['uncovered', '🪑 裸奔', uncovSyms.size, 'orange'],
+              ['idle', '⏸ 空转', idleSyms.size, 'blue'],
+            ]
+            const total = items.reduce((a, [, , n]) => a + n, 0)
+            if (total === 0) return null
+            return (
+              <div className="card" style={{ padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>⚡ 今日行动</span>
+                {items.filter(([, , n]) => n > 0).map(([key, label, n, color]) => (
+                  <button key={key} onClick={() => setActionFilter(f => f === key ? null : key)}
+                    style={{
+                      padding: '3px 12px', borderRadius: 12, fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                      background: actionFilter === key ? C[color] : C[color] + '18',
+                      color: actionFilter === key ? '#111' : C[color],
+                      border: `1px solid ${C[color]}66`,
+                    }}>
+                    {label} {n}
+                  </button>
+                ))}
+                {actionFilter && (
+                  <button className="btn" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => setActionFilter(null)}>清除过滤</button>
+                )}
+                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>点击类别过滤左侧标的</span>
+              </div>
+            )
+          })()}
+
           {/* 全池扫描 */}
           <div className="card" style={{ padding: '12px 18px', marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -832,18 +983,47 @@ export default function WheelPage() {
             cycles.forEach(c => {
               premiumBySymbol[c.symbol] = (premiumBySymbol[c.symbol] || 0) + (c.total_premium || 0)
             })
-            const enabled = [...targets.filter(t => t.enabled)].sort(
+            let enabled = [...targets.filter(t => t.enabled)].sort(
               (a, b) => targetCapital(b.active_cycles || []) - targetCapital(a.active_cycles || []))
-            if (enabled.length === 0) return null
+            if (symbolQuery.trim()) {
+              const q = symbolQuery.trim().toUpperCase()
+              enabled = enabled.filter(t => t.symbol.includes(q))
+            }
+            if (actionFilter) {
+              const checks = Object.values(openChecks)
+              const match = (t: WheelTarget): boolean => {
+                if (actionFilter === 'close') return checks.some(i => i.symbol === t.symbol && (i.profit_hit || i.action_hint === '平仓换仓(剩余年化低)'))
+                if (actionFilter === 'roll') return checks.some(i => i.symbol === t.symbol && (i.action_hint || '').includes('Roll'))
+                if (actionFilter === 'uncovered') return (t.active_cycles || []).some(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3)
+                if (actionFilter === 'idle') return (t.idle_days ?? 0) >= 5
+                return true
+              }
+              enabled = enabled.filter(match)
+            }
+            if (enabled.length === 0) return (
+              <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '16px 0' }}>
+                没有匹配的标的
+                {(actionFilter || symbolQuery) && (
+                  <button className="btn" style={{ fontSize: 11, padding: '2px 10px', marginLeft: 8 }}
+                    onClick={() => { setActionFilter(null); setSymbolQuery('') }}>清除筛选</button>
+                )}
+              </div>
+            )
             const sel = enabled.find(t => t.symbol === selectedSymbol) || enabled[0]
             const selCycles = [...(sel.active_cycles || [])].sort(
               (a, b) => (CYCLE_STATUS_ORDER[a.status] ?? 9) - (CYCLE_STATUS_ORDER[b.status] ?? 9))
             return (
-              <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-                {/* ── 左:标的列表 ── */}
-                <div className="card" style={{ width: 250, flexShrink: 0, padding: 8 }}>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', padding: '4px 10px 8px' }}>
-                    标的({enabled.length})
+              <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                {/* ── 左:标的列表(窄屏自动占满整行堆叠) ── */}
+                <div className="card" style={{ flex: '1 0 250px', maxWidth: 320, minWidth: 220, padding: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px 8px' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>标的({enabled.length})</span>
+                    <input value={symbolQuery} onChange={e => setSymbolQuery(e.target.value)} placeholder="筛选…"
+                      style={{
+                        width: '100%', minWidth: 0, padding: '2px 8px', fontSize: 11,
+                        background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                        borderRadius: 4, color: 'var(--text)',
+                      }} />
                   </div>
                   {enabled.map(t => {
                     const cs = t.active_cycles || []
@@ -891,7 +1071,7 @@ export default function WheelPage() {
                 </div>
 
                 {/* ── 右:选中标的详情 ── */}
-                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ flex: '999 1 480px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 12 }}>
                   {/* 标的头部(参数可行内编辑) */}
                   <div className="card" style={{ padding: '10px 16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
@@ -990,8 +1170,8 @@ export default function WheelPage() {
                   </div>
 
                   {/* 轮子列表(窄列) + 交易明细(右) */}
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {selCycles.length === 0 && (
                     <div className="card" style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
                       该标的还没有进行中的轮子 —— 点「找 Put」筛选合约,成交后回来登记开轮
@@ -1021,30 +1201,17 @@ export default function WheelPage() {
                               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>#{idx + 1}</span>
                             )}
                             <StageIndicator status={status} />
-                            {check?.itm && (
-                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#f8717122', color: '#f87171', border: '1px solid #f8717155' }}>ITM</span>
-                            )}
-                            {dteVal != null && dteVal <= 7 && (
-                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#fb923c22', color: '#fb923c', border: '1px solid #fb923c55' }}>临期</span>
-                            )}
-                            {check?.profit_hit && (
-                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#4ade8022', color: '#4ade80', border: '1px solid #4ade8055' }}>达标</span>
-                            )}
+                            {check?.itm && <Badge color="red">ITM</Badge>}
+                            {dteVal != null && dteVal <= 7 && <Badge color="orange">临期</Badge>}
+                            {check?.profit_hit && <Badge color="green">达标</Badge>}
                             {check?.action_hint && !check.profit_hit && (
-                              <span style={{
-                                padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700,
-                                background: check.deep_itm ? '#f8717122' : check.low_yield && !check.roll_21dte ? '#38bdf822' : '#fb923c22',
-                                color: check.deep_itm ? '#f87171' : check.low_yield && !check.roll_21dte ? '#38bdf8' : '#fb923c',
-                                border: `1px solid ${check.deep_itm ? '#f87171' : check.low_yield && !check.roll_21dte ? '#38bdf8' : '#fb923c'}55`,
-                              }} title={(check.reasons || []).join(';')}>
+                              <Badge color={check.deep_itm ? 'red' : check.low_yield && !check.roll_21dte ? 'blue' : 'orange'}
+                                title={(check.reasons || []).join(';')}>
                                 👉 {check.action_hint}
-                              </span>
+                              </Badge>
                             )}
                             {status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3 && (
-                              <span style={{ padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700, background: '#fb923c22', color: '#fb923c', border: '1px solid #fb923c55' }}
-                                title="持股但未挂 Call,theta 收入在流失">
-                                🪑 裸奔 {c.uncovered_days} 天
-                              </span>
+                              <Badge color="orange" title="持股但未挂 Call,theta 收入在流失">🪑 裸奔 {c.uncovered_days} 天</Badge>
                             )}
                             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                               {c.shares > 0 && <>持股 {c.shares} @ ${fmt(c.share_cost)}{' · '}</>}
@@ -1075,18 +1242,15 @@ export default function WheelPage() {
                                   ['现价', check ? `$${fmt(check.current_price)}` : '--', undefined],
                                   ['价值', check ? `$${fmtMoney(check.current_price * (c.open_qty || 1) * (c.open_contract_size || 100))}` : '--', undefined],
                                   ['浮盈', profitPct != null ? `${profitPct}%` : '--',
-                                    profitPct == null ? undefined : profitPct >= profitTarget ? '#4ade80' : profitPct < 0 ? '#f87171' : undefined],
+                                    profitPct == null ? undefined : profitPct >= profitTarget ? 'green' : profitPct < 0 ? 'red' : undefined],
                                   ['Δ', check && (check.delta ?? 0) > 0 ? check.delta!.toFixed(2) : '--', undefined],
                                   ['θ/天', check && (check.theta ?? 0) > 0
                                     ? `$${fmt(check.theta! * (c.open_qty || 1) * (c.open_contract_size || 100), 0)}` : '--',
-                                    check && (check.theta ?? 0) > 0 ? '#4ade80' : undefined],
+                                    check && (check.theta ?? 0) > 0 ? 'green' : undefined],
                                   ['剩余年化', check?.remaining_annualized != null ? `${check.remaining_annualized}%` : '--',
-                                    check?.low_yield ? '#38bdf8' : undefined],
-                                ] as [string, string, string | undefined][]).map(([lab, val, color]) => (
-                                  <div key={lab}>
-                                    <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{lab}</div>
-                                    <div style={{ fontWeight: 600, fontSize: 12, color: color || 'var(--text)' }}>{val}</div>
-                                  </div>
+                                    check?.low_yield ? 'blue' : undefined],
+                                ] as [string, string, SemColor | undefined][]).map(([lab, val, color]) => (
+                                  <Stat key={lab} label={lab} value={val} color={color} />
                                 ))}
                               </div>
                               {profitPct != null && profitPct > 0 && (
@@ -1409,6 +1573,57 @@ export default function WheelPage() {
       {/* ── 台账 ── */}
       {tab === 'ledger' && (
         <div>
+          {/* 绩效复盘 */}
+          {stats?.monthly_premium && stats.monthly_premium.length > 0 && (
+            <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div className="card" style={{ padding: '12px 16px', flex: '1 1 320px', minWidth: 0 }}>
+                <h3 style={{ fontSize: 13, margin: '0 0 10px' }}>月度净权利金</h3>
+                <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 90 }}>
+                  {(() => {
+                    const mp = stats.monthly_premium!
+                    const maxAbs = Math.max(...mp.map(m => Math.abs(m.premium)), 1)
+                    return mp.map(m => (
+                      <div key={m.ym} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0 }}
+                        title={`${m.ym}:$${fmt(m.premium)}`}>
+                        <span style={{ fontSize: 9, color: m.premium >= 0 ? C.green : C.red }}>{fmtMoney(Math.abs(m.premium))}</span>
+                        <div style={{
+                          width: '70%', borderRadius: '3px 3px 0 0',
+                          height: Math.max(Math.abs(m.premium) / maxAbs * 60, 2),
+                          background: m.premium >= 0 ? C.green : C.red, opacity: 0.85,
+                        }} />
+                        <span style={{ fontSize: 9, color: 'var(--text-secondary)' }}>{m.ym.slice(5)}</span>
+                      </div>
+                    ))
+                  })()}
+                </div>
+              </div>
+              {stats.symbol_ranking && stats.symbol_ranking.length > 0 && (
+                <div className="card" style={{ padding: '12px 16px', flex: '1 1 380px', minWidth: 0 }}>
+                  <h3 style={{ fontSize: 13, margin: '0 0 8px' }}>标的收益排行<span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>谁值得继续轮,谁该踢出池子</span></h3>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ color: 'var(--text-secondary)' }}>
+                        {['标的', '净权利金', '已实现盈亏', '完成轮数', '参与天数'].map(h => (
+                          <th key={h} style={{ textAlign: 'left', padding: '3px 8px', fontWeight: 500 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.symbol_ranking.map(r => (
+                        <tr key={r.symbol} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '4px 8px', fontWeight: 600 }}>{r.symbol}</td>
+                          <td style={{ padding: '4px 8px', color: r.premium > 0 ? C.green : r.premium < 0 ? C.red : undefined }}>${fmt(r.premium)}</td>
+                          <td style={{ padding: '4px 8px', color: r.realized_pnl > 0 ? C.green : r.realized_pnl < 0 ? C.red : undefined }}>${fmt(r.realized_pnl)}</td>
+                          <td style={{ padding: '4px 8px' }}>{r.closed_cycles}</td>
+                          <td style={{ padding: '4px 8px', color: 'var(--text-secondary)' }}>{r.active_days ?? '--'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
           <h3 style={{ fontSize: 14, marginBottom: 10 }}>周期({cycles.length})</h3>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 28 }}>
             <thead>

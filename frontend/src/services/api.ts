@@ -543,6 +543,11 @@ export interface WheelStats {
   premium_total: number
   realized_pnl_total: number
   expiring_soon: { symbol: string; open_contract_code: string; open_option_type: string; open_strike: number; open_expiry: string; dte: number }[]
+  monthly_premium?: { ym: string; premium: number }[]
+  symbol_ranking?: {
+    symbol: string; premium: number; realized_pnl: number
+    closed_cycles: number; first_trade: string; active_days: number | null
+  }[]
   capital?: WheelCapital
 }
 
