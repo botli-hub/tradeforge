@@ -40,6 +40,31 @@ function fmt(v: number | null | undefined, digits = 2) {
   return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
+function fmtMoney(v: number) {
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M'
+  if (v >= 1e4) return (v / 1e3).toFixed(1) + 'k'
+  return v.toLocaleString('en-US', { maximumFractionDigits: 0 })
+}
+
+/** 单笔交易现金流(卖出为正) */
+function tradeCashFlow(t: WheelTrade): number | null {
+  if (t.trade_type === 'SELL_PUT' || t.trade_type === 'SELL_CALL')
+    return t.qty * t.price * t.contract_size - t.fee
+  if (t.trade_type === 'BUY_PUT_CLOSE' || t.trade_type === 'BUY_CALL_CLOSE')
+    return -(t.qty * t.price * t.contract_size + t.fee)
+  if (t.trade_type === 'SELL_SHARES') return t.qty * t.price - t.fee
+  if (t.trade_type === 'BUY_SHARES') return -(t.qty * t.price + t.fee)
+  return null
+}
+
+/** 标的资金占用 = Σ(CSP担保 + 持股成本) */
+function targetCapital(cycles: WheelCycle[]): number {
+  return cycles.reduce((sum, c) =>
+    sum
+    + (c.status === 'CSP_OPEN' ? (c.open_strike || 0) * (c.open_qty || 1) * (c.open_contract_size || 100) : 0)
+    + (c.shares > 0 ? c.shares * c.share_cost : 0), 0)
+}
+
 function fmtDate(iso: string | null | undefined) {
   return iso ? iso.replace('T', ' ').slice(0, 16) : '--'
 }
@@ -382,6 +407,8 @@ export default function WheelPage() {
   const [rollLoading, setRollLoading] = useState(false)
   // 看板主从布局:当前选中标的
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  // 看板选中轮子(右侧交易明细)
+  const [selectedCycleId, setSelectedCycleId] = useState<string | null>(null)
   // 看板行内编辑标的参数
   const [editParams, setEditParams] = useState<{
     floor_price: string; delta_min: string; delta_max: string
@@ -820,7 +847,7 @@ export default function WheelPage() {
                     const hasProfit = cs.some(c => openChecks[c.id]?.profit_hit)
                     const isIdle = t.idle_days != null && t.idle_days >= 5
                     return (
-                      <div key={t.symbol} onClick={() => { setSelectedSymbol(t.symbol); setEditParams(null) }} style={{
+                      <div key={t.symbol} onClick={() => { setSelectedSymbol(t.symbol); setEditParams(null); setSelectedCycleId(null) }} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '9px 10px', borderRadius: 6, cursor: 'pointer', marginBottom: 2,
                         background: isSel ? 'var(--accent)22' : 'transparent',
@@ -835,6 +862,10 @@ export default function WheelPage() {
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
                             {t.name}
+                          </div>
+                          <div style={{ fontSize: 10, color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)', marginTop: 1 }}>
+                            占用 ${fmtMoney(targetCapital(cs))}
+                            {(t.max_capital ?? 0) > 0 && <span style={{ color: 'var(--text-secondary)' }}> / {fmtMoney(t.max_capital)}</span>}
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
@@ -938,7 +969,9 @@ export default function WheelPage() {
                     )}
                   </div>
 
-                  {/* 轮子列表 */}
+                  {/* 轮子列表(窄列) + 交易明细(右) */}
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ flex: '0 0 400px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {selCycles.length === 0 && (
                     <div className="card" style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
                       该标的还没有进行中的轮子 —— 点「找 Put」筛选合约,成交后回来登记开轮
@@ -951,10 +984,15 @@ export default function WheelPage() {
                     const dteVal = c.open_dte ?? null
                     const hasOpen = status === 'CSP_OPEN' || status === 'CC_OPEN'
                     return (
-                      <div key={c.id} className="card" style={{
-                        padding: '8px 12px', display: 'flex', gap: 12, alignItems: 'center',
-                        borderLeft: `3px solid ${STAGE_COLORS[status]}`,
-                      }}>
+                      <div key={c.id} className="card"
+                        onClick={() => setSelectedCycleId(id => id === c.id ? null : c.id)}
+                        style={{
+                          padding: '8px 12px', display: 'flex', gap: 12, alignItems: 'center',
+                          borderLeft: `3px solid ${STAGE_COLORS[status]}`,
+                          cursor: 'pointer',
+                          outline: selectedCycleId === c.id ? '1px solid var(--accent)' : 'none',
+                          background: selectedCycleId === c.id ? 'var(--accent)11' : undefined,
+                        }}>
                         {/* 左:信息区 */}
                         <div style={{ flex: 1, minWidth: 0 }}>
                           {/* 行1:流程 + 徽章 + 汇总 chips */}
@@ -1053,6 +1091,81 @@ export default function WheelPage() {
                       </div>
                     )
                   })}
+                  </div>
+
+                  {/* 交易明细面板 */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {(() => {
+                      const dc = selCycles.find(c => c.id === selectedCycleId)
+                      if (selCycles.length === 0) return null
+                      if (!dc) return (
+                        <div className="card" style={{ padding: '20px 14px', color: 'var(--text-secondary)', fontSize: 12, textAlign: 'center' }}>
+                          ← 点击轮子查看交易明细
+                        </div>
+                      )
+                      const cycleTrades = trades
+                        .filter(t => t.cycle_id === dc.id)
+                        .sort((a, b) => (a.traded_at < b.traded_at ? -1 : 1))
+                      return (
+                        <div className="card" style={{ padding: '10px 14px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700 }}>
+                              交易明细
+                              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
+                                {STAGE_LABELS[dc.status]} · 始于 {fmtDate(dc.started_at)} · {cycleTrades.length} 笔
+                              </span>
+                            </span>
+                            <button className="btn" style={{ fontSize: 11, padding: '1px 8px' }}
+                              onClick={() => setSelectedCycleId(null)}>关闭</button>
+                          </div>
+                          {cycleTrades.length === 0 && (
+                            <div style={{ color: 'var(--text-secondary)', fontSize: 12, padding: '8px 0' }}>暂无交易记录</div>
+                          )}
+                          {cycleTrades.map(t => {
+                            const cf = tradeCashFlow(t)
+                            return (
+                              <div key={t.id} style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                                padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12,
+                              }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div>
+                                    <b>{TRADE_LABELS[t.trade_type]}</b>
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 8 }}>{fmtDate(t.traded_at)}</span>
+                                  </div>
+                                  <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {t.strike != null && <>${fmt(t.strike)}</>}
+                                    {t.expiry && <>{' · '}{String(t.expiry).slice(5, 10)}到期</>}
+                                    {t.qty > 0 && t.price > 0 && <>{' · '}{t.qty}{['BUY_SHARES', 'SELL_SHARES'].includes(t.trade_type) ? '股' : '张'} × ${fmt(t.price)}</>}
+                                    {t.fee > 0 && <>{' · '}费 {t.fee}</>}
+                                    {t.note && <>{' · '}{t.note}</>}
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                  {cf != null && (
+                                    <span style={{ fontSize: 12, fontWeight: 700, color: cf >= 0 ? '#4ade80' : '#f87171', whiteSpace: 'nowrap' }}>
+                                      {cf >= 0 ? '+' : ''}{fmtMoney(Math.abs(cf)) === '0' ? cf.toFixed(2) : (cf < 0 ? '-' : '') + fmtMoney(Math.abs(cf))}
+                                    </span>
+                                  )}
+                                  <button className="btn" style={{ fontSize: 11, padding: '1px 7px' }}
+                                    onClick={() => setEditTrade(t)}>✎</button>
+                                  <button className="btn" style={{ fontSize: 11, padding: '1px 7px', color: '#f87171' }}
+                                    onClick={() => handleDeleteTrade(t)}>🗑</button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                          <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-secondary)', paddingTop: 8 }}>
+                            <span>累计权利金 <b style={{ color: (dc.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(dc.total_premium)}</b></span>
+                            <span>手续费 ${fmt(dc.total_fees)}</span>
+                            {dc.cost_basis != null && <span>Cost Basis ${fmt(dc.cost_basis)}</span>}
+                            {dc.realized_pnl != null && <span>已实现 ${fmt(dc.realized_pnl)}</span>}
+                          </div>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                  </div>
                 </div>
               </div>
             )
