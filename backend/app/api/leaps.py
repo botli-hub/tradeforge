@@ -153,10 +153,13 @@ def wheel_timing_history(page: int = 1, page_size: int = 20, symbol: Optional[st
 
 def _run_wheel_scan(symbol: Optional[str] = None):
     from datetime import datetime
-    from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal
+    from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal, signal_strength
     cfg = _load_config()
     monitor = WheelTimingMonitor(cfg)
     notifier = TelegramNotifier.from_config(cfg)
+    timing_cfg = cfg.get("wheel_timing", {}) or {}
+    min_iv = float(timing_cfg.get("push_min_iv_rank", 50) or 0)
+    strong_only = bool(timing_cfg.get("push_strong_only", True))
     _WHEEL_SCAN_STATE.update(running=True, started_at=datetime.now().isoformat(),
                              finished_at=None, signals_found=0, report=[], error=None,
                              telegram_configured=notifier._enabled, telegram_sent=0)
@@ -166,8 +169,12 @@ def _run_wheel_scan(symbol: Optional[str] = None):
         logger.info("wheel 时机扫描完成,触发 %d 条", len(signals))
         sent = 0
         for sig in signals:
+            level = signal_strength(sig, min_iv)
+            # 默认只推可做/强,避免观察级刷屏;push_strong_only=False 时全推
+            if strong_only and level == "WATCH":
+                continue
             try:
-                if notifier.send(format_wheel_signal(sig)):
+                if notifier.send(format_wheel_signal(sig, min_iv)):
                     sent += 1
             except Exception as e:
                 logger.warning("wheel 信号推送失败: %s", e)

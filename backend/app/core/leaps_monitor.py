@@ -102,16 +102,27 @@ class WheelTimingMonitor:
         cd = cfg.get("cooldown_trading_days")
         if cd:
             self.monitor.cooldown_days = cd
-        self.dte_min = cfg.get("dte_min", 30)
-        self.dte_max = cfg.get("dte_max", 500)
+        self.dte_min = cfg.get("dte_min", 21)
+        self.dte_max = cfg.get("dte_max", 60)
         self.iv_threshold = cfg.get("iv_percentile_threshold", 0)
         # strike 扫描区间(相对现价,非对称):[spot×(1−down), spot×(1+up)]
         self.strike_range_down = cfg.get("strike_range_down", 0.20)
         self.strike_range_up = cfg.get("strike_range_up", 0.10)
-        # Wheel 扫描的每标的合约数上限(0 = 不限制;独立于 LEAPS 的 5)
+        self.align_target_dte = bool(cfg.get("align_target_dte", True))
+        self.dte_pad_days = int(cfg.get("dte_pad_days", 7) or 0)
+        # Wheel 扫描的每标的合约数上限(0 = 不限制;默认 30 控噪音)
         mc = cfg.get("contract_max_per_symbol")
         if mc is not None:
             self.monitor.max_contracts = mc
+
+    def _dte_window(self, target: Dict[str, Any]) -> Tuple[int, int]:
+        """标的级 DTE 窗口;align 时用标的设置 ± pad,否则用全局 wheel_timing。"""
+        if self.align_target_dte:
+            lo = int(target.get("dte_min") or self.dte_min)
+            hi = int(target.get("dte_max") or self.dte_max)
+            pad = self.dte_pad_days
+            return max(1, lo - pad), hi + pad
+        return int(self.dte_min), int(self.dte_max)
 
     def scan_all(self, symbol: Optional[str] = None, is_intraday: bool = True,
                  report: Optional[List[Dict[str, Any]]] = None) -> List[LeapsSignal]:
@@ -128,14 +139,15 @@ class WheelTimingMonitor:
             try:
                 cycles = wrepo.get_active_cycles(sym)
                 holding = [c for c in cycles if c["status"] == "HOLDING"]
+                dte_lo, dte_hi = self._dte_window(t)
 
                 # 卖 Put:启用标的一律扫描(状态机支持多轮并行,是否开仓由用户决定);
                 # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过)
-                rep: Dict[str, Any] = {"symbol": sym, "side": "PUT"}
+                rep: Dict[str, Any] = {"symbol": sym, "side": "PUT", "dte": f"{dte_lo}-{dte_hi}"}
                 signals.extend(self.monitor.scan_symbol(
                     sym, t["floor_price"], is_intraday=is_intraday,
                     option_type="PUT",
-                    dte_min=self.dte_min, dte_max=self.dte_max,
+                    dte_min=dte_lo, dte_max=dte_hi,
                     level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
                     iv_threshold=self.iv_threshold,
                     respect_30d_cap=False, with_suggestions=False,
@@ -149,11 +161,11 @@ class WheelTimingMonitor:
 
                 for cyc in holding:
                     cost_basis = cyc.get("cost_basis") or 0
-                    rep = {"symbol": sym, "side": "CALL"}
+                    rep = {"symbol": sym, "side": "CALL", "dte": f"{dte_lo}-{dte_hi}"}
                     signals.extend(self.monitor.scan_symbol(
                         sym, 0, is_intraday=is_intraday,
                         option_type="CALL",
-                        dte_min=self.dte_min, dte_max=self.dte_max,
+                        dte_min=dte_lo, dte_max=dte_hi,
                         strike_min=cost_basis if cost_basis > 0 else None,
                         level_map={"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"},
                         iv_threshold=self.iv_threshold,
@@ -178,12 +190,22 @@ class WheelTimingMonitor:
         return signals
 
 
-def format_wheel_signal(sig: "LeapsSignal") -> str:
+def signal_strength(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
+    """观察 / 可做 / 强 — 与前端确认层对齐"""
+    if sig.ema_type == "EMA200" and (sig.iv_rank or 0) >= min_iv_rank:
+        return "STRONG"
+    if sig.ema_type == "EMA200" or (sig.iv_rank or 0) >= min_iv_rank:
+        return "READY"
+    return "WATCH"
+
+
+def format_wheel_signal(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
     """Telegram 推送文案(合约触线)"""
     kind = "卖Put时机" if sig.signal_level == "WHEEL_PUT" else "卖Call时机(持股)"
-    strong = " 🔥强" if sig.ema_type == "EMA200" else ""
+    level = signal_strength(sig, min_iv_rank)
+    badge = {"STRONG": "🔥强信号", "READY": "✅可做", "WATCH": "👀观察"}.get(level, "")
     lines = [
-        f"🛞 [Wheel {kind}]{strong} {sig.symbol}",
+        f"🛞 [Wheel {kind}] {badge} {sig.symbol}",
         f"合约 {sig.contract_code}  strike {sig.strike}  到期 {sig.expiry}"
         + (f"({sig.dte}天)" if sig.dte else ""),
         f"合约价 {round(sig.trigger_price, 2)} 触及 {sig.ema_type}({round(sig.ema_value, 2)})",
@@ -490,7 +512,8 @@ class LeapsMonitor:
         futu_symbol = _to_futu_symbol(symbol)
         try:
             _throttle()
-            ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
+            from app.core.opend import open_quote_context
+            ctx = open_quote_context(host=self.futu_host, port=self.futu_port)
             ret, data = ctx.get_market_snapshot([futu_symbol])
             ctx.close()
             if ret == futu.RET_OK and data is not None and not data.empty:
@@ -519,7 +542,8 @@ class LeapsMonitor:
         errs = errors if errors is not None else []
         eff_dte_min = self.dte_min if dte_min is None else dte_min
         try:
-            ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
+            from app.core.opend import open_quote_context
+            ctx = open_quote_context(host=self.futu_host, port=self.futu_port)
             # 获取所有到期日
             _throttle()
             ret, dates = ctx.get_option_expiration_date(futu_symbol)
@@ -678,7 +702,8 @@ class LeapsMonitor:
         bars: List[Dict] = []
         try:
             _throttle(1.0)  # 订阅接口限频较松,1 秒间隔即可
-            ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
+            from app.core.opend import open_quote_context
+            ctx = open_quote_context(host=self.futu_host, port=self.futu_port)
             try:
                 ret_sub, sub_err = ctx.subscribe([code], [futu.SubType.K_DAY], subscribe_push=False)
                 if ret_sub != futu.RET_OK:
@@ -720,7 +745,8 @@ class LeapsMonitor:
             exp_date = f"{exp_full[:4]}-{exp_full[4:6]}-{exp_full[6:8]}"
             dte_val = _dte(trigger_expiry)
 
-            ctx = futu.OpenQuoteContext(host=self.futu_host, port=self.futu_port)
+            from app.core.opend import open_quote_context
+            ctx = open_quote_context(host=self.futu_host, port=self.futu_port)
             ret, chain = ctx.get_option_chain(
                 futu_symbol, start=exp_date, end=exp_date,
                 option_type=futu.OptionType.PUT

@@ -549,6 +549,13 @@ export interface WheelStats {
     closed_cycles: number; first_trade: string; active_days: number | null
   }[]
   capital?: WheelCapital
+  /** 近30日触线信号 → 同合约卖出登记转化 */
+  conversion?: {
+    signal_count_30d: number
+    converted_30d: number
+    rate_pct: number
+    avg_signal_to_trade_hours: number | null
+  }
 }
 
 export interface WheelSuggestion {
@@ -701,12 +708,19 @@ export interface BackendConfig {
     iv_percentile_threshold: number
     cooldown_trading_days: number
     auto_scan_minutes: number
+    /** true=每标的使用标的设置的 dte_min/max(±pad),减少宽窗口噪音 */
+    align_target_dte?: boolean
+    dte_pad_days?: number
+    /** TG 仅推强信号(EMA200 或 IVR≥阈值) */
+    push_min_iv_rank?: number
+    push_strong_only?: boolean
   }
   wheel_position: {
     profit_target_pct: number
     margin_ratio: number
     earnings_warn_days: number
     weekly_report: boolean
+    notify_mode?: 'realtime' | 'digest'
   }
   wheel_scan?: {
     max_spread_pct: number
@@ -720,6 +734,8 @@ export interface BackendConfig {
     chain_cache_ttl_sec: number
     symbol_interval_sec: number
     auto_push_minutes: number
+    /** TG 推送条数(默认3) */
+    telegram_top_n?: number
   }
 }
 

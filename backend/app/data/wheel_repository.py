@@ -673,6 +673,9 @@ def get_stats() -> Dict[str, Any]:
                 r["active_days"] = None
         ranking.sort(key=lambda x: x["premium"], reverse=True)
 
+        # 触线转化:近30日 WHEEL 信号中,随后登记了同合约卖出的比例
+        conversion = _signal_conversion_30d(conn)
+
         result = {
             "active_cycles": active,
             "closed_cycles": len(closed_rows),
@@ -682,8 +685,75 @@ def get_stats() -> Dict[str, Any]:
             "expiring_soon": sorted(expiring_soon, key=lambda x: x["dte"]),
             "monthly_premium": monthly,
             "symbol_ranking": ranking,
+            "conversion": conversion,
         }
     finally:
         conn.close()
     result["capital"] = get_capital_usage()
     return result
+
+
+def _signal_conversion_30d(conn) -> Dict[str, Any]:
+    """信号 → 卖出登记转化(近30日)。leaps_signals 与 wheel_trades 按 contract_code 关联。"""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+    try:
+        sigs = conn.execute(
+            """SELECT contract_code, created_at FROM leaps_signals
+               WHERE created_at >= ? AND signal_level IN ('WHEEL_PUT','WHEEL_CALL')
+               AND contract_code IS NOT NULL AND contract_code != ''""",
+            (cutoff,),
+        ).fetchall()
+        if not sigs:
+            return {
+                "signal_count_30d": 0, "converted_30d": 0, "rate_pct": 0.0,
+                "avg_signal_to_trade_hours": None,
+            }
+        sells = conn.execute(
+            """SELECT contract_code, traded_at FROM wheel_trades
+               WHERE traded_at >= ? AND trade_type IN ('SELL_PUT','SELL_CALL')
+               AND contract_code IS NOT NULL AND contract_code != ''""",
+            (cutoff,),
+        ).fetchall()
+        sell_by_code: Dict[str, list] = {}
+        for r in sells:
+            code = str(r["contract_code"])
+            sell_by_code.setdefault(code, []).append(str(r["traded_at"]))
+
+        converted = 0
+        delays_h: list = []
+        for s in sigs:
+            code = str(s["contract_code"])
+            sig_at = str(s["created_at"])
+            times = sell_by_code.get(code) or sell_by_code.get(
+                code if "." in code else f"US.{code}", [])
+            # 兼容有无市场前缀
+            if not times and "." in code:
+                times = sell_by_code.get(code.split(".", 1)[-1], [])
+            hit = None
+            for ta in times:
+                if ta >= sig_at:
+                    hit = ta
+                    break
+            if hit:
+                converted += 1
+                try:
+                    from datetime import datetime as _dt
+                    d0 = _dt.fromisoformat(sig_at[:19])
+                    d1 = _dt.fromisoformat(hit[:19])
+                    delays_h.append((d1 - d0).total_seconds() / 3600)
+                except Exception:
+                    pass
+        n = len(sigs)
+        avg_h = round(sum(delays_h) / len(delays_h), 1) if delays_h else None
+        return {
+            "signal_count_30d": n,
+            "converted_30d": converted,
+            "rate_pct": round(converted / n * 100, 1) if n else 0.0,
+            "avg_signal_to_trade_hours": avg_h,
+        }
+    except Exception:
+        return {
+            "signal_count_30d": 0, "converted_30d": 0, "rate_pct": 0.0,
+            "avg_signal_to_trade_hours": None,
+        }

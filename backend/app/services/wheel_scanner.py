@@ -161,9 +161,35 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
 
 # ── Telegram 推送 ─────────────────────────────────────────────────────────────
 
-def format_scan_report(result: Dict[str, Any], limit: int = 8) -> str:
-    lines = [f"🎯 Wheel 全池扫描 Top 机会({result['scanned_at'][:16]})"]
-    opps = result.get("opportunities", [])
+def _opp_efficiency(o: Dict[str, Any]) -> float:
+    """资金效率:年化×流动性近似 / 占用(万美元) × 风险折扣"""
+    ann = float(o.get("annualized") or 0)
+    factors = o.get("score_factors") or {}
+    liq = float(factors.get("liquidity") or 1)
+    strike = float(o.get("strike") or 0)
+    size = float(o.get("contract_size") or 100)
+    cap = max(strike * size, 1)
+    mult = 1.0
+    if o.get("exceeds_capital"):
+        mult *= 0.2
+    if o.get("trend") == "DOWN":
+        mult *= 0.7
+    if o.get("covers_earnings"):
+        mult *= 0.85
+    ivr = o.get("iv_rank")
+    if ivr is not None and ivr >= 70:
+        mult *= 1.15
+    elif ivr is not None and ivr >= 50:
+        mult *= 1.08
+    return (ann * liq / (cap / 10000.0)) * mult
+
+
+def format_scan_report(result: Dict[str, Any], limit: int = 3) -> str:
+    lines = [f"🎯 Wheel 可下单 Top{limit}(按资金效率 · {result['scanned_at'][:16]})"]
+    opps = list(result.get("opportunities") or [])
+    # 过滤明显不可做
+    opps = [o for o in opps if not o.get("exceeds_capital")]
+    opps.sort(key=_opp_efficiency, reverse=True)
     if not opps:
         lines.append("没有满足条件的机会")
     for o in opps[:limit]:
@@ -173,13 +199,16 @@ def format_scan_report(result: Dict[str, Any], limit: int = 8) -> str:
             tags.append("⚠趋势弱")
         if o.get("covers_earnings"):
             tags.append("⚠财报")
-        if o.get("exceeds_capital"):
-            tags.append("⚠超资金上限")
+        if (o.get("iv_rank") or 0) >= 70:
+            tags.append("IV高")
         tag_s = (" " + " ".join(tags)) if tags else ""
+        eff = _opp_efficiency(o)
+        cap = (o.get("strike") or 0) * (o.get("contract_size") or 100)
         lines.append(
             f"{icon} {o['symbol']} {'卖Put' if o['side'] == 'PUT' else '卖Call'} "
-            f"{o['expiry'][:10]} {o['strike']:g} · Δ{o['delta']:.2f} · {o['dte']}天\n"
-            f"   权利金 {o['bid']:g} · 年化 {o['annualized']:.1f}% · 评分 {o.get('score', 0):.1f}{tag_s}"
+            f"{str(o.get('expiry') or '')[:10]} {o['strike']:g} · Δ{o['delta']:.2f} · {o['dte']}天\n"
+            f"   权利金 {o['bid']:g} · 年化 {o['annualized']:.1f}% · 评分 {o.get('score', 0):.1f}"
+            f" · 占用 ${cap:.0f} · 效率 {eff:.1f}{tag_s}"
         )
     errs = result.get("errors") or []
     if errs:
@@ -190,13 +219,16 @@ def format_scan_report(result: Dict[str, Any], limit: int = 8) -> str:
 def push_scan(host: str = "127.0.0.1", port: int = 11111,
               force_refresh: bool = False) -> Dict[str, Any]:
     from app.api.leaps import _load_config
+    from app.core.wheel_score import get_scan_cfg
     from app.services.notifier import TelegramNotifier
 
     result = run_scan(host, port, force_refresh=force_refresh)
-    notifier = TelegramNotifier.from_config(_load_config())
+    cfg = _load_config()
+    top_n = int(get_scan_cfg(cfg).get("telegram_top_n", 3) or 3)
+    notifier = TelegramNotifier.from_config(cfg)
     sent = False
     if notifier._enabled:
-        sent = notifier.send(format_scan_report(result))
+        sent = notifier.send(format_scan_report(result, limit=top_n))
     result["telegram_sent"] = sent
     return result
 

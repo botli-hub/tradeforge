@@ -185,8 +185,14 @@ def record_trade(body: TradeIn):
                     detail=f"超出 {body.symbol} 资金上限:已占用 {committed:.0f} + 本单担保 {new_collateral:.0f} "
                            f"> 上限 {target['max_capital']:.0f}。可在标的设置调高上限(0=不限)",
                 )
-    # 卖出开仓且未填合约代码时,按 strike+到期日 自动补全
-    contract_code = body.contract_code
+    # 合约代码规范化:无市场前缀的美股码补 US.;仍空且卖出开仓则按 strike+到期日推导
+    contract_code = (body.contract_code or "").strip() or None
+    if contract_code and "." not in contract_code:
+        sym = body.symbol.strip().upper()
+        if not (sym[:1].isdigit() or sym.endswith(".HK")):
+            contract_code = f"US.{contract_code.upper()}"
+        else:
+            contract_code = contract_code.upper()
     if (not contract_code and body.trade_type in ("SELL_PUT", "SELL_CALL")
             and body.strike and body.expiry):
         contract_code = _resolve_contract_code(
@@ -578,6 +584,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     import futu
     from datetime import date as _date
     from app.core.leaps_monitor import _throttle, _to_futu_symbol
+    from app.core.opend import open_quote_context
 
     cfg = _wheel_cfg().get("wheel_position", {}) or {}
     profit_target = cfg.get("profit_target_pct", 50)
@@ -590,7 +597,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     codes = [c["open_contract_code"] for c in cycles]
     und_codes = list({_to_futu_symbol(c["symbol"]) for c in cycles})
     quotes: Dict[str, Dict[str, float]] = {}
-    ctx = futu.OpenQuoteContext(host=host, port=port)
+    ctx = open_quote_context(host=host, port=port)
     try:
         for i in range(0, len(codes) + len(und_codes), 80):
             chunk = (codes + und_codes)[i:i + 80]
@@ -677,7 +684,8 @@ def roll_options(cycle_id: str = Query(...), host: str = Query("127.0.0.1"), por
     buyback, cur_delta = 0.0, 0.0
     if code:
         try:
-            ctx = futu.OpenQuoteContext(host=host, port=port)
+            from app.core.opend import open_quote_context
+            ctx = open_quote_context(host=host, port=port)
             try:
                 _throttle()
                 ret, snap = ctx.get_market_snapshot([code])

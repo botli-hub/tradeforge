@@ -134,6 +134,13 @@ def _weekly_report_loop():
                 if stats.get("expiring_soon"):
                     lines.append("⚠ 临期: " + "、".join(
                         f"{e['symbol']} {e['open_option_type']} {e['dte']}天" for e in stats["expiring_soon"]))
+                conv = stats.get("conversion") or {}
+                if conv.get("signal_count_30d"):
+                    lines.append(
+                        f"触线转化(30d) {conv.get('converted_30d', 0)}/{conv['signal_count_30d']}"
+                        f"({conv.get('rate_pct', 0)}%)"
+                        + (f" · 均延迟 {conv['avg_signal_to_trade_hours']}h"
+                           if conv.get("avg_signal_to_trade_hours") is not None else ""))
                 notifier = TelegramNotifier.from_config(cfg)
                 if notifier.send("\n".join(lines)):
                     wrepo.set_kv("weekly_report_sent", week_key)

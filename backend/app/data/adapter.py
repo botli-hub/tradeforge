@@ -129,11 +129,11 @@ class FutuAdapter:
         return symbol
 
     def connect(self) -> bool:
-        """连接富途OpenD"""
+        """连接富途OpenD(先 TCP 探测,避免 OpenD 未启动时 OpenQuoteContext 阻塞)"""
         self.last_error = None
         try:
-            from futu import OpenQuoteContext
-            self._quote_ctx = OpenQuoteContext(host=self.host, port=self.port)
+            from app.core.opend import open_quote_context
+            self._quote_ctx = open_quote_context(host=self.host, port=self.port)
             self._connected = True
             return True
         except ImportError:
