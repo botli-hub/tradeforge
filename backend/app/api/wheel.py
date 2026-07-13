@@ -39,6 +39,11 @@ def list_targets():
             except Exception:
                 idle_days = None
         t["idle_days"] = idle_days
+        try:
+            from app.core.volatility import brief_profile
+            t["volatility_brief"] = brief_profile(t["symbol"])
+        except Exception:
+            t["volatility_brief"] = None
     return targets
 
 
@@ -96,6 +101,12 @@ def add_target(body: TargetIn):
         "min_open_interest": body.min_open_interest,
         "enabled": 1 if body.enabled else 0,
     })
+    # 自动订阅历史日K:HV/EMA/IV rank 等档案数据依赖本地K线积累
+    try:
+        from app.data.history_repository import upsert_subscription
+        upsert_subscription(symbol, name=name, enabled=True)
+    except Exception as e:
+        logger.warning("history 订阅失败(%s): %s", symbol, e)
     return repo.get_target(symbol)
 
 
@@ -174,10 +185,22 @@ def record_trade(body: TradeIn):
                     detail=f"超出 {body.symbol} 资金上限:已占用 {committed:.0f} + 本单担保 {new_collateral:.0f} "
                            f"> 上限 {target['max_capital']:.0f}。可在标的设置调高上限(0=不限)",
                 )
+    # 合约代码规范化:无市场前缀的美股码补 US.;仍空且卖出开仓则按 strike+到期日推导
+    contract_code = (body.contract_code or "").strip() or None
+    if contract_code and "." not in contract_code:
+        sym = body.symbol.strip().upper()
+        if not (sym[:1].isdigit() or sym.endswith(".HK")):
+            contract_code = f"US.{contract_code.upper()}"
+        else:
+            contract_code = contract_code.upper()
+    if (not contract_code and body.trade_type in ("SELL_PUT", "SELL_CALL")
+            and body.strike and body.expiry):
+        contract_code = _resolve_contract_code(
+            body.symbol.strip().upper(), body.trade_type, body.strike, body.expiry)
     try:
         cycle = repo.record_trade(
             symbol=body.symbol, trade_type=body.trade_type,
-            contract_code=body.contract_code, strike=body.strike, expiry=body.expiry,
+            contract_code=contract_code, strike=body.strike, expiry=body.expiry,
             qty=body.qty, price=body.price, fee=body.fee,
             contract_size=body.contract_size, note=body.note, traded_at=body.traded_at,
             cycle_id=body.cycle_id, new_cycle=body.new_cycle,
@@ -185,6 +208,78 @@ def record_trade(body: TradeIn):
         return cycle
     except WheelError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+def ensure_target_subscriptions() -> int:
+    """确保所有启用的 wheel 标的都有历史日K订阅(波动率档案依赖)。返回新增数"""
+    from app.data.history_repository import list_subscriptions, upsert_subscription
+    existing = {s["symbol"] for s in list_subscriptions()}
+    added = 0
+    for t in repo.get_targets():
+        if t.get("enabled") and t["symbol"] not in existing:
+            try:
+                upsert_subscription(t["symbol"], name=t.get("name"), enabled=True)
+                added += 1
+            except Exception:
+                pass
+    return added
+
+
+def backfill_missing_contract_codes() -> Dict[str, Any]:
+    """为存量卖出交易补全合约代码(按 strike+到期日推导),并重放所属周期。
+    幂等:已有代码的交易跳过;推导失败(如港股无 OpenD)留空下次再试。"""
+    updated, failed = 0, 0
+    for t in repo.get_trades(limit=2000):
+        if t["trade_type"] not in ("SELL_PUT", "SELL_CALL"):
+            continue
+        if (t.get("contract_code") or "").strip():
+            continue
+        if not t.get("strike") or not t.get("expiry"):
+            continue
+        code = _resolve_contract_code(t["symbol"], t["trade_type"], t["strike"], t["expiry"])
+        if not code:
+            failed += 1
+            continue
+        try:
+            repo.update_trade(t["id"], contract_code=code)
+            updated += 1
+        except WheelError as e:
+            logger.warning("补全 %s 失败: %s", t["id"], e)
+            failed += 1
+    return {"updated": updated, "failed": failed}
+
+
+@router.post("/trades/backfill-codes")
+def backfill_codes():
+    """手动触发存量合约代码补全(OpenD 在线时港股也能补)"""
+    return backfill_missing_contract_codes()
+
+
+def _resolve_contract_code(symbol: str, trade_type: str, strike: float,
+                           expiry: str) -> Optional[str]:
+    """按 strike+到期日 推导期权代码。
+    优先富途期权链精确匹配(US/HK 通用,可校验合约存在);
+    OpenD 不可用时,美股按 OCC 规则合成(US.AAPL260821P00200000)。"""
+    side = "PUT" if trade_type == "SELL_PUT" else "CALL"
+    exp = str(expiry)[:10]
+    try:
+        from app.services.wheel_scanner import cached_chain
+        futu_cfg = _wheel_cfg().get("futu", {}) or {}
+        chain = cached_chain(symbol, exp,
+                             futu_cfg.get("host", "127.0.0.1"), futu_cfg.get("port", 11111))
+        for c in chain.get("contracts", []):
+            if c.get("option_type") == side and abs((c.get("strike") or 0) - strike) < 1e-6:
+                return c.get("option_symbol")
+        logger.info("期权链中未找到 %s %s %s %s,回退合成", symbol, side, strike, exp)
+    except Exception as e:
+        logger.info("期权链补全代码不可用(%s): %s", symbol, e)
+    if not symbol.endswith(".HK"):
+        try:
+            yymmdd = exp[2:4] + exp[5:7] + exp[8:10]
+            return f"US.{symbol}{yymmdd}{'P' if side == 'PUT' else 'C'}{int(round(strike * 1000)):08d}"
+        except Exception:
+            pass
+    return None
 
 
 class TradeUpdate(BaseModel):
@@ -234,7 +329,11 @@ def _annualized(premium: float, collateral: float, dte: int) -> float:
 def _suggest(symbol: str, side: str, host: str, port: int,
              cycle_id: Optional[str] = None) -> Dict[str, Any]:
     """side: PUT | CALL"""
-    from app.api.options import _load_option_expirations, _load_option_chain
+    # 走扫描器的 TTL 缓存,单标的查询与全池扫描共享期权链,限频友好
+    from app.services.wheel_scanner import (
+        cached_expirations as _load_option_expirations,
+        cached_chain as _load_option_chain,
+    )
 
     target = repo.get_target(symbol)
     if target is None:
@@ -276,6 +375,9 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     pos_cfg = _wheel_cfg().get("wheel_position", {}) or {}
     margin_ratio = pos_cfg.get("margin_ratio", 0.25)
 
+    from app.core.wheel_score import get_scan_cfg, spread_pct, score_contract, trend_profile, is_iv_high
+    scan_cfg = get_scan_cfg(_wheel_cfg())
+
     # 财报标注
     from app.core.earnings import get_next_earnings
     earnings_date = get_next_earnings(symbol)
@@ -297,6 +399,10 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 continue
             bid = c.get("bid") or 0
             if bid <= 0:
+                continue
+            # 流动性:bid-ask spread 过宽的合约实际成交会吃掉大量收益,直接过滤
+            sp = spread_pct(bid, c.get("ask"))
+            if sp is not None and sp > scan_cfg["max_spread_pct"]:
                 continue
             strike = c["strike"]
             size = c.get("contract_size") or 100
@@ -329,12 +435,11 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 "volume": c.get("volume"), "contract_size": size,
                 "annualized": ann,
                 "annualized_margin": ann_margin,
+                "spread_pct": sp,
                 "covers_earnings": covers_earnings,
                 "otm_pct": round((spot - strike) / spot * 100 if side == "PUT" else (strike - spot) / spot * 100, 2),
                 **extra,
             })
-
-    suggestions.sort(key=lambda x: x["annualized"], reverse=True)
 
     # 波动率档案(用已拉取的链,不额外请求)
     volatility = None
@@ -345,16 +450,36 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         except Exception as e:
             logger.warning("volatility profile 失败: %s", e)
 
-    # 动态 delta:IV 高位(rank≥70 或 IV/HV≥1.3)时偏好更低 delta——
-    # 用 annualized×(1−delta) 重排,同等年化下低 delta 排前
+    # 趋势档案(本地日K EMA50/EMA200,无额外请求)
+    trend = None
+    try:
+        trend = trend_profile(symbol, spot)
+    except Exception as e:
+        logger.warning("trend profile 失败: %s", e)
+
+    # 综合打分:年化 × 流动性 × 趋势 × 财报 × IV加成 × (IV高位低delta偏好)
+    for s in suggestions:
+        scored = score_contract(
+            s["annualized"], side, s["delta"], s.get("spread_pct"),
+            s["covers_earnings"], volatility, trend, scan_cfg)
+        if scored:
+            s["score"] = scored["score"]
+            s["score_factors"] = scored["factors"]
+        else:
+            s["score"] = 0.0
+    suggestions.sort(key=lambda x: x.get("score") or 0, reverse=True)
+
     delta_preference = None
-    iv_high = bool(volatility and (
-        (volatility.get("iv_rank") or 0) >= 70 or (volatility.get("iv_hv_ratio") or 0) >= 1.3))
-    if iv_high:
-        suggestions.sort(key=lambda x: x["annualized"] * (1 - x["delta"]), reverse=True)
+    if is_iv_high(volatility):
         delta_preference = "IV 高位:同等年化优先更低 delta(更远离行权价)"
         if volatility and volatility.get("iv_rank_source") == "hv_proxy":
             delta_preference += "(IV 历史不足,当前用 HV rank 近似)"
+
+    trend_warning = None
+    if side == "PUT" and trend and trend.get("trend") == "DOWN":
+        trend_warning = f"现价低于 EMA200({trend.get('ema200')}),下跌趋势中卖 Put 接货风险高,评分已降权"
+    elif side == "PUT" and trend and trend.get("trend") == "WEAK":
+        trend_warning = f"现价低于 EMA50({trend.get('ema50')}),趋势转弱,评分已降权"
 
     from datetime import date as _date2
     days_to_earn = None
@@ -372,6 +497,8 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                     "floor_price": floor},
         "suggestions": suggestions[:20],
         "volatility": volatility,
+        "trend": trend,
+        "trend_warning": trend_warning,
         "margin_ratio": margin_ratio,
         "earnings_date": earnings_date,
         "days_to_earnings": days_to_earn,
@@ -382,11 +509,82 @@ def _suggest(symbol: str, side: str, host: str, port: int,
 
 # ── 在场合约体检(利润目标 / 临期 / ITM)────────────────────────────────────────
 
+def _position_hints(item: Dict[str, Any], min_annualized: float, profit_target: float) -> Dict[str, Any]:
+    """在场合约行动判定(纯函数,便于测试)。
+
+    输入 item 需含: side/strike/spot/dte/current_price/profit_pct/itm/delta。
+    输出: remaining_annualized/low_yield/roll_21dte/deep_itm/early_assign_risk
+          /action_hint(主建议)/reasons(全部命中的理由)。
+    """
+    strike = item.get("strike") or 0
+    spot = item.get("spot") or 0
+    dte = item.get("dte")
+    cur = item.get("current_price") or 0
+    delta = abs(item.get("delta") or 0)
+    itm = bool(item.get("itm"))
+    profit_pct = item.get("profit_pct")
+    profit_hit = profit_pct is not None and profit_pct >= profit_target
+    side = item.get("side")
+
+    # 剩余年化:留在场上继续赚剩余权利金的效率
+    remaining_ann = None
+    if strike > 0 and dte and dte > 0 and cur > 0:
+        remaining_ann = round(cur / strike * 365 / dte * 100, 2)
+
+    # 判定 1:剩余年化衰减(仅 OTM 时有意义,ITM 的高剩余价值是风险不是收益)
+    low_yield = bool(not itm and remaining_ann is not None
+                     and min_annualized > 0 and remaining_ann < min_annualized)
+    # 判定 2:21 DTE 规则(gamma 风险陡增,未止盈就该处理)
+    roll_21dte = bool(dte is not None and dte <= 21 and not profit_hit)
+    # 判定 3:ITM 深度分级(delta > 0.5 或价内深度 > 3%)
+    moneyness = 0.0
+    if spot > 0 and strike > 0:
+        moneyness = (strike - spot) / spot if side == "PUT" else (spot - strike) / spot
+    deep_itm = bool(itm and (delta > 0.5 or moneyness > 0.03))
+    # 判定 4:CC 深度价内的提前行权风险
+    early_assign = bool(side == "CALL" and itm and delta >= 0.8)
+
+    reasons: List[str] = []
+    if profit_hit:
+        reasons.append(f"浮盈 {profit_pct}% ≥ 止盈目标 {profit_target}%")
+    if deep_itm:
+        reasons.append(f"深度价内(Δ{delta:.2f}" + (f",价内 {moneyness*100:.1f}%" if moneyness > 0 else "") + ")")
+    elif itm:
+        reasons.append(f"已 ITM(Δ{delta:.2f})" if delta else "已 ITM")
+    if early_assign:
+        reasons.append("CC 深度价内,存在提前被行权风险(留意除息日)")
+    if roll_21dte:
+        reasons.append(f"DTE {dte} ≤ 21 且未达止盈,gamma 风险上升")
+    if low_yield:
+        reasons.append(f"剩余年化 {remaining_ann}% < 目标 {min_annualized}%,担保金低效")
+
+    if profit_hit:
+        hint = "止盈平仓"
+    elif deep_itm:
+        hint = "尽快 Roll(深度价内)"
+    elif itm and item.get("expiring"):
+        hint = "临期 ITM:Roll 或准备接货/交货"
+    elif roll_21dte:
+        hint = "考虑 Roll(≤21DTE)"
+    elif low_yield:
+        hint = "平仓换仓(剩余年化低)"
+    else:
+        hint = None
+
+    return {
+        "remaining_annualized": remaining_ann, "low_yield": low_yield,
+        "roll_21dte": roll_21dte, "deep_itm": deep_itm,
+        "early_assign_risk": early_assign,
+        "action_hint": hint, "reasons": reasons,
+    }
+
+
 def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
-    """拉在场合约与标的快照,计算浮盈/DTE/ITM。供 API 和后台推送共用"""
+    """拉在场合约与标的快照,计算浮盈/DTE/ITM/delta 及行动建议。供 API 和后台推送共用"""
     import futu
     from datetime import date as _date
     from app.core.leaps_monitor import _throttle, _to_futu_symbol
+    from app.core.opend import open_quote_context
 
     cfg = _wheel_cfg().get("wheel_position", {}) or {}
     profit_target = cfg.get("profit_target_pct", 50)
@@ -399,7 +597,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     codes = [c["open_contract_code"] for c in cycles]
     und_codes = list({_to_futu_symbol(c["symbol"]) for c in cycles})
     quotes: Dict[str, Dict[str, float]] = {}
-    ctx = futu.OpenQuoteContext(host=host, port=port)
+    ctx = open_quote_context(host=host, port=port)
     try:
         for i in range(0, len(codes) + len(und_codes), 80):
             chunk = (codes + und_codes)[i:i + 80]
@@ -411,10 +609,13 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
                         "last": float(row.get("last_price", 0) or 0),
                         "ask": float(row.get("ask_price", 0) or 0),
                         "bid": float(row.get("bid_price", 0) or 0),
+                        "delta": abs(float(row.get("option_delta", 0) or 0)),
+                        "theta": abs(float(row.get("option_theta", 0) or 0)),
                     }
     finally:
         ctx.close()
 
+    min_ann_by_symbol: Dict[str, float] = {}
     items = []
     for c in cycles:
         q = quotes.get(c["open_contract_code"], {})
@@ -429,15 +630,22 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             (c["open_option_type"] == "PUT" and spot < strike) or
             (c["open_option_type"] == "CALL" and spot > strike)))
         dte = c.get("open_dte")
-        items.append({
+        if c["symbol"] not in min_ann_by_symbol:
+            t = repo.get_target(c["symbol"])
+            min_ann_by_symbol[c["symbol"]] = float((t or {}).get("min_annualized") or 0)
+        item = {
             "cycle_id": c["id"], "symbol": c["symbol"], "side": c["open_option_type"],
             "contract_code": c["open_contract_code"], "strike": strike,
             "expiry": c.get("open_expiry"), "dte": dte,
             "open_price": open_price, "current_price": cur, "buyback_ask": buyback,
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
+            "delta": q.get("delta") or 0,
+            "theta": q.get("theta") or 0,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
-        })
+        }
+        item.update(_position_hints(item, min_ann_by_symbol[c["symbol"]], profit_target))
+        items.append(item)
     return {"items": items, "profit_target_pct": profit_target}
 
 
@@ -476,7 +684,8 @@ def roll_options(cycle_id: str = Query(...), host: str = Query("127.0.0.1"), por
     buyback, cur_delta = 0.0, 0.0
     if code:
         try:
-            ctx = futu.OpenQuoteContext(host=host, port=port)
+            from app.core.opend import open_quote_context
+            ctx = open_quote_context(host=host, port=port)
             try:
                 _throttle()
                 ret, snap = ctx.get_market_snapshot([code])
@@ -539,6 +748,11 @@ def roll_options(cycle_id: str = Query(...), host: str = Query("127.0.0.1"), por
                 "annualized": round(bid / (c["strike"] or 1) * 365 / dte * 100, 2) if dte else None,
             })
     candidates.sort(key=lambda x: x["net_credit_per_contract"], reverse=True)
+    # 只推荐 roll for credit:为守仓倒贴钱不如接货/平仓认损
+    total_before = len(candidates)
+    candidates = [x for x in candidates if x["net_credit_per_contract"] > 0]
+    if total_before > 0 and not candidates:
+        warnings.append("所有候选净权利金均为负(roll 要倒贴钱):不建议为守仓付费,考虑接货/交货或平仓认损")
     return {
         "cycle_id": cycle_id, "symbol": symbol, "side": side,
         "current": {"contract_code": code, "strike": cycle.get("open_strike"),
@@ -548,6 +762,39 @@ def roll_options(cycle_id: str = Query(...), host: str = Query("127.0.0.1"), por
         "candidates": candidates[:10],
         "warnings": warnings,
     }
+
+
+# ── 全池扫描 ──────────────────────────────────────────────────────────────────
+
+@router.get("/scan")
+def scan_all(host: str = Query("127.0.0.1"), port: int = Query(11111),
+             refresh: bool = Query(False, description="true=清缓存强制拉最新期权链"),
+             use_last: bool = Query(False, description="true=直接返回上次扫描结果(秒回)")):
+    """扫描所有启用标的,自动判定卖 Put/卖 Call,按综合分跨标的排序输出 Top 机会"""
+    from app.services import wheel_scanner
+    if use_last:
+        last = wheel_scanner.get_last_result()
+        if last:
+            return last
+    try:
+        return wheel_scanner.run_scan(host, port, force_refresh=refresh)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"全池扫描失败(OpenD?): {e}")
+
+
+@router.post("/scan/push")
+def scan_and_push(host: str = Query("127.0.0.1"), port: int = Query(11111),
+                  refresh: bool = Query(False)):
+    """手动触发扫描并推送 Telegram"""
+    from app.services import wheel_scanner
+    try:
+        return wheel_scanner.push_scan(host, port, force_refresh=refresh)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"扫描推送失败: {e}")
 
 
 @router.get("/suggest/put")

@@ -133,6 +133,36 @@ def get_iv_rank(symbol: str, current_iv: float) -> Dict[str, Any]:
     return {"iv_rank": round(rank, 1), "history_days": days}
 
 
+def brief_profile(symbol: str) -> Dict[str, Any]:
+    """轻量波动率档案:只读本地库(IV 快照 + 日K),不打任何行情源。
+    供标的列表/看板头部展示:预期IV(最近快照)、实际IV(HV20)、IV Rank。"""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT iv, date FROM underlying_iv_history WHERE symbol = ? ORDER BY date DESC LIMIT 1",
+            (symbol,),
+        ).fetchone()
+    finally:
+        conn.close()
+    iv = float(row["iv"]) if row and row["iv"] is not None else None
+    closes = get_daily_closes(symbol)
+    hv20 = compute_hv(closes, 20)
+    rank, source = None, None
+    if iv is not None:
+        r = get_iv_rank(symbol, iv)
+        if r["iv_rank"] is not None:
+            rank, source = r["iv_rank"], "iv_history"
+    if rank is None:
+        proxy = hv_rank(closes, window=20)
+        if proxy is not None:
+            rank, source = proxy, "hv_proxy"
+    return {
+        "atm_iv": iv, "iv_date": row["date"] if row else None,
+        "hv20": hv20, "iv_rank": rank, "iv_rank_source": source,
+        "iv_hv_ratio": round(iv / hv20, 3) if iv and hv20 else None,
+    }
+
+
 # ── 汇总档案 ──────────────────────────────────────────────────────────────────
 
 def build_profile(symbol: str, spot: float,

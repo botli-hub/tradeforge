@@ -326,9 +326,13 @@ function BackendConfigCard() {
       </div>
 
       <div className="editor-section">
-        <h4>Wheel 时机扫描</h4>
+        <h4>开仓规则 · 触线扫描(EMA)</h4>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+          对应「机会扫描」触线来源。默认与各标的 DTE 对齐,减少远月噪音;
+          TG 默认只推可做/强信号。标的级 delta/年化在 Wheel→标的设置,可用策略模板一键套用。
+        </p>
         <div className="settings-row">
-          <label>合约 DTE 范围(天)</label>
+          <label>全局 DTE 兜底范围(天)</label>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_min}
               onChange={e => up('wheel_timing', 'dte_min', Number(e.target.value))} />
@@ -338,7 +342,20 @@ function BackendConfigCard() {
           </div>
         </div>
         <div className="settings-row">
-          <label>每标的合约上限(0=不限)</label>
+          <label>对齐标的 DTE(推荐)</label>
+          <select value={cfg.wheel_timing.align_target_dte !== false ? '1' : '0'}
+            onChange={e => up('wheel_timing', 'align_target_dte', e.target.value === '1')}>
+            <option value="1">开启(用标的设置 ± pad)</option>
+            <option value="0">关闭(仅用全局范围)</option>
+          </select>
+        </div>
+        <div className="settings-row">
+          <label>DTE 外扩 pad(天)</label>
+          <input type="number" value={cfg.wheel_timing.dte_pad_days ?? 7}
+            onChange={e => up('wheel_timing', 'dte_pad_days', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>每标的合约上限(0=不限,建议30)</label>
           <input type="number" value={cfg.wheel_timing.contract_max_per_symbol}
             onChange={e => up('wheel_timing', 'contract_max_per_symbol', Number(e.target.value))} />
         </div>
@@ -353,14 +370,66 @@ function BackendConfigCard() {
             onChange={e => up('wheel_timing', 'cooldown_trading_days', Number(e.target.value))} />
         </div>
         <div className="settings-row">
-          <label>自动扫描间隔(分钟,0=关闭)</label>
+          <label>触线自动扫描间隔(分钟,0=关闭)</label>
           <input type="number" value={cfg.wheel_timing.auto_scan_minutes}
             onChange={e => up('wheel_timing', 'auto_scan_minutes', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>TG 仅推可做/强信号</label>
+          <select value={cfg.wheel_timing.push_strong_only !== false ? '1' : '0'}
+            onChange={e => up('wheel_timing', 'push_strong_only', e.target.value === '1')}>
+            <option value="1">开启(过滤观察级)</option>
+            <option value="0">关闭(全部推送)</option>
+          </select>
+        </div>
+        <div className="settings-row">
+          <label>强信号 IVR 阈值</label>
+          <input type="number" value={cfg.wheel_timing.push_min_iv_rank ?? 50}
+            onChange={e => up('wheel_timing', 'push_min_iv_rank', Number(e.target.value))} />
         </div>
       </div>
 
       <div className="editor-section">
-        <h4>Wheel 持仓管理</h4>
+        <h4>开仓规则 · 高分扫描(截面)</h4>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+          「高分候选」来源。TG 推送按资金效率取 Top N。
+        </p>
+        <div className="settings-row">
+          <label>跨标的展示条数</label>
+          <input type="number" value={cfg.wheel_scan?.top_overall ?? 15}
+            onChange={e => setCfg(p => p ? {
+              ...p,
+              wheel_scan: { ...(p.wheel_scan || {} as any), top_overall: Number(e.target.value) },
+            } : p)} />
+        </div>
+        <div className="settings-row">
+          <label>TG 推送 Top N</label>
+          <input type="number" value={cfg.wheel_scan?.telegram_top_n ?? 3}
+            onChange={e => setCfg(p => p ? {
+              ...p,
+              wheel_scan: { ...(p.wheel_scan || {} as any), telegram_top_n: Number(e.target.value) },
+            } : p)} />
+        </div>
+        <div className="settings-row">
+          <label>高分自动推送间隔(分钟,0=关)</label>
+          <input type="number" value={cfg.wheel_scan?.auto_push_minutes ?? 0}
+            onChange={e => setCfg(p => p ? {
+              ...p,
+              wheel_scan: { ...(p.wheel_scan || {} as any), auto_push_minutes: Number(e.target.value) },
+            } : p)} />
+        </div>
+        <div className="settings-row">
+          <label>点差上限%(硬过滤)</label>
+          <input type="number" value={cfg.wheel_scan?.max_spread_pct ?? 10}
+            onChange={e => setCfg(p => p ? {
+              ...p,
+              wheel_scan: { ...(p.wheel_scan || {} as any), max_spread_pct: Number(e.target.value) },
+            } : p)} />
+        </div>
+      </div>
+
+      <div className="editor-section">
+        <h4>管理规则 · 持仓与通知</h4>
         <div className="settings-row">
           <label>平仓利润目标(%)</label>
           <input type="number" value={cfg.wheel_position.profit_target_pct}
@@ -375,6 +444,14 @@ function BackendConfigCard() {
           <label>财报警示提前天数</label>
           <input type="number" value={cfg.wheel_position.earnings_warn_days}
             onChange={e => up('wheel_position', 'earnings_warn_days', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>持仓通知模式</label>
+          <select value={cfg.wheel_position.notify_mode || 'realtime'}
+            onChange={e => up('wheel_position', 'notify_mode', e.target.value)}>
+            <option value="realtime">即时(每条推)</option>
+            <option value="digest">每日汇总(深度ITM仍即时)</option>
+          </select>
         </div>
         <div className="settings-row">
           <label>每周一 Telegram 周报</label>

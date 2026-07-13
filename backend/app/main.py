@@ -36,13 +36,35 @@ async def startup():
     threading.Thread(target=_iv_snapshot_loop, daemon=True).start()
     # 每周一 Telegram 周报
     threading.Thread(target=_weekly_report_loop, daemon=True).start()
+    # Wheel 全池扫描定时推送(wheel_scan.auto_push_minutes,0=关闭)
+    from app.services.wheel_scanner import auto_push_loop
+    threading.Thread(target=auto_push_loop, daemon=True).start()
+    # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
+    threading.Thread(target=_backfill_codes_once, daemon=True).start()
+
+
+def _backfill_codes_once():
+    import time
+    time.sleep(5)
+    try:
+        from app.api.wheel import backfill_missing_contract_codes, ensure_target_subscriptions
+        n = ensure_target_subscriptions()
+        if n:
+            import logging
+            logging.getLogger(__name__).info("wheel 标的补订阅历史日K: %d 个", n)
+        r = backfill_missing_contract_codes()
+        if r["updated"] or r["failed"]:
+            import logging
+            logging.getLogger(__name__).info("存量合约代码补全: %s", r)
+    except Exception:
+        pass
 
 
 def _iv_snapshot_loop():
     """每天为所有启用的 wheel 标的存一次 ATM IV 快照(缺今天的才补)"""
     import time
     from datetime import date
-    time.sleep(900)  # 启动 15 分钟后再开始,避开限频高峰
+    time.sleep(180)  # 启动 3 分钟后开始(错开启动补数即可),尽快积累 IV 档案
     while True:
         try:
             from app.api.leaps import _load_config
@@ -112,6 +134,13 @@ def _weekly_report_loop():
                 if stats.get("expiring_soon"):
                     lines.append("⚠ 临期: " + "、".join(
                         f"{e['symbol']} {e['open_option_type']} {e['dte']}天" for e in stats["expiring_soon"]))
+                conv = stats.get("conversion") or {}
+                if conv.get("signal_count_30d"):
+                    lines.append(
+                        f"触线转化(30d) {conv.get('converted_30d', 0)}/{conv['signal_count_30d']}"
+                        f"({conv.get('rate_pct', 0)}%)"
+                        + (f" · 均延迟 {conv['avg_signal_to_trade_hours']}h"
+                           if conv.get("avg_signal_to_trade_hours") is not None else ""))
                 notifier = TelegramNotifier.from_config(cfg)
                 if notifier.send("\n".join(lines)):
                     wrepo.set_kv("weekly_report_sent", week_key)

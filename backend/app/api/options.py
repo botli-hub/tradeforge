@@ -91,8 +91,9 @@ def _get_underlying_spot(symbol: str, host: str, port: int):
 
 def _load_option_expirations(symbol: str, host: str, port: int) -> List[str]:
     try:
-        from futu import OpenQuoteContext, RET_OK
-        ctx = OpenQuoteContext(host=host, port=port)
+        from futu import RET_OK
+        from app.core.opend import open_quote_context
+        ctx = open_quote_context(host=host, port=port)
         try:
             ret, data = ctx.get_option_expiration_date(_normalize_futu_symbol(symbol))
             if ret != RET_OK:
@@ -115,8 +116,9 @@ def _load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[s
     spot_price, name, pricing_source, detail = _get_underlying_spot(normalized, host, port)
 
     try:
-        from futu import OpenQuoteContext, RET_OK
-        ctx = OpenQuoteContext(host=host, port=port)
+        from futu import RET_OK
+        from app.core.opend import open_quote_context
+        ctx = open_quote_context(host=host, port=port)
         try:
             ret, chain_df = ctx.get_option_chain(normalized, start=expiry, end=expiry)
             if ret != RET_OK or len(chain_df) == 0:

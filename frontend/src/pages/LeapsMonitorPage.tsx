@@ -214,30 +214,64 @@ export default function LeapsMonitorPage() {
           {/* 添加标的(候选来自股票池的美股/港股) */}
           <div className="card" style={{ padding: '14px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>添加标的</span>
-            <input
-              list="leaps-candidates"
+            <select
               value={addSymbol}
               onChange={e => setAddSymbol(e.target.value)}
-              placeholder="选择或输入代码,如 AAPL / 00700.HK"
-              style={{ width: 220, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
-            />
-            <datalist id="leaps-candidates">
-              {candidates.map(c => (
-                <option key={c.symbol} value={c.symbol}>{`${c.name}(${c.market === 'US' ? '美股' : '港股'})`}</option>
-              ))}
-            </datalist>
+              style={{ width: 260, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
+            >
+              <option value="">选择标的…</option>
+              {(() => {
+                const existing = new Set(watchlist.map(w => w.symbol.toUpperCase()))
+                const avail = candidates.filter(c => !existing.has(c.symbol.toUpperCase()))
+                const us = avail.filter(c => c.market === 'US')
+                const hk = avail.filter(c => c.market === 'HK' || c.market === '港股')
+                const other = avail.filter(c => c.market !== 'US' && c.market !== 'HK' && c.market !== '港股')
+                return (
+                  <>
+                    {us.length > 0 && (
+                      <optgroup label="美股">
+                        {us.map(c => (
+                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {hk.length > 0 && (
+                      <optgroup label="港股">
+                        {hk.map(c => (
+                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {other.length > 0 && (
+                      <optgroup label="其他">
+                        {other.map(c => (
+                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {avail.length === 0 && (
+                      <option value="" disabled>
+                        {candidates.length === 0 ? '候选加载中或为空' : '候选均已添加'}
+                      </option>
+                    )}
+                  </>
+                )
+              })()}
+            </select>
             <input
               type="number"
+              step="any"
               value={addFloor}
               onChange={e => setAddFloor(e.target.value)}
               placeholder="接货底线价"
               style={{ width: 110, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
+              title="按个股填写接货底线"
             />
-            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }} disabled={adding} onClick={handleAdd}>
+            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }} disabled={adding || !addSymbol} onClick={handleAdd}>
               {adding ? '添加中...' : '添加'}
             </button>
             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              候选列表与股票池的美股/港股打通,共 {candidates.length} 个可选;也可手动输入任意代码
+              从股票池候选下拉选择，共 {candidates.length} 个；已添加的不再显示
             </span>
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>

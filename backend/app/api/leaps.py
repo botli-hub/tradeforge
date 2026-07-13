@@ -153,10 +153,13 @@ def wheel_timing_history(page: int = 1, page_size: int = 20, symbol: Optional[st
 
 def _run_wheel_scan(symbol: Optional[str] = None):
     from datetime import datetime
-    from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal
+    from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal, signal_strength
     cfg = _load_config()
     monitor = WheelTimingMonitor(cfg)
     notifier = TelegramNotifier.from_config(cfg)
+    timing_cfg = cfg.get("wheel_timing", {}) or {}
+    min_iv = float(timing_cfg.get("push_min_iv_rank", 50) or 0)
+    strong_only = bool(timing_cfg.get("push_strong_only", True))
     _WHEEL_SCAN_STATE.update(running=True, started_at=datetime.now().isoformat(),
                              finished_at=None, signals_found=0, report=[], error=None,
                              telegram_configured=notifier._enabled, telegram_sent=0)
@@ -166,34 +169,93 @@ def _run_wheel_scan(symbol: Optional[str] = None):
         logger.info("wheel 时机扫描完成,触发 %d 条", len(signals))
         sent = 0
         for sig in signals:
+            level = signal_strength(sig, min_iv)
+            # 默认只推可做/强,避免观察级刷屏;push_strong_only=False 时全推
+            if strong_only and level == "WATCH":
+                continue
             try:
-                if notifier.send(format_wheel_signal(sig)):
+                if notifier.send(format_wheel_signal(sig, min_iv)):
                     sent += 1
             except Exception as e:
                 logger.warning("wheel 信号推送失败: %s", e)
         _WHEEL_SCAN_STATE.update(signals_found=len(signals), telegram_sent=sent)
 
-        # 在场合约体检:利润达标 / 临期ITM 推送(每合约每日一次)
+        # 在场合约体检推送。notify_mode:
+        #   realtime(默认) — 每条提醒即时推(每合约每日一次冷却)
+        #   digest — 每日一条汇总;仅深度ITM/临期ITM仍即时推
         try:
+            from datetime import date as _date
             from app.api.wheel import check_open_positions_core
+            from app.data import wheel_repository as wrepo
+            pos_cfg = cfg.get("wheel_position", {}) or {}
+            notify_mode = pos_cfg.get("notify_mode", "realtime")
             futu_cfg = cfg.get("futu", {}) or {}
             check = check_open_positions_core(futu_cfg.get("host", "127.0.0.1"),
                                               futu_cfg.get("port", 11111))
+            digest_lines: list = []
             for item in check["items"]:
-                alerts = []
-                if item["profit_hit"]:
-                    alerts.append(f"浮盈 {item['profit_pct']}% ≥ 目标 {check['profit_target_pct']}%,可平仓锁定再开新轮")
-                if item["itm"] and item["expiring"]:
-                    alerts.append(f"已 ITM 且 DTE {item['dte']},注意被行权/考虑 Roll")
-                if not alerts:
+                if not item.get("action_hint"):
+                    continue
+                urgent = bool(item.get("deep_itm") or (item.get("itm") and item.get("expiring")))
+                line = (f"{item['symbol']} {item['side']} ${item['strike']} "
+                        f"{str(item.get('expiry') or '')[:10]} 浮盈 "
+                        f"{item['profit_pct'] if item['profit_pct'] is not None else '--'}% "
+                        f"👉 {item['action_hint']}")
+                if notify_mode == "digest" and not urgent:
+                    digest_lines.append(line)
                     continue
                 key = f"ALERT.{item['contract_code']}"
                 if repo.is_contract_in_cooldown(key):
                     continue
+                extra = (f"  剩余年化 {item['remaining_annualized']}%"
+                         if item.get("remaining_annualized") is not None else "")
                 text = (f"💰 [持仓提醒] {item['symbol']} {item['side']} ${item['strike']} {item['expiry']}\n"
-                        f"开仓 {item['open_price']} → 现价 {item['current_price']}\n" + "\n".join(alerts))
+                        f"开仓 {item['open_price']} → 现价 {item['current_price']}"
+                        f"(浮盈 {item['profit_pct'] if item['profit_pct'] is not None else '--'}%){extra}\n"
+                        f"👉 {item['action_hint']}\n"
+                        + "\n".join(f"· {r}" for r in item.get("reasons", [])))
                 notifier.send(text)
                 repo.set_contract_cooldown(key, item["symbol"], 1)
+
+            # 持股裸奔:HOLDING 且无在场 CC ≥3 天
+            for cyc in wrepo.get_cycles(include_closed=False):
+                if cyc["status"] != "HOLDING" or (cyc.get("uncovered_days") or 0) < 3:
+                    continue
+                cb = cyc.get("cost_basis")
+                line = (f"{cyc['symbol']} 持股 {cyc['shares']:g} 股已 {cyc['uncovered_days']} 天未挂 Call"
+                        + (f"(CB ${cb:.2f})" if cb is not None else ""))
+                if notify_mode == "digest":
+                    digest_lines.append("🪑 " + line)
+                    continue
+                key = f"UNCOV.{cyc['id']}"
+                if repo.is_contract_in_cooldown(key):
+                    continue
+                notifier.send(f"🪑 [持股裸奔] {line},theta 收入在流失 —— 去看板「找 Call」")
+                repo.set_contract_cooldown(key, cyc["symbol"], 1)
+
+            # 空转标的(digest 模式并入摘要)
+            if notify_mode == "digest":
+                for t in wrepo.get_targets():
+                    if not t.get("enabled"):
+                        continue
+                    cycles_t = wrepo.get_active_cycles(t["symbol"])
+                    working = any(c["status"] in ("CSP_OPEN", "CC_OPEN", "HOLDING") for c in cycles_t)
+                    if working:
+                        continue
+                    ref = wrepo.get_last_trade_time(t["symbol"])
+                    if ref:
+                        try:
+                            idle = (datetime.now() - datetime.fromisoformat(str(ref)[:19])).days
+                            if idle >= 5:
+                                digest_lines.append(f"⏸ {t['symbol']} 空转 {idle} 天,资金闲置")
+                        except Exception:
+                            pass
+                today = _date.today().isoformat()
+                if digest_lines and wrepo.get_kv("daily_digest_sent") != today:
+                    text = ("📋 [Wheel 今日行动] " + today + "\n"
+                            + "\n".join(f"· {x}" for x in digest_lines[:15]))
+                    if notifier.send(text):
+                        wrepo.set_kv("daily_digest_sent", today)
         except Exception as e:
             logger.info("在场合约体检跳过: %s", e)
     except Exception as e:

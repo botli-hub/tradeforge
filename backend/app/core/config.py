@@ -52,13 +52,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "yield_method": "premium_over_strike",
     },
     "wheel_timing": {
-        "dte_min": 30, "dte_max": 500, "contract_max_per_symbol": 0,
-        "iv_percentile_threshold": 0, "cooldown_trading_days": 3,
+        "dte_min": 21, "dte_max": 60, "contract_max_per_symbol": 30,
+        "iv_percentile_threshold": 0, "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
+        # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
+        "strike_range_down": 0.20, "strike_range_up": 0.10,
+        # 每标的对齐其 dte_min/max(±pad),减少宽 DTE 噪音
+        "align_target_dte": True,
+        "dte_pad_days": 7,
+        # TG:仅推强信号(EMA200 或 IVR≥阈值);push_strong_only=False 时仍推全部
+        "push_min_iv_rank": 50,
+        "push_strong_only": True,
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
         "earnings_warn_days": 14, "weekly_report": True,
+        # 通知模式:realtime=每条即时推;digest=每日一条汇总(深度ITM/临期ITM仍即时)
+        "notify_mode": "realtime",
+    },
+    "wheel_scan": {
+        "max_spread_pct": 10.0, "spread_soft_pct": 4.0,
+        "earnings_penalty": 0.85, "iv_rank_bonus": 0.20,
+        "trend_penalty_below_ema50": 0.90, "trend_penalty_below_ema200": 0.70,
+        "top_per_symbol": 3, "top_overall": 15,
+        "chain_cache_ttl_sec": 900, "symbol_interval_sec": 2,
+        "auto_push_minutes": 0,
+        "telegram_top_n": 3,
     },
 }
 

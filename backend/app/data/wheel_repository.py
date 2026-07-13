@@ -2,6 +2,7 @@
 
 状态机:
   IDLE --SELL_PUT--> CSP_OPEN --EXPIRE/BUY_PUT_CLOSE--> IDLE
+  IDLE --BUY_SHARES--> HOLDING(已持正股直接进轮,qty=股数,price=每股成本)
                      CSP_OPEN --ASSIGNED--> HOLDING
   HOLDING --SELL_CALL--> CC_OPEN --EXPIRE/BUY_CALL_CLOSE--> HOLDING
                          CC_OPEN --CALLED_AWAY--> CLOSED
@@ -20,12 +21,25 @@ from app.data.database import get_db, _now_iso
 
 TRADE_TYPES = (
     "SELL_PUT", "BUY_PUT_CLOSE", "SELL_CALL", "BUY_CALL_CLOSE",
-    "EXPIRE", "ASSIGNED", "CALLED_AWAY", "SELL_SHARES",
+    "EXPIRE", "ASSIGNED", "CALLED_AWAY", "SELL_SHARES", "BUY_SHARES",
 )
 
 
 class WheelError(Exception):
     """状态机/校验错误,API 层转 400"""
+
+
+STATUS_LABELS_ZH = {
+    "IDLE": "空仓", "CSP_OPEN": "卖Put中", "HOLDING": "持股",
+    "CC_OPEN": "卖Call中", "CLOSED": "已结束",
+}
+TRADE_LABELS_ZH = {
+    "SELL_PUT": "卖出Put", "BUY_PUT_CLOSE": "买回Put平仓",
+    "SELL_CALL": "卖出Call", "BUY_CALL_CLOSE": "买回Call平仓",
+    "EXPIRE": "到期作废", "ASSIGNED": "被行权接货",
+    "CALLED_AWAY": "被行权交货", "SELL_SHARES": "卖出股票结束",
+    "BUY_SHARES": "已持正股入轮",
+}
 
 
 # ── targets ──────────────────────────────────────────────────────────────────
@@ -124,7 +138,7 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
     if tt not in TRADE_TYPES:
         raise WheelError(f"未知交易类型: {tt}")
     if s["status"] == "CLOSED":
-        raise WheelError("周期已结束,不能再登记交易")
+        raise WheelError("这个轮子已经结束结算,不能再登记交易;要开新一轮请用「+新开轮子」")
 
     qty = t.get("qty") or 1
     price = t.get("price") or 0
@@ -135,13 +149,27 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
 
     def need(status: str):
         if s["status"] != status:
-            raise WheelError(f"状态 {s['status']} 不能执行 {tt}(需 {status})")
+            raise WheelError(
+                f"当前轮子处于「{STATUS_LABELS_ZH.get(s['status'], s['status'])}」,"
+                f"不能登记「{TRADE_LABELS_ZH.get(tt, tt)}」"
+                f"——该操作需要轮子处于「{STATUS_LABELS_ZH.get(status, status)}」状态")
 
     def clear_open():
         s.update(open_contract_code=None, open_option_type=None, open_strike=None,
                  open_expiry=None, open_qty=0.0, open_price=0.0)
 
-    if tt == "SELL_PUT":
+    if tt == "BUY_SHARES":
+        need("IDLE")
+        if not price or price <= 0:
+            raise WheelError("BUY_SHARES 需要 price(每股成本)")
+        if not qty or qty <= 0:
+            raise WheelError("BUY_SHARES 需要 qty(股数)")
+        s["shares"] = qty
+        s["share_cost"] = price
+        s["total_fees"] += fee
+        s["status"] = "HOLDING"
+
+    elif tt == "SELL_PUT":
         need("IDLE")
         if not strike or not expiry:
             raise WheelError("SELL_PUT 需要 strike 和 expiry")
@@ -160,7 +188,7 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
 
     elif tt == "EXPIRE":
         if s["status"] not in ("CSP_OPEN", "CC_OPEN"):
-            raise WheelError("EXPIRE 需要有在场合约(CSP_OPEN 或 CC_OPEN)")
+            raise WheelError("「到期作废」需要有在场合约(轮子处于「卖Put中」或「卖Call中」)")
         s["status"] = "IDLE" if s["status"] == "CSP_OPEN" else "HOLDING"
         clear_open()
 
@@ -284,7 +312,22 @@ def get_cycles(symbol: Optional[str] = None, status: Optional[str] = None,
             sql += " AND status != 'CLOSED'"
         sql += " ORDER BY started_at DESC"
         rows = conn.execute(sql, params).fetchall()
-        return [_enrich_cycle(dict(r)) for r in rows]
+        cycles = [_enrich_cycle(dict(r)) for r in rows]
+        # HOLDING 裸奔天数:持股但没挂 Call,theta 收入在流失
+        holding_ids = [c["id"] for c in cycles if c["status"] == "HOLDING"]
+        if holding_ids:
+            ph = ",".join("?" * len(holding_ids))
+            last_map = {r["cycle_id"]: r["t"] for r in conn.execute(
+                f"SELECT cycle_id, MAX(traded_at) AS t FROM wheel_trades WHERE cycle_id IN ({ph}) GROUP BY cycle_id",
+                holding_ids).fetchall()}
+            for c in cycles:
+                if c["status"] == "HOLDING" and last_map.get(c["id"]):
+                    try:
+                        c["uncovered_days"] = max(
+                            (datetime.now() - datetime.fromisoformat(str(last_map[c["id"]])[:19])).days, 0)
+                    except Exception:
+                        c["uncovered_days"] = None
+        return cycles
     finally:
         conn.close()
 
@@ -325,7 +368,23 @@ def get_trades(cycle_id: Optional[str] = None, symbol: Optional[str] = None,
         sql += " ORDER BY traded_at DESC, created_at DESC LIMIT ?"
         params.append(limit)
         rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        trades = [dict(r) for r in rows]
+        # Roll 配对识别(展示用,不落库):同 cycle 同日 BUY_*_CLOSE + SELL_* 同类型
+        pair_map = {"BUY_PUT_CLOSE": "SELL_PUT", "BUY_CALL_CLOSE": "SELL_CALL"}
+        by_key: Dict[str, List[Dict[str, Any]]] = {}
+        for t in trades:
+            by_key.setdefault(f"{t['cycle_id']}|{str(t['traded_at'])[:10]}", []).append(t)
+        for group in by_key.values():
+            for buy in group:
+                sell_type = pair_map.get(buy["trade_type"])
+                if not sell_type:
+                    continue
+                sell = next((x for x in group if x["trade_type"] == sell_type
+                             and not x.get("is_roll")), None)
+                if sell is not None:
+                    buy["is_roll"] = True
+                    sell["is_roll"] = True
+        return trades
     finally:
         conn.close()
 
@@ -348,7 +407,7 @@ def record_trade(
     new_cycle: bool = False,
 ) -> Dict[str, Any]:
     """登记一笔交易。cycle_id 指定操作哪个轮子;
-    SELL_PUT + new_cycle=True 强制新开一个并行轮子。返回重放后的 cycle。"""
+    SELL_PUT/BUY_SHARES + new_cycle=True 强制新开一个并行轮子。返回重放后的 cycle。"""
     if trade_type not in TRADE_TYPES:
         raise WheelError(f"未知交易类型: {trade_type}")
     symbol = symbol.strip().upper()
@@ -369,7 +428,7 @@ def record_trade(
                 "SELECT * FROM wheel_cycles WHERE symbol = ? AND status != 'CLOSED' ORDER BY started_at",
                 (symbol,),
             ).fetchall()
-            if trade_type == "SELL_PUT":
+            if trade_type in ("SELL_PUT", "BUY_SHARES"):
                 idle = [r for r in actives if r["status"] == "IDLE"]
                 if new_cycle or not idle:
                     cycle_id = str(uuid.uuid4())
@@ -578,6 +637,45 @@ def get_stats() -> Dict[str, Any]:
                 d["dte"] = dte
                 expiring_soon.append(d)
 
+        # 月度净权利金(近 12 个月,复盘用)
+        monthly = [dict(r) for r in conn.execute(
+            """SELECT substr(traded_at, 1, 7) AS ym,
+                      ROUND(SUM(CASE
+                          WHEN trade_type IN ('SELL_PUT','SELL_CALL') THEN qty*price*contract_size - fee
+                          WHEN trade_type IN ('BUY_PUT_CLOSE','BUY_CALL_CLOSE') THEN -(qty*price*contract_size + fee)
+                          ELSE 0 END), 2) AS premium
+               FROM wheel_trades GROUP BY ym ORDER BY ym DESC LIMIT 12"""
+        ).fetchall()][::-1]
+
+        # 标的收益排行:谁值得继续轮,谁该踢出池子
+        ranking = [dict(r) for r in conn.execute(
+            """SELECT t.symbol,
+                      ROUND(COALESCE(SUM(CASE
+                          WHEN t.trade_type IN ('SELL_PUT','SELL_CALL') THEN t.qty*t.price*t.contract_size - t.fee
+                          WHEN t.trade_type IN ('BUY_PUT_CLOSE','BUY_CALL_CLOSE') THEN -(t.qty*t.price*t.contract_size + t.fee)
+                          ELSE 0 END), 0), 2) AS premium,
+                      MIN(t.traded_at) AS first_trade
+               FROM wheel_trades t GROUP BY t.symbol"""
+        ).fetchall()]
+        pnl_by_symbol = {r["symbol"]: (r["pnl"], r["closed"]) for r in conn.execute(
+            """SELECT symbol, ROUND(COALESCE(SUM(realized_pnl), 0), 2) AS pnl,
+                      COUNT(1) AS closed
+               FROM wheel_cycles WHERE status = 'CLOSED' GROUP BY symbol"""
+        ).fetchall()}
+        for r in ranking:
+            pnl, closed = pnl_by_symbol.get(r["symbol"], (0.0, 0))
+            r["realized_pnl"] = pnl
+            r["closed_cycles"] = closed
+            try:
+                days = max((date.today() - date.fromisoformat(str(r["first_trade"])[:10])).days, 1)
+                r["active_days"] = days
+            except Exception:
+                r["active_days"] = None
+        ranking.sort(key=lambda x: x["premium"], reverse=True)
+
+        # 触线转化:近30日 WHEEL 信号中,随后登记了同合约卖出的比例
+        conversion = _signal_conversion_30d(conn)
+
         result = {
             "active_cycles": active,
             "closed_cycles": len(closed_rows),
@@ -585,8 +683,77 @@ def get_stats() -> Dict[str, Any]:
             "premium_total": round(_premium_since(None), 2),
             "realized_pnl_total": round(realized_total, 2),
             "expiring_soon": sorted(expiring_soon, key=lambda x: x["dte"]),
+            "monthly_premium": monthly,
+            "symbol_ranking": ranking,
+            "conversion": conversion,
         }
     finally:
         conn.close()
     result["capital"] = get_capital_usage()
     return result
+
+
+def _signal_conversion_30d(conn) -> Dict[str, Any]:
+    """信号 → 卖出登记转化(近30日)。leaps_signals 与 wheel_trades 按 contract_code 关联。"""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+    try:
+        sigs = conn.execute(
+            """SELECT contract_code, created_at FROM leaps_signals
+               WHERE created_at >= ? AND signal_level IN ('WHEEL_PUT','WHEEL_CALL')
+               AND contract_code IS NOT NULL AND contract_code != ''""",
+            (cutoff,),
+        ).fetchall()
+        if not sigs:
+            return {
+                "signal_count_30d": 0, "converted_30d": 0, "rate_pct": 0.0,
+                "avg_signal_to_trade_hours": None,
+            }
+        sells = conn.execute(
+            """SELECT contract_code, traded_at FROM wheel_trades
+               WHERE traded_at >= ? AND trade_type IN ('SELL_PUT','SELL_CALL')
+               AND contract_code IS NOT NULL AND contract_code != ''""",
+            (cutoff,),
+        ).fetchall()
+        sell_by_code: Dict[str, list] = {}
+        for r in sells:
+            code = str(r["contract_code"])
+            sell_by_code.setdefault(code, []).append(str(r["traded_at"]))
+
+        converted = 0
+        delays_h: list = []
+        for s in sigs:
+            code = str(s["contract_code"])
+            sig_at = str(s["created_at"])
+            times = sell_by_code.get(code) or sell_by_code.get(
+                code if "." in code else f"US.{code}", [])
+            # 兼容有无市场前缀
+            if not times and "." in code:
+                times = sell_by_code.get(code.split(".", 1)[-1], [])
+            hit = None
+            for ta in times:
+                if ta >= sig_at:
+                    hit = ta
+                    break
+            if hit:
+                converted += 1
+                try:
+                    from datetime import datetime as _dt
+                    d0 = _dt.fromisoformat(sig_at[:19])
+                    d1 = _dt.fromisoformat(hit[:19])
+                    delays_h.append((d1 - d0).total_seconds() / 3600)
+                except Exception:
+                    pass
+        n = len(sigs)
+        avg_h = round(sum(delays_h) / len(delays_h), 1) if delays_h else None
+        return {
+            "signal_count_30d": n,
+            "converted_30d": converted,
+            "rate_pct": round(converted / n * 100, 1) if n else 0.0,
+            "avg_signal_to_trade_hours": avg_h,
+        }
+    except Exception:
+        return {
+            "signal_count_30d": 0, "converted_30d": 0, "rate_pct": 0.0,
+            "avg_signal_to_trade_hours": None,
+        }

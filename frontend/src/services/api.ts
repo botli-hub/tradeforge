@@ -460,7 +460,7 @@ export type WheelCycleStatus = 'IDLE' | 'CSP_OPEN' | 'HOLDING' | 'CC_OPEN' | 'CL
 
 export type WheelTradeType =
   | 'SELL_PUT' | 'BUY_PUT_CLOSE' | 'SELL_CALL' | 'BUY_CALL_CLOSE'
-  | 'EXPIRE' | 'ASSIGNED' | 'CALLED_AWAY' | 'SELL_SHARES'
+  | 'EXPIRE' | 'ASSIGNED' | 'CALLED_AWAY' | 'SELL_SHARES' | 'BUY_SHARES'
 
 export interface WheelCycle {
   id: string
@@ -483,6 +483,7 @@ export interface WheelCycle {
   cost_basis: number | null
   open_dte: number | null
   duration_days: number | null
+  uncovered_days?: number | null
 }
 
 export interface WheelTarget {
@@ -500,6 +501,14 @@ export interface WheelTarget {
   enabled: boolean | number
   active_cycles?: WheelCycle[]
   idle_days?: number | null
+  volatility_brief?: {
+    atm_iv: number | null
+    iv_date: string | null
+    hv20: number | null
+    iv_rank: number | null
+    iv_rank_source: 'iv_history' | 'hv_proxy' | null
+    iv_hv_ratio: number | null
+  } | null
 }
 
 export interface WheelTrade {
@@ -516,6 +525,7 @@ export interface WheelTrade {
   contract_size: number
   note: string | null
   traded_at: string
+  is_roll?: boolean
 }
 
 export interface WheelCapital {
@@ -533,7 +543,19 @@ export interface WheelStats {
   premium_total: number
   realized_pnl_total: number
   expiring_soon: { symbol: string; open_contract_code: string; open_option_type: string; open_strike: number; open_expiry: string; dte: number }[]
+  monthly_premium?: { ym: string; premium: number }[]
+  symbol_ranking?: {
+    symbol: string; premium: number; realized_pnl: number
+    closed_cycles: number; first_trade: string; active_days: number | null
+  }[]
   capital?: WheelCapital
+  /** 近30日触线信号 → 同合约卖出登记转化 */
+  conversion?: {
+    signal_count_30d: number
+    converted_30d: number
+    rate_pct: number
+    avg_signal_to_trade_hours: number | null
+  }
 }
 
 export interface WheelSuggestion {
@@ -550,10 +572,31 @@ export interface WheelSuggestion {
   contract_size: number
   annualized: number
   annualized_margin?: number | null
+  spread_pct?: number | null
   covers_earnings?: boolean
   otm_pct: number
   assigned_cost?: number
   if_called_total?: number
+  score?: number
+  score_factors?: {
+    annualized: number
+    liquidity: number
+    spread_pct: number | null
+    earnings: number
+    trend: number
+    iv_bonus: number
+    delta_pref: number
+  }
+}
+
+export interface TrendProfile {
+  ema50: number | null
+  ema200: number | null
+  above_ema50: boolean | null
+  above_ema200: boolean | null
+  trend: 'UP' | 'WEAK' | 'DOWN'
+  pct_vs_ema50: number | null
+  pct_vs_ema200: number | null
 }
 
 export interface VolatilityProfile {
@@ -584,6 +627,8 @@ export interface WheelSuggestResponse {
   days_to_earnings?: number | null
   earnings_warn?: boolean
   delta_preference?: string | null
+  trend?: TrendProfile | null
+  trend_warning?: string | null
 }
 
 export interface WheelOpenPositionItem {
@@ -597,6 +642,15 @@ export interface WheelOpenPositionItem {
   open_price: number
   current_price: number
   buyback_ask: number
+  delta?: number
+  theta?: number
+  remaining_annualized?: number | null
+  low_yield?: boolean
+  roll_21dte?: boolean
+  deep_itm?: boolean
+  early_assign_risk?: boolean
+  action_hint?: string | null
+  reasons?: string[]
   profit_pct: number | null
   spot: number
   itm: boolean
@@ -654,12 +708,34 @@ export interface BackendConfig {
     iv_percentile_threshold: number
     cooldown_trading_days: number
     auto_scan_minutes: number
+    /** true=每标的使用标的设置的 dte_min/max(±pad),减少宽窗口噪音 */
+    align_target_dte?: boolean
+    dte_pad_days?: number
+    /** TG 仅推强信号(EMA200 或 IVR≥阈值) */
+    push_min_iv_rank?: number
+    push_strong_only?: boolean
   }
   wheel_position: {
     profit_target_pct: number
     margin_ratio: number
     earnings_warn_days: number
     weekly_report: boolean
+    notify_mode?: 'realtime' | 'digest'
+  }
+  wheel_scan?: {
+    max_spread_pct: number
+    spread_soft_pct: number
+    earnings_penalty: number
+    iv_rank_bonus: number
+    trend_penalty_below_ema50: number
+    trend_penalty_below_ema200: number
+    top_per_symbol: number
+    top_overall: number
+    chain_cache_ttl_sec: number
+    symbol_interval_sec: number
+    auto_push_minutes: number
+    /** TG 推送条数(默认3) */
+    telegram_top_n?: number
   }
 }
 
@@ -735,6 +811,7 @@ export async function recordWheelTrade(body: {
   fee?: number
   contract_size?: number
   note?: string
+  traded_at?: string
   cycle_id?: string
   new_cycle?: boolean
 }) {
@@ -772,6 +849,41 @@ export async function deleteWheelTrade(tradeId: string) {
 
 export async function getWheelStats() {
   return request<WheelStats>('/api/wheel/stats')
+}
+
+export interface WheelScanOpportunity extends WheelSuggestion {
+  symbol: string
+  name?: string | null
+  side: 'PUT' | 'CALL'
+  cycle_id?: string | null
+  spot_price: number | null
+  trend?: 'UP' | 'WEAK' | 'DOWN' | null
+  iv_rank?: number | null
+  earnings_warn?: boolean
+  exceeds_capital?: boolean
+}
+
+export interface WheelScanResult {
+  scanned_at: string
+  targets_scanned: number
+  opportunities: WheelScanOpportunity[]
+  total_found: number
+  skipped: { symbol: string; reason: string }[]
+  errors: { symbol: string; side: string; error: string }[]
+  telegram_sent?: boolean
+}
+
+export async function getWheelPoolScan(host: string, port: number, refresh = false, useLast = false) {
+  return request<WheelScanResult>(
+    `/api/wheel/scan?host=${encodeURIComponent(host)}&port=${port}&refresh=${refresh}&use_last=${useLast}`
+  )
+}
+
+export async function pushWheelPoolScan(host: string, port: number) {
+  return request<WheelScanResult>(
+    `/api/wheel/scan/push?host=${encodeURIComponent(host)}&port=${port}`,
+    { method: 'POST' }
+  )
 }
 
 export async function getWheelSuggest(symbol: string, side: 'put' | 'call', host: string, port: number, cycleId?: string) {
@@ -846,6 +958,11 @@ export interface WheelTimingHistoryItem {
   trigger_price: number | null
   iv_rank: number | null
   underlying_price: number | null
+  delta: number | null
+  bid: number | null
+  annualized: number | null
+  dte: number | null
+  below_floor: number | null
   times_triggered: number
   first_seen: string
   last_seen: string
