@@ -130,11 +130,23 @@ class WheelTimingMonitor:
         False 则用当日最高价(盘中摸过均线也算)。"""
         from app.data import wheel_repository as wrepo
         from app.data import leaps_repository as lrepo
+
+        def _prog(**kw):
+            # 独立进度模块,禁止静默吞错导致前端一直「启动中」
+            from app.core.wheel_timing_progress import update as _upd
+            _upd(**kw)
+
         signals: List[LeapsSignal] = []
         targets = [t for t in wrepo.get_targets() if t.get("enabled")]
         if symbol:
             targets = [t for t in targets if t["symbol"] == symbol.upper()]
-        for t in targets:
+        n_targets = len(targets)
+        _prog(
+            phase="timing", target_n=n_targets, target_i=0,
+            symbol=None, side=None, expiry=None, contract_i=0, contract_n=0,
+            message=f"触线 · 共 {n_targets} 个标的",
+        )
+        for ti, t in enumerate(targets, start=1):
             sym = t["symbol"]
             try:
                 cycles = wrepo.get_active_cycles(sym)
@@ -143,6 +155,11 @@ class WheelTimingMonitor:
 
                 # 卖 Put:启用标的一律扫描(状态机支持多轮并行,是否开仓由用户决定);
                 # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过)
+                _prog(
+                    target_i=ti, target_n=n_targets, symbol=sym, side="PUT",
+                    expiry=None, contract_i=0, contract_n=0,
+                    message=f"触线 · {sym} PUT · 标的 {ti}/{n_targets}",
+                )
                 rep: Dict[str, Any] = {"symbol": sym, "side": "PUT", "dte": f"{dte_lo}-{dte_hi}"}
                 signals.extend(self.monitor.scan_symbol(
                     sym, t["floor_price"], is_intraday=is_intraday,
@@ -155,12 +172,18 @@ class WheelTimingMonitor:
                     strike_range_down=self.strike_range_down,
                     strike_range_up=self.strike_range_up,
                     floor_hard=False,
+                    progress_cb=_prog,
                 ))
                 if report is not None:
                     report.append(rep)
 
                 for cyc in holding:
                     cost_basis = cyc.get("cost_basis") or 0
+                    _prog(
+                        target_i=ti, target_n=n_targets, symbol=sym, side="CALL",
+                        expiry=None, contract_i=0, contract_n=0,
+                        message=f"触线 · {sym} CALL · 标的 {ti}/{n_targets}",
+                    )
                     rep = {"symbol": sym, "side": "CALL", "dte": f"{dte_lo}-{dte_hi}"}
                     signals.extend(self.monitor.scan_symbol(
                         sym, 0, is_intraday=is_intraday,
@@ -173,6 +196,7 @@ class WheelTimingMonitor:
                         report=rep,
                         strike_range_down=self.strike_range_down,
                         strike_range_up=self.strike_range_up,
+                        progress_cb=_prog,
                     ))
                     if report is not None:
                         report.append(rep)
@@ -314,12 +338,21 @@ class LeapsMonitor:
         strike_range_down: Optional[float] = None,
         strike_range_up: Optional[float] = None,
         floor_hard: bool = True,
+        progress_cb: Optional[Any] = None,
     ) -> List[LeapsSignal]:
         """通用合约 EMA 触线扫描。默认参数 = 原 LEAPS Put 行为;
         Wheel 时机复用:option_type/dte/strike 可定制,level_map 定制信号级别名,
         iv_threshold=0 表示 IV 仅记录不作硬条件。
-        report(可选 dict)会被填入扫描明细,便于前端展示诊断。"""
+        report(可选 dict)会被填入扫描明细,便于前端展示诊断。
+        progress_cb: 可选进度回调(symbol/side/expiry/contract_i/n/message)。"""
         import futu
+
+        def _p(**kw):
+            if progress_cb:
+                try:
+                    progress_cb(**kw)
+                except Exception:
+                    pass
 
         signals: List[LeapsSignal] = []
         level_map = level_map or {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
@@ -327,6 +360,11 @@ class LeapsMonitor:
         rep = report if report is not None else {}
         rep.update(spot=None, contracts=0, in_cooldown=0, no_history=0,
                    bars_insufficient=0, iv_filtered=0, not_touching=0, signals=0, note=None)
+        _p(
+            symbol=symbol, side=option_type, expiry=None,
+            contract_i=0, contract_n=0,
+            message=f"正在扫描：{symbol} {option_type} · 到期日 … · 合约 … · 拉取期权链",
+        )
 
         # S3: 标的现价 > 接货底线(floor_price <= 0 表示跳过该条件,如卖 Call)
         underlying_price = self._fetch_underlying_price(symbol)
@@ -349,7 +387,7 @@ class LeapsMonitor:
             rep["note"] = "30天推送已达上限"
             return signals
 
-        # 获取符合条件的合约列表
+        # 获取符合条件的合约列表(此步含 OpenD 限频,最慢;进度在内部按到期日回传)
         fetch_errors: List[str] = []
         contracts = self._fetch_eligible_contracts(
             symbol, underlying_price, option_type=option_type,
@@ -357,149 +395,199 @@ class LeapsMonitor:
             strike_min=strike_min, strike_max=strike_max,
             range_down=strike_range_down, range_up=strike_range_up,
             errors=fetch_errors,
+            progress_cb=progress_cb,
         )
         rep["contracts"] = len(contracts)
+        total_all = len(contracts)
         if not contracts:
             reason = ";".join(fetch_errors) if fetch_errors else "无符合条件的合约(DTE/strike 范围内)"
             logger.info("%s: %s", symbol, reason)
             rep["note"] = reason
+            _p(symbol=symbol, side=option_type, expiry=None, contract_i=0, contract_n=0,
+               message=f"触线 · {symbol} {option_type} · {reason}")
             return signals
 
+        def _norm_exp(raw: Any) -> str:
+            exp_label = str(raw or "")[:10]
+            if len(exp_label) == 6 and exp_label.isdigit():
+                try:
+                    return datetime.strptime("20" + exp_label, "%Y%m%d").date().isoformat()
+                except Exception:
+                    pass
+            return exp_label
+
+        # 按到期日分组,进度与高分扫描一致:该标的该到期日 n/m
+        by_exp: Dict[str, List[Dict[str, Any]]] = {}
+        for c in contracts:
+            by_exp.setdefault(_norm_exp(c.get("expiry")), []).append(c)
+        exp_order = sorted(by_exp.keys())
+
         today = date.today().isoformat()
+        first_exp = exp_order[0] if exp_order else None
+        _p(
+            symbol=symbol, side=option_type, expiry=first_exp,
+            contract_i=0, contract_n=len(by_exp.get(first_exp or "", [])),
+            message=(
+                f"触线 · {symbol} {option_type} · 到期日 {first_exp or '—'} · "
+                f"0/{len(by_exp.get(first_exp or '', []))} · 共 {total_all} 张"
+            ),
+        )
 
-        for contract in contracts:
-            code = contract["code"]
-            expiry = contract["expiry"]
-            strike = contract["strike"]
-            current_iv = contract.get("iv")
-
-            # 合约级冷却
-            if repo.is_contract_in_cooldown(code):
-                logger.debug("%s: 冷却中，跳过", code)
-                rep["in_cooldown"] += 1
-                continue
-
-            # 更新价格缓存 & IV 历史
-            self._update_price_cache(code, contract, today)
-
-            # 读取历史价格序列
-            price_history = repo.get_option_price_history(code, limit=250)
-            if not price_history:
-                rep["no_history"] += 1
-                continue
-
-            df = pd.DataFrame(price_history)
-            df["close"] = pd.to_numeric(df["close"], errors="coerce")
-            df = df.dropna(subset=["close"])
-            closes = df["close"]
-
-            # 确定触发价（EOD 用最高价，盘中用最新价）
-            if is_intraday and self.intraday_use_last:
-                trigger_price = contract.get("last_price") or contract.get("close")
-            else:
-                today_bar = [b for b in price_history if b["date"] == today]
-                trigger_price = (
-                    today_bar[-1].get("high") or today_bar[-1].get("close")
-                    if today_bar else closes.iloc[-1] if len(closes) else None
+        for exp_label in exp_order:
+            exp_contracts = by_exp[exp_label]
+            exp_n = len(exp_contracts)
+            for ci, contract in enumerate(exp_contracts, start=1):
+                code = contract["code"]
+                strike = contract["strike"]
+                current_iv = contract.get("iv")
+                # 每张都更新:触线单张耗时长,便于前端实时看到 n/m 与到期日
+                _p(
+                    symbol=symbol, side=option_type, expiry=exp_label,
+                    contract_i=ci, contract_n=exp_n,
+                    message=(
+                        f"触线 · {symbol} {option_type} · 到期日 {exp_label} · "
+                        f"{ci}/{exp_n}"
+                    ),
                 )
-            if trigger_price is None:
-                continue
 
-            # S2: IV 百分位
-            iv_history = repo.get_iv_history_52w(code)
-            if current_iv is not None:
-                iv_rank = _iv_percentile(iv_history, current_iv) if iv_history else 0.0
-            else:
-                iv_rank = 0.0
+                # 合约级冷却
+                if repo.is_contract_in_cooldown(code):
+                    logger.debug("%s: 冷却中，跳过", code)
+                    rep["in_cooldown"] += 1
+                    continue
 
-            if iv_rank < iv_thr:
-                logger.debug("%s: IV rank %.1f < 阈值 %s，跳过", code, iv_rank, iv_thr)
-                rep["iv_filtered"] += 1
-                continue
+                # 更新价格缓存 & IV 历史
+                self._update_price_cache(code, contract, today)
 
-            # S1: 价格触及 EMA200（二级强信号）
-            signal_level = None
-            ema_type = None
-            ema_value = None
+                # 读取历史价格序列
+                price_history = repo.get_option_price_history(code, limit=250)
+                if not price_history:
+                    rep["no_history"] += 1
+                    continue
 
-            if len(closes) >= self.ema200_min:
-                ema200 = _compute_ema(closes, 200).iloc[-1]
-                if trigger_price >= ema200:
-                    signal_level = level_map["EMA200"]
-                    ema_type = "EMA200"
-                    ema_value = float(ema200)
+                df = pd.DataFrame(price_history)
+                df["close"] = pd.to_numeric(df["close"], errors="coerce")
+                df = df.dropna(subset=["close"])
+                closes = df["close"]
 
-            # S1: 价格触及 EMA50（一级信号，仅在未触及 EMA200 时检查）
-            if signal_level is None and len(closes) >= self.ema50_min:
-                ema50 = _compute_ema(closes, 50).iloc[-1]
-                if trigger_price >= ema50:
-                    signal_level = level_map["EMA50"]
-                    ema_type = "EMA50"
-                    ema_value = float(ema50)
-
-            if signal_level is None:
-                if len(closes) < self.ema50_min:
-                    rep["bars_insufficient"] += 1
+                # 确定触发价（EOD 用最高价，盘中用最新价）
+                if is_intraday and self.intraday_use_last:
+                    trigger_price = contract.get("last_price") or contract.get("close")
                 else:
-                    rep["not_touching"] += 1
-                continue
+                    today_bar = [b for b in price_history if b["date"] == today]
+                    trigger_price = (
+                        today_bar[-1].get("high") or today_bar[-1].get("close")
+                        if today_bar else closes.iloc[-1] if len(closes) else None
+                    )
+                if trigger_price is None:
+                    continue
 
-            # 获取 OTM put 建议
-            suggestions = self._fetch_suggestions(symbol, underlying_price, expiry) if with_suggestions else []
+                # S2: IV 百分位
+                iv_history = repo.get_iv_history_52w(code)
+                if current_iv is not None:
+                    iv_rank = _iv_percentile(iv_history, current_iv) if iv_history else 0.0
+                else:
+                    iv_rank = 0.0
 
-            sell_price = contract.get("bid") or contract.get("last_price") or 0
-            dte_val = contract.get("dte") or _dte(expiry)
-            sig = LeapsSignal(
-                symbol=symbol,
-                contract_code=code,
-                expiry=expiry,
-                strike=strike,
-                signal_level=signal_level,
-                trigger_price=float(trigger_price),
-                ema_type=ema_type,
-                ema_value=ema_value,
-                iv_rank=round(iv_rank, 1),
-                underlying_price=round(float(underlying_price), 2),
-                floor_price=floor_price,
-                suggestions=suggestions,
-                is_intraday=is_intraday,
-                delta=contract.get("delta"),
-                bid=contract.get("bid") or None,
-                annualized=_annualized_yield(sell_price, strike, dte_val) if sell_price else None,
-                dte=dte_val,
-                below_floor=below_floor,
-            )
-            signals.append(sig)
+                if iv_rank < iv_thr:
+                    logger.debug("%s: IV rank %.1f < 阈值 %s，跳过", code, iv_rank, iv_thr)
+                    rep["iv_filtered"] += 1
+                    continue
 
-            # 设置冷却
-            repo.set_contract_cooldown(code, symbol, self.cooldown_days)
+                # S1: 价格触及 EMA200（二级强信号）
+                signal_level = None
+                ema_type = None
+                ema_value = None
 
-            # 入库
-            repo.log_signal(
-                symbol=symbol,
-                contract_code=code,
-                signal_level=signal_level,
-                trigger_price=sig.trigger_price,
-                ema_value=ema_value,
-                ema_type=ema_type,
-                iv_rank=iv_rank,
-                underlying_price=sig.underlying_price,
-                floor_price=floor_price,
-                suggestions=[
-                    {
-                        "contract_code": s.contract_code,
-                        "strike": s.strike,
-                        "expiry": s.expiry,
-                        "premium": s.premium,
-                        "delta": s.delta,
-                        "annualized_yield": s.annualized_yield,
-                        "cost_basis": s.cost_basis,
-                        "dte": s.dte,
-                    }
-                    for s in suggestions
-                ],
-                is_intraday=is_intraday,
-            )
+                if len(closes) >= self.ema200_min:
+                    ema200 = _compute_ema(closes, 200).iloc[-1]
+                    if trigger_price >= ema200:
+                        signal_level = level_map["EMA200"]
+                        ema_type = "EMA200"
+                        ema_value = float(ema200)
+
+                # S1: 价格触及 EMA50（一级信号，仅在未触及 EMA200 时检查）
+                if signal_level is None and len(closes) >= self.ema50_min:
+                    ema50 = _compute_ema(closes, 50).iloc[-1]
+                    if trigger_price >= ema50:
+                        signal_level = level_map["EMA50"]
+                        ema_type = "EMA50"
+                        ema_value = float(ema50)
+
+                if signal_level is None:
+                    if len(closes) < self.ema50_min:
+                        rep["bars_insufficient"] += 1
+                    else:
+                        rep["not_touching"] += 1
+                    continue
+
+                # 获取 OTM put 建议
+                expiry_raw = contract.get("expiry") or exp_label
+                suggestions = (
+                    self._fetch_suggestions(symbol, underlying_price, expiry_raw)
+                    if with_suggestions else []
+                )
+
+                sell_price = contract.get("bid") or contract.get("last_price") or 0
+                # _dte 吃 YYMMDD；YYYY-MM-DD 则直接算
+                try:
+                    if len(str(expiry_raw).replace("-", "")) >= 8 and "-" in str(expiry_raw):
+                        dte_val = (date.fromisoformat(str(expiry_raw)[:10]) - date.today()).days
+                    else:
+                        dte_val = contract.get("dte") or _dte(str(expiry_raw).replace("-", "")[-6:])
+                except Exception:
+                    dte_val = contract.get("dte") or 0
+                sig = LeapsSignal(
+                    symbol=symbol,
+                    contract_code=code,
+                    expiry=exp_label or str(expiry_raw),
+                    strike=strike,
+                    signal_level=signal_level,
+                    trigger_price=float(trigger_price),
+                    ema_type=ema_type,
+                    ema_value=ema_value,
+                    iv_rank=round(iv_rank, 1),
+                    underlying_price=round(float(underlying_price), 2),
+                    floor_price=floor_price,
+                    suggestions=suggestions,
+                    is_intraday=is_intraday,
+                    delta=contract.get("delta"),
+                    bid=contract.get("bid") or None,
+                    annualized=_annualized_yield(sell_price, strike, dte_val) if sell_price else None,
+                    dte=dte_val,
+                    below_floor=below_floor,
+                )
+                signals.append(sig)
+
+                # 设置冷却
+                repo.set_contract_cooldown(code, symbol, self.cooldown_days)
+
+                # 入库
+                repo.log_signal(
+                    symbol=symbol,
+                    contract_code=code,
+                    signal_level=signal_level,
+                    trigger_price=sig.trigger_price,
+                    ema_value=ema_value,
+                    ema_type=ema_type,
+                    iv_rank=iv_rank,
+                    underlying_price=sig.underlying_price,
+                    floor_price=floor_price,
+                    suggestions=[
+                        {
+                            "contract_code": s.contract_code,
+                            "strike": s.strike,
+                            "expiry": s.expiry,
+                            "premium": s.premium,
+                            "delta": s.delta,
+                            "annualized_yield": s.annualized_yield,
+                            "cost_basis": s.cost_basis,
+                            "dte": s.dte,
+                        }
+                        for s in suggestions
+                    ],
+                    is_intraday=is_intraday,
+                )
 
         rep["signals"] = len(signals)
         return signals
@@ -535,16 +623,30 @@ class LeapsMonitor:
         strike_min: Optional[float] = None, strike_max: Optional[float] = None,
         range_down: Optional[float] = None, range_up: Optional[float] = None,
         errors: Optional[List[str]] = None,
+        progress_cb: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         import futu
         futu_symbol = _to_futu_symbol(symbol)
         contracts: List[Dict[str, Any]] = []
         errs = errors if errors is not None else []
         eff_dte_min = self.dte_min if dte_min is None else dte_min
+
+        def _p(**kw):
+            if progress_cb:
+                try:
+                    progress_cb(**kw)
+                except Exception:
+                    pass
+
         try:
             from app.core.opend import open_quote_context
             ctx = open_quote_context(host=self.futu_host, port=self.futu_port)
             # 获取所有到期日
+            _p(
+                symbol=symbol, side=option_type, expiry=None,
+                contract_i=0, contract_n=0,
+                message=f"正在扫描：{symbol} {option_type} · 到期日 … · 合约 … · 拉取到期日列表",
+            )
             _throttle()
             ret, dates = ctx.get_option_expiration_date(futu_symbol)
             if ret != futu.RET_OK:
@@ -577,9 +679,21 @@ class LeapsMonitor:
                 strike_hi = min(strike_hi, strike_max)
 
             futu_opt_type = futu.OptionType.CALL if option_type == "CALL" else futu.OptionType.PUT
+            # (code, expiry) 以便组装时带回到期日
             all_codes: List[str] = []
+            code_expiry: Dict[str, str] = {}
             chain_fail = 0
-            for exp_str, _ in eligible_expiries[:3]:  # 取最近 3 个符合条件的到期日
+            exp_slice = eligible_expiries[:3]  # 取最近 3 个符合条件的到期日
+            n_exp = len(exp_slice)
+            for ei, (exp_str, _) in enumerate(exp_slice, start=1):
+                _p(
+                    symbol=symbol, side=option_type, expiry=exp_str,
+                    contract_i=0, contract_n=0,
+                    message=(
+                        f"正在扫描：{symbol} {option_type} · 到期日 {exp_str} · 合约 … · "
+                        f"拉期权链 {ei}/{n_exp}"
+                    ),
+                )
                 _throttle()
                 ret2, chain = ctx.get_option_chain(
                     futu_symbol, start=exp_str, end=exp_str,
@@ -590,12 +704,23 @@ class LeapsMonitor:
                         chain_fail += 1
                         logger.warning("get_option_chain(%s %s) 失败: %s", futu_symbol, exp_str, chain)
                     continue
+                n_in_exp = 0
                 for _, row in chain.iterrows():
                     code = str(row.get("code", ""))
                     strike = float(row.get("strike_price", 0))
                     if not code or strike < strike_lo or strike > strike_hi:
                         continue
                     all_codes.append(code)
+                    code_expiry[code] = exp_str
+                    n_in_exp += 1
+                _p(
+                    symbol=symbol, side=option_type, expiry=exp_str,
+                    contract_i=0, contract_n=n_in_exp,
+                    message=(
+                        f"正在扫描：{symbol} {option_type} · 到期日 {exp_str} · "
+                        f"合约 0/{n_in_exp} · 链已取,待快照 {ei}/{n_exp}"
+                    ),
+                )
 
             if not all_codes:
                 if chain_fail:
@@ -609,8 +734,21 @@ class LeapsMonitor:
             chunk_size = 80
             snapshots: Dict[str, Any] = {}
             snap_fail = 0
-            for i in range(0, len(all_codes), chunk_size):
+            n_chunks = (len(all_codes) + chunk_size - 1) // chunk_size
+            for bi, i in enumerate(range(0, len(all_codes), chunk_size), start=1):
                 chunk = all_codes[i: i + chunk_size]
+                # 用本批第一个合约的到期日做展示
+                exp_hint = code_expiry.get(chunk[0]) if chunk else None
+                _p(
+                    symbol=symbol, side=option_type, expiry=exp_hint,
+                    contract_i=min(i + len(chunk), len(all_codes)),
+                    contract_n=len(all_codes),
+                    message=(
+                        f"正在扫描：{symbol} {option_type} · 到期日 {exp_hint or '…'} · "
+                        f"合约 {min(i + len(chunk), len(all_codes))}/{len(all_codes)} · "
+                        f"快照 {bi}/{n_chunks}"
+                    ),
+                )
                 _throttle()
                 ret3, snap = ctx.get_market_snapshot(chunk)
                 if ret3 == futu.RET_OK and snap is not None and not snap.empty:

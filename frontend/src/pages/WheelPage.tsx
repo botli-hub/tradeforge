@@ -26,6 +26,53 @@ import EmptyState from '../components/ui/EmptyState'
 import { useToast } from '../components/ui/Toast'
 
 /** 离散选项下拉：当前值不在列表里时自动补上，避免丢历史数据 */
+/** 高分/触线统一进度文案：标的 方向 · 到期日 · 合约 n/m · 标的 i/N */
+function ScanProgressDetail({
+  prefix = '正在扫描：',
+  symbol,
+  side,
+  expiry,
+  contract_i,
+  contract_n,
+  target_i,
+  target_n,
+  fallback,
+}: {
+  prefix?: string
+  symbol?: string | null
+  side?: string | null
+  expiry?: string | null
+  contract_i?: number | null
+  contract_n?: number | null
+  target_i?: number | null
+  target_n?: number | null
+  fallback?: string
+}) {
+  if (!symbol) {
+    return <>{fallback || '准备扫描…'}</>
+  }
+  const expText = expiry ? String(expiry).slice(0, 10) : '…'
+  const hasCn = contract_n != null && contract_n > 0
+  return (
+    <>
+      {prefix}
+      <b style={{ color: 'var(--text)' }}>{symbol}</b>
+      {side ? ` ${side}` : ''}
+      {' · 到期日 '}
+      <b style={{ color: 'var(--text)' }}>{expText}</b>
+      {' · 合约 '}
+      <b style={{ color: 'var(--green)' }}>
+        {hasCn ? `${contract_i || 0}/${contract_n}` : '…'}
+      </b>
+      {(target_n ?? 0) > 0 && (
+        <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>
+          标的 {target_i || 0}/{target_n}
+        </span>
+      )}
+    </>
+  )
+}
+
 function SelectNum({
   value, onChange, options, style, emptyLabel,
 }: {
@@ -1346,19 +1393,55 @@ export default function WheelPage() {
     return () => { clearInterval(t1); clearInterval(t2) }
   }, [refreshChecks])
 
-  /** 触线扫描:后台异步 + 轮询状态 */
+  /** 触线扫描:后台异步 + 轮询细进度(标的/到期日/合约 n/m) */
   async function runTimingScan(): Promise<void> {
     setTimingScanning(true)
-    setScanStatus(null)
+    setScanStatus({
+      running: true, started_at: null, finished_at: null,
+      signals_found: 0, report: [], error: null,
+      phase: 'timing', message: '触线扫描启动…',
+      symbol: null, side: null, expiry: null,
+      contract_i: 0, contract_n: 0, target_i: 0, target_n: 0,
+    })
     try {
       await triggerWheelTimingScan()
-      const deadline = Date.now() + 5 * 60 * 1000
+      const deadline = Date.now() + 8 * 60 * 1000
       await new Promise<void>((resolve) => {
         const poll = async () => {
           const st = await getWheelScanStatus().catch(() => null)
-          if (st) setScanStatus(st)
+          if (st) {
+            // 合并更新:同标的才继承到期日/合约进度,换标的时清空避免串号
+            setScanStatus(prev => {
+              const sameSym = !!(st.symbol && prev?.symbol && st.symbol === prev.symbol && st.side === prev.side)
+              return {
+                ...(prev || {
+                  running: true, started_at: null, finished_at: null,
+                  signals_found: 0, report: [], error: null,
+                }),
+                ...st,
+                message: st.message || prev?.message || '触线扫描中…',
+                symbol: st.symbol ?? prev?.symbol ?? null,
+                side: st.side ?? prev?.side ?? null,
+                expiry: st.expiry != null && st.expiry !== ''
+                  ? st.expiry
+                  : (sameSym ? (prev?.expiry ?? null) : null),
+                contract_i: st.contract_i != null ? st.contract_i : (sameSym ? (prev?.contract_i ?? 0) : 0),
+                contract_n: st.contract_n != null && st.contract_n > 0
+                  ? st.contract_n
+                  : (sameSym ? (prev?.contract_n ?? 0) : 0),
+                target_i: st.target_i ?? prev?.target_i ?? 0,
+                target_n: st.target_n ?? prev?.target_n ?? 0,
+              }
+            })
+          }
           if (st && !st.running && st.finished_at) {
             setTimingSignals(await getWheelTimingSignals(20).catch(() => []))
+            setTimingScanning(false)
+            resolve()
+            return
+          }
+          // 后端已不 running 但未写 finished_at 的兜底
+          if (st && !st.running && st.phase && st.phase !== 'timing') {
             setTimingScanning(false)
             resolve()
             return
@@ -1368,9 +1451,10 @@ export default function WheelPage() {
             resolve()
             return
           }
-          setTimeout(poll, 3000)
+          setTimeout(poll, 350)
         }
-        setTimeout(poll, 2000)
+        // 立刻拉一次,再进入高频轮询
+        void poll()
       })
     } catch (e: any) {
       setError('触线扫描失败:' + e.message)
@@ -2069,20 +2153,60 @@ export default function WheelPage() {
               </div>
               {(poolScanLoading || serverOppsLoading) && (
                 <div className="scan-progress-detail">
-                  {scanProgress?.symbol ? (
-                    <>
-                      正在扫描：<b style={{ color: 'var(--text)' }}>{scanProgress.symbol}</b>
-                      {scanProgress.expiry ? <> · 到期日 <b style={{ color: 'var(--text)' }}>{String(scanProgress.expiry).slice(0, 10)}</b></> : null}
-                      {scanProgress.contract_n ? <> · 合约 <b style={{ color: 'var(--green)' }}>{scanProgress.contract_i || 0}</b>/{scanProgress.contract_n}</> : null}
-                    </>
-                  ) : (scanProgress?.message || '准备扫描…')}
+                  <ScanProgressDetail
+                    symbol={scanProgress?.symbol}
+                    side={scanProgress?.side}
+                    expiry={scanProgress?.expiry}
+                    contract_i={scanProgress?.contract_i}
+                    contract_n={scanProgress?.contract_n}
+                    target_i={scanProgress?.target_i}
+                    target_n={scanProgress?.target_n}
+                    fallback={scanProgress?.message || '准备扫描…'}
+                  />
                 </div>
               )}
               <div className="scan-progress-row">
                 <span className="label">触线</span>
-                <div className="bar"><div className={`fill ${timingScanning ? 'pulse' : ''}`} style={{ width: timingScanning ? '40%' : scanStatus?.finished_at ? '100%' : '0%' }} /></div>
-                <span>{timingScanning ? '扫描中' : scanStatus?.finished_at ? `触发${scanStatus.signals_found}` : '—'}</span>
+                <div className="bar">
+                  <div
+                    className={`fill ${timingScanning ? (scanStatus?.contract_n ? '' : 'pulse') : ''}`}
+                    style={{
+                      width: (() => {
+                        if (!timingScanning) return scanStatus?.finished_at ? '100%' : '0%'
+                        const ti = scanStatus?.target_i || 0
+                        const tn = scanStatus?.target_n || 0
+                        const ci = scanStatus?.contract_i || 0
+                        const cn = scanStatus?.contract_n || 0
+                        if (tn > 0) {
+                          const base = ((Math.max(ti, 1) - 1) / tn) * 100
+                          const slice = cn > 0 ? (ci / cn) * (100 / tn) : 0
+                          return `${Math.min(99, Math.max(4, base + slice))}%`
+                        }
+                        return '40%'
+                      })(),
+                    }}
+                  />
+                </div>
+                <span>
+                  {timingScanning
+                    ? (scanStatus?.target_n ? `${scanStatus.target_i || 0}/${scanStatus.target_n}` : '扫描中')
+                    : scanStatus?.finished_at ? `触发${scanStatus.signals_found}` : '—'}
+                </span>
               </div>
+              {timingScanning && (
+                <div className="scan-progress-detail">
+                  <ScanProgressDetail
+                    symbol={scanStatus?.symbol}
+                    side={scanStatus?.side}
+                    expiry={scanStatus?.expiry}
+                    contract_i={scanStatus?.contract_i}
+                    contract_n={scanStatus?.contract_n}
+                    target_i={scanStatus?.target_i}
+                    target_n={scanStatus?.target_n}
+                    fallback={scanStatus?.message || '触线扫描启动…'}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -2783,33 +2907,60 @@ export default function WheelPage() {
                 </div>
                 {(poolScanLoading || serverOppsLoading) && (
                   <div className="scan-progress-detail">
-                    {scanProgress?.symbol ? (
-                      <>
-                        正在扫描：
-                        <b style={{ color: 'var(--text)' }}>{scanProgress.symbol}</b>
-                        {scanProgress.side ? ` ${scanProgress.side}` : ''}
-                        {scanProgress.expiry
-                          ? <> · 到期日 <b style={{ color: 'var(--text)' }}>{String(scanProgress.expiry).slice(0, 10)}</b></>
-                          : null}
-                        {scanProgress.contract_n != null && scanProgress.contract_n > 0 ? (
-                          <> · 合约 <b style={{ color: 'var(--green)' }}>{scanProgress.contract_i || 0}</b>/{scanProgress.contract_n}</>
-                        ) : null}
-                        {scanProgress.target_n ? (
-                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>
-                            标的 {scanProgress.target_i || 0}/{scanProgress.target_n}
-                          </span>
-                        ) : null}
-                      </>
-                    ) : (
-                      scanProgress?.message || '准备扫描…'
-                    )}
+                    <ScanProgressDetail
+                      symbol={scanProgress?.symbol}
+                      side={scanProgress?.side}
+                      expiry={scanProgress?.expiry}
+                      contract_i={scanProgress?.contract_i}
+                      contract_n={scanProgress?.contract_n}
+                      target_i={scanProgress?.target_i}
+                      target_n={scanProgress?.target_n}
+                      fallback={scanProgress?.message || '准备扫描…'}
+                    />
                   </div>
                 )}
                 <div className="scan-progress-row">
                   <span className="label">触线</span>
-                  <div className="bar"><div className={`fill ${timingScanning ? 'pulse' : ''}`} style={{ width: timingScanning ? '45%' : '100%' }} /></div>
-                  <span>{timingScanning ? '…' : (scanStatus?.signals_found ?? '—')}</span>
+                  <div className="bar">
+                    <div
+                      className={`fill ${timingScanning ? (scanStatus?.contract_n ? '' : 'pulse') : ''}`}
+                      style={{
+                        width: (() => {
+                          if (!timingScanning) return '100%'
+                          const ti = scanStatus?.target_i || 0
+                          const tn = scanStatus?.target_n || 0
+                          const ci = scanStatus?.contract_i || 0
+                          const cn = scanStatus?.contract_n || 0
+                          if (tn > 0) {
+                            const base = ((Math.max(ti, 1) - 1) / tn) * 100
+                            const slice = cn > 0 ? (ci / cn) * (100 / tn) : 0
+                            return `${Math.min(99, Math.max(4, base + slice))}%`
+                          }
+                          return '40%'
+                        })(),
+                      }}
+                    />
+                  </div>
+                  <span>
+                    {timingScanning
+                      ? (scanStatus?.target_n ? `${scanStatus.target_i || 0}/${scanStatus.target_n}` : '…')
+                      : (scanStatus?.signals_found ?? '—')}
+                  </span>
                 </div>
+                {timingScanning && (
+                  <div className="scan-progress-detail">
+                    <ScanProgressDetail
+                      symbol={scanStatus?.symbol}
+                      side={scanStatus?.side}
+                      expiry={scanStatus?.expiry}
+                      contract_i={scanStatus?.contract_i}
+                      contract_n={scanStatus?.contract_n}
+                      target_i={scanStatus?.target_i}
+                      target_n={scanStatus?.target_n}
+                      fallback={scanStatus?.message || '触线扫描启动…'}
+                    />
+                  </div>
+                )}
               </div>
             )}
 

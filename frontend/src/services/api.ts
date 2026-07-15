@@ -875,6 +875,10 @@ export interface BackendConfig {
     dte_pad_days?: number
     push_strong_only?: boolean
     push_min_iv_rank?: number
+    /** 相对现价下方幅度 0.20=20% → strike ≥ spot×0.8 */
+    strike_range_down?: number
+    /** 相对现价上方幅度 0.10=10% → strike ≤ spot×1.1 */
+    strike_range_up?: number
   }
   wheel_position: {
     profit_target_pct: number
@@ -1288,6 +1292,16 @@ export interface WheelScanStatus {
   error: string | null
   telegram_configured?: boolean
   telegram_sent?: number
+  /** 触线细进度 */
+  phase?: 'idle' | 'timing' | 'done' | 'error' | string
+  symbol?: string | null
+  side?: string | null
+  expiry?: string | null
+  contract_i?: number
+  contract_n?: number
+  target_i?: number
+  target_n?: number
+  message?: string
 }
 
 export async function getWheelScanStatus() {

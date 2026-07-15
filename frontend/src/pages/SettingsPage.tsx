@@ -11,7 +11,10 @@ import {
   saveBackendConfig,
 } from '../services/api'
 
+type SettingsTab = 'wheel' | 'research' | 'general'
+
 export default function SettingsPage() {
+  const [tab, setTab] = useState<SettingsTab>('wheel')
   const [settings, setSettings] = useState<AppSettings>(getAppSettings())
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
@@ -28,7 +31,7 @@ export default function SettingsPage() {
     setSaving(true)
     const next = saveAppSettings(settings)
     setSettings(next)
-    setMessage('设置已保存')
+    setMessage('前端设置已保存')
     setTimeout(() => setMessage(''), 2000)
     setSaving(false)
   }
@@ -80,171 +83,245 @@ export default function SettingsPage() {
     }
   }
 
+  const tabs: { k: SettingsTab; label: string; hint: string }[] = [
+    { k: 'wheel', label: 'Wheel', hint: '触线 / 高分 / 持仓 / 组合风控' },
+    { k: 'research', label: '研究', hint: '回测 / 行情 / 交易前端' },
+    { k: 'general', label: '通用', hint: 'Telegram / API / OpenD' },
+  ]
+
   return (
-    <div className="page">
-      <h2>设置</h2>
+    <div className="page" style={{ maxWidth: 920 }}>
+      <h2 style={{ marginBottom: 8 }}>设置</h2>
+      <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+        按使用场景分区：Wheel 管盘中策略；研究管回测与前端行情；通用管密钥与后台连接。
+      </p>
 
       {message && (
-        <div className="card" style={{ border: '1px solid #2d6cdf', color: '#cde4ff' }}>
-          {message}
+        <div className="banner info" style={{ marginBottom: 12 }}>
+          <span style={{ flex: 1 }}>{message}</span>
         </div>
       )}
 
-      <div className="card">
-        <div className="editor-section">
-          <h4>回测参数</h4>
-          <div className="settings-row">
-            <label>初始资金</label>
-            <input
-              type="number"
-              value={settings.initialCapital}
-              onChange={e => updateField('initialCapital', Number(e.target.value))}
-            />
-          </div>
-          <div className="settings-row">
-            <label>手续费率</label>
-            <input
-              type="number"
-              step="0.0001"
-              value={settings.feeRate}
-              onChange={e => updateField('feeRate', Number(e.target.value))}
-            />
-          </div>
-          <div className="settings-row">
-            <label>滑点</label>
-            <input
-              type="number"
-              step="0.001"
-              value={settings.slippage}
-              onChange={e => updateField('slippage', Number(e.target.value))}
-            />
-          </div>
-        </div>
-
-        <div className="editor-section">
-          <h4>行情数据源</h4>
-          <div style={{ marginBottom: 8, color: 'var(--text-secondary)', fontSize: 12 }}>
-            行情页/策略实时信号默认按资产自动路由：美股 quote→Finnhub，A股/港股 quote→Futu，美股 K 线→Yahoo，A股/港股 K 线→Futu。下面这个选项主要作为调试/兼容入口保留。
-          </div>
-          <div className="settings-row">
-            <label>默认入口（调试）</label>
-            <select value={settings.marketDataSource} onChange={e => updateField('marketDataSource', e.target.value as AppSettings['marketDataSource'])}>
-              <option value="futu">Futu OpenD</option>
-              <option value="finnhub">Finnhub</option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label>OpenD Host</label>
-            <input value={settings.marketHost} onChange={e => updateField('marketHost', e.target.value)} disabled={settings.marketDataSource === 'finnhub'} />
-          </div>
-          <div className="settings-row">
-            <label>OpenD Port</label>
-            <input type="number" value={settings.marketPort} onChange={e => updateField('marketPort', Number(e.target.value))} disabled={settings.marketDataSource === 'finnhub'} />
-          </div>
-          {settings.marketDataSource === 'finnhub' && (
-            <div style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 12 }}>
-              Finnhub 模式下，后端会使用下方「数据源」卡片中保存到本地数据库的 API Key。
-            </div>
-          )}
-          <div className="status-row">
-            <span>当前状态</span>
-            <span className={`tag ${marketStatus?.connected ? 'ready' : 'draft'}`}>
-              {marketStatus?.connected ? `已连接 (${marketStatus.adapter})` : '未测试'}
-            </span>
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <button className="btn-outline" onClick={handleTestMarket} disabled={testingMarket}>
-              {testingMarket ? '测试中...' : '测试行情源'}
-            </button>
-          </div>
-        </div>
-
-        <div className="editor-section">
-          <h4>交易连接（富途前端集成）</h4>
-          <div className="settings-row">
-            <label>交易适配器</label>
-            <select value={settings.tradingAdapter} onChange={e => updateField('tradingAdapter', e.target.value as AppSettings['tradingAdapter'])}>
-              <option value="futu">Futu</option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label>交易环境</label>
-            <select value={settings.tradingEnv} onChange={e => updateField('tradingEnv', e.target.value as AppSettings['tradingEnv'])}>
-              <option value="SIM">模拟盘</option>
-              <option value="REAL">实盘</option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label>交易 Host</label>
-            <input value={settings.tradingHost} onChange={e => updateField('tradingHost', e.target.value)} />
-          </div>
-          <div className="settings-row">
-            <label>交易 Port</label>
-            <input type="number" value={settings.tradingPort} onChange={e => updateField('tradingPort', Number(e.target.value))} />
-          </div>
-          <div className="settings-row">
-            <label>默认下单数量</label>
-            <input type="number" value={settings.defaultOrderQuantity} onChange={e => updateField('defaultOrderQuantity', Number(e.target.value))} />
-          </div>
-          <div className="status-row">
-            <span>交易状态</span>
-            <span className={`tag ${tradingConnected ? 'ready' : 'draft'}`}>
-              {tradingConnected ? `已连接 (${settings.tradingAdapter})` : '未连接'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
-            <button className="btn" onClick={handleConnectTrading} disabled={connectingTrading}>
-              {connectingTrading ? '连接中...' : '连接交易'}
-            </button>
-            <button className="btn-outline" onClick={handleDisconnectTrading} disabled={connectingTrading}>
-              断开交易
-            </button>
-          </div>
-        </div>
-
-        <div className="editor-section">
-          <h4>下单确认</h4>
-          <div className="settings-row">
-            <label>信号触发后确认弹窗</label>
-            <select value={settings.confirmSignals ? 'yes' : 'no'} onChange={e => updateField('confirmSignals', e.target.value === 'yes')}>
-              <option value="yes">开启</option>
-              <option value="no">关闭</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="editor-section">
-          <h4>显示</h4>
-          <div className="settings-row">
-            <label>主题</label>
-            <select value={settings.theme} onChange={e => updateField('theme', e.target.value)}>
-              <option value="dark">深色</option>
-              <option value="light">浅色</option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <label>语言</label>
-            <select value={settings.language} onChange={e => updateField('language', e.target.value)}>
-              <option value="zh">简体中文</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-        </div>
-
-        <div style={{ textAlign: 'right' }}>
-          <button className="btn" onClick={handleSave} disabled={saving}>
-            {saving ? '保存中...' : '保存设置'}
+      <div className="page-tabs" style={{ marginBottom: 16 }}>
+        {tabs.map(t => (
+          <button
+            key={t.k}
+            type="button"
+            className={`page-tab ${tab === t.k ? 'active' : ''}`}
+            onClick={() => setTab(t.k)}
+            title={t.hint}
+          >
+            {t.label}
           </button>
-        </div>
+        ))}
       </div>
 
-      <BackendConfigCard />
+      {tab === 'wheel' && (
+        <BackendConfigCard
+          mode="wheel"
+          onMessage={setMessage}
+        />
+      )}
+
+      {tab === 'research' && (
+        <div className="card">
+          <div className="editor-section">
+            <h4>回测参数</h4>
+            <div className="settings-row">
+              <label>初始资金</label>
+              <input
+                type="number"
+                value={settings.initialCapital}
+                onChange={e => updateField('initialCapital', Number(e.target.value))}
+              />
+            </div>
+            <div className="settings-row">
+              <label>手续费率</label>
+              <input
+                type="number"
+                step="0.0001"
+                value={settings.feeRate}
+                onChange={e => updateField('feeRate', Number(e.target.value))}
+              />
+            </div>
+            <div className="settings-row">
+              <label>滑点</label>
+              <input
+                type="number"
+                step="0.001"
+                value={settings.slippage}
+                onChange={e => updateField('slippage', Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>行情数据源（前端）</h4>
+            <div className="settings-row">
+              <label>数据源</label>
+              <select
+                value={settings.marketDataSource}
+                onChange={e => updateField('marketDataSource', e.target.value as AppSettings['marketDataSource'])}
+              >
+                <option value="futu">Futu OpenD</option>
+                <option value="finnhub">Finnhub</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>Host</label>
+              <input
+                value={settings.marketHost}
+                onChange={e => updateField('marketHost', e.target.value)}
+                disabled={settings.marketDataSource === 'finnhub'}
+              />
+            </div>
+            <div className="settings-row">
+              <label>Port</label>
+              <input
+                type="number"
+                value={settings.marketPort}
+                onChange={e => updateField('marketPort', Number(e.target.value))}
+                disabled={settings.marketDataSource === 'finnhub'}
+              />
+            </div>
+            {settings.marketDataSource === 'finnhub' && (
+              <div className="settings-row">
+                <label>说明</label>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  Finnhub Key 在「通用」Tab 配置
+                </span>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={testingMarket} onClick={handleTestMarket}>
+                {testingMarket ? '测试中…' : '测试行情连接'}
+              </button>
+              {marketStatus && (
+                <span style={{ fontSize: 12, color: marketStatus.connected ? 'var(--green)' : 'var(--warning)', alignSelf: 'center' }}>
+                  {marketStatus.connected ? `已连接 ${marketStatus.adapter}` : '未连接'}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>交易连接（富途前端）</h4>
+            <div className="settings-row">
+              <label>适配器</label>
+              <select
+                value={settings.tradingAdapter}
+                onChange={e => updateField('tradingAdapter', e.target.value as AppSettings['tradingAdapter'])}
+              >
+                <option value="futu">Futu</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>环境</label>
+              <select
+                value={settings.tradingEnv}
+                onChange={e => updateField('tradingEnv', e.target.value as AppSettings['tradingEnv'])}
+              >
+                <option value="SIM">模拟</option>
+                <option value="REAL">实盘</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>Trading Host</label>
+              <input value={settings.tradingHost} onChange={e => updateField('tradingHost', e.target.value)} />
+            </div>
+            <div className="settings-row">
+              <label>Trading Port</label>
+              <input
+                type="number"
+                value={settings.tradingPort}
+                onChange={e => updateField('tradingPort', Number(e.target.value))}
+              />
+            </div>
+            <div className="settings-row">
+              <label>默认下单数量</label>
+              <input
+                type="number"
+                value={settings.defaultOrderQuantity}
+                onChange={e => updateField('defaultOrderQuantity', Number(e.target.value))}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button type="button" className="btn btn-primary btn-sm" disabled={connectingTrading} onClick={handleConnectTrading}>
+                {connectingTrading ? '连接中…' : '连接交易'}
+              </button>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={connectingTrading} onClick={handleDisconnectTrading}>
+                断开
+              </button>
+              <span style={{ fontSize: 12, color: tradingConnected ? 'var(--green)' : 'var(--text-secondary)', alignSelf: 'center' }}>
+                {tradingConnected ? '已连接' : '未连接'}
+              </span>
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>下单确认</h4>
+            <div className="settings-row">
+              <label>信号触发后确认弹窗</label>
+              <select
+                value={settings.confirmSignals ? '1' : '0'}
+                onChange={e => updateField('confirmSignals', e.target.value === '1')}
+              >
+                <option value="1">开启</option>
+                <option value="0">关闭</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>显示</h4>
+            <div className="settings-row">
+              <label>主题</label>
+              <select
+                value={settings.theme}
+                onChange={e => updateField('theme', e.target.value)}
+              >
+                <option value="dark">深色</option>
+                <option value="light">浅色</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>语言</label>
+              <select
+                value={settings.language}
+                onChange={e => updateField('language', e.target.value)}
+              >
+                <option value="zh">简体中文</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
+              {saving ? '保存中…' : '保存研究/前端设置'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {tab === 'general' && (
+        <BackendConfigCard
+          mode="general"
+          onMessage={setMessage}
+        />
+      )}
     </div>
   )
 }
 
-// ── 后端服务配置(存本地数据库,不进代码仓库)────────────────────────────────────
-function BackendConfigCard() {
+// ── 后端服务配置(存本地数据库) ───────────────────────────────────────────────
+function BackendConfigCard({
+  mode,
+  onMessage,
+}: {
+  mode: 'wheel' | 'general'
+  onMessage: (m: string) => void
+}) {
   const [cfg, setCfg] = useState<BackendConfig | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -253,13 +330,20 @@ function BackendConfigCard() {
     getBackendConfig().then(setCfg).catch(e => setMsg('加载后端配置失败:' + e.message))
   }, [])
 
-  function up<K extends keyof BackendConfig>(section: K, key: string, value: any) {
+  function up(section: keyof BackendConfig, key: string, value: any) {
     setCfg(prev => prev ? {
       ...prev,
-      [section]: typeof prev[section] === 'object'
+      [section]: typeof prev[section] === 'object' && prev[section] !== null
         ? { ...(prev[section] as any), [key]: value }
         : value,
     } : prev)
+  }
+
+  function upScan(key: string, value: any) {
+    setCfg(p => p ? {
+      ...p,
+      wheel_scan: { ...(p.wheel_scan || {} as any), [key]: value },
+    } : p)
   }
 
   async function save() {
@@ -268,7 +352,11 @@ function BackendConfigCard() {
     setMsg('')
     try {
       setCfg(await saveBackendConfig(cfg))
-      setMsg('后端配置已保存并立即生效(存本地数据库)')
+      const text = mode === 'wheel'
+        ? 'Wheel 配置已保存并立即生效'
+        : '通用配置已保存并立即生效'
+      setMsg(text)
+      onMessage(text)
       setTimeout(() => setMsg(''), 3000)
     } catch (e: any) {
       setMsg('保存失败:' + e.message)
@@ -277,230 +365,292 @@ function BackendConfigCard() {
     }
   }
 
-  if (!cfg) return <div className="card">{msg || '正在加载后端配置...'}</div>
+  if (!cfg) return <div className="card">{msg || '正在加载配置…'}</div>
+
+  const downPct = Math.round((cfg.wheel_timing.strike_range_down ?? 0.2) * 100)
+  const upPct = Math.round((cfg.wheel_timing.strike_range_up ?? 0.1) * 100)
 
   return (
     <div className="card">
-      {msg && <div style={{ marginBottom: 10, color: '#cde4ff', fontSize: 13 }}>{msg}</div>}
+      {msg && <div className="banner info" style={{ marginBottom: 12 }}>{msg}</div>}
 
-      <div className="editor-section">
-        <h4>通知与数据源(敏感信息,仅存本地数据库)</h4>
-        <div className="settings-row">
-          <label>Telegram Bot Token</label>
-          <input type="password" value={cfg.telegram.bot_token} placeholder="123456:ABC-DEF..."
-            onChange={e => up('telegram', 'bot_token', e.target.value)} />
-        </div>
-        <div className="settings-row">
-          <label>Telegram Chat ID</label>
-          <input value={cfg.telegram.chat_id} placeholder="-100xxxx 或用户ID"
-            onChange={e => up('telegram', 'chat_id', e.target.value)} />
-        </div>
-        <div className="settings-row">
-          <label>Telegram 代理(可选)</label>
-          <input value={cfg.telegram.proxy || ''} placeholder="中国大陆需填,如 http://127.0.0.1:7890"
-            onChange={e => up('telegram', 'proxy', e.target.value)} />
-        </div>
-        <div className="settings-row">
-          <label>Finnhub API Key(报价/财报日历)</label>
-          <input type="password" value={cfg.finnhub_api_key}
-            onChange={e => setCfg(p => p ? { ...p, finnhub_api_key: e.target.value } : p)} />
-        </div>
-        <div className="settings-row">
-          <label>Finnhub Base URL</label>
-          <input value={cfg.finnhub_base_url} placeholder="https://finnhub.io/api/v1"
-            onChange={e => setCfg(p => p ? { ...p, finnhub_base_url: e.target.value } : p)} />
-        </div>
-        <div className="settings-row">
-          <label>Yahoo Finance Base URL(美股K线)</label>
-          <input value={cfg.yahoo_base_url} placeholder="https://query1.finance.yahoo.com/v8/finance/chart"
-            onChange={e => setCfg(p => p ? { ...p, yahoo_base_url: e.target.value } : p)} />
-        </div>
-        <div className="settings-row">
-          <label>后台任务 OpenD Host</label>
-          <input value={cfg.futu.host} onChange={e => up('futu', 'host', e.target.value)} />
-        </div>
-        <div className="settings-row">
-          <label>后台任务 OpenD Port</label>
-          <input type="number" value={cfg.futu.port} onChange={e => up('futu', 'port', Number(e.target.value))} />
-        </div>
-      </div>
-
-      <div className="editor-section">
-        <h4>开仓规则 · 触线扫描(EMA)</h4>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-          对应「机会扫描」触线来源。默认与各标的 DTE 对齐,减少远月噪音;
-          TG 默认只推可做/强信号。标的级 delta/年化在 Wheel→标的设置,可用策略模板一键套用。
-        </p>
-        <div className="settings-row">
-          <label>全局 DTE 兜底范围(天)</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_min}
-              onChange={e => up('wheel_timing', 'dte_min', Number(e.target.value))} />
-            ~
-            <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_max}
-              onChange={e => up('wheel_timing', 'dte_max', Number(e.target.value))} />
+      {mode === 'general' && (
+        <>
+          <div className="editor-section">
+            <h4>Telegram 通知</h4>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              敏感信息仅存本地数据库，不会进代码仓库。
+            </p>
+            <div className="settings-row">
+              <label>Bot Token</label>
+              <input type="password" value={cfg.telegram.bot_token} placeholder="123456:ABC-DEF..."
+                onChange={e => up('telegram', 'bot_token', e.target.value)} />
+            </div>
+            <div className="settings-row">
+              <label>Chat ID</label>
+              <input value={cfg.telegram.chat_id} placeholder="-100xxxx 或用户ID"
+                onChange={e => up('telegram', 'chat_id', e.target.value)} />
+            </div>
+            <div className="settings-row">
+              <label>代理(可选)</label>
+              <input value={cfg.telegram.proxy || ''} placeholder="如 http://127.0.0.1:7890"
+                onChange={e => up('telegram', 'proxy', e.target.value)} />
+            </div>
           </div>
-        </div>
-        <div className="settings-row">
-          <label>对齐标的 DTE(推荐)</label>
-          <select value={cfg.wheel_timing.align_target_dte !== false ? '1' : '0'}
-            onChange={e => up('wheel_timing', 'align_target_dte', e.target.value === '1')}>
-            <option value="1">开启(用标的设置 ± pad)</option>
-            <option value="0">关闭(仅用全局范围)</option>
-          </select>
-        </div>
-        <div className="settings-row">
-          <label>DTE 外扩 pad(天)</label>
-          <input type="number" value={cfg.wheel_timing.dte_pad_days ?? 7}
-            onChange={e => up('wheel_timing', 'dte_pad_days', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>每标的合约上限(0=不限,建议30)</label>
-          <input type="number" value={cfg.wheel_timing.contract_max_per_symbol}
-            onChange={e => up('wheel_timing', 'contract_max_per_symbol', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>IV 分位硬条件(0=仅记录)</label>
-          <input type="number" value={cfg.wheel_timing.iv_percentile_threshold}
-            onChange={e => up('wheel_timing', 'iv_percentile_threshold', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>合约冷却(交易日)</label>
-          <input type="number" value={cfg.wheel_timing.cooldown_trading_days}
-            onChange={e => up('wheel_timing', 'cooldown_trading_days', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>触线自动扫描间隔(分钟,0=关闭)</label>
-          <input type="number" value={cfg.wheel_timing.auto_scan_minutes}
-            onChange={e => up('wheel_timing', 'auto_scan_minutes', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>TG 仅推可做/强信号</label>
-          <select value={cfg.wheel_timing.push_strong_only !== false ? '1' : '0'}
-            onChange={e => up('wheel_timing', 'push_strong_only', e.target.value === '1')}>
-            <option value="1">开启(过滤观察级)</option>
-            <option value="0">关闭(全部推送)</option>
-          </select>
-        </div>
-        <div className="settings-row">
-          <label>强信号 IVR 阈值</label>
-          <input type="number" value={cfg.wheel_timing.push_min_iv_rank ?? 50}
-            onChange={e => up('wheel_timing', 'push_min_iv_rank', Number(e.target.value))} />
-        </div>
-      </div>
 
-      <div className="editor-section">
-        <h4>开仓规则 · 高分扫描(截面)</h4>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-          「高分候选」来源。TG 推送按资金效率取 Top N。
-        </p>
-        <div className="settings-row">
-          <label>跨标的展示条数</label>
-          <input type="number" value={cfg.wheel_scan?.top_overall ?? 15}
-            onChange={e => setCfg(p => p ? {
-              ...p,
-              wheel_scan: { ...(p.wheel_scan || {} as any), top_overall: Number(e.target.value) },
-            } : p)} />
-        </div>
-        <div className="settings-row">
-          <label>TG 推送 Top N</label>
-          <input type="number" value={cfg.wheel_scan?.telegram_top_n ?? 3}
-            onChange={e => setCfg(p => p ? {
-              ...p,
-              wheel_scan: { ...(p.wheel_scan || {} as any), telegram_top_n: Number(e.target.value) },
-            } : p)} />
-        </div>
-        <div className="settings-row">
-          <label>高分自动推送间隔(分钟,0=关)</label>
-          <input type="number" value={cfg.wheel_scan?.auto_push_minutes ?? 0}
-            onChange={e => setCfg(p => p ? {
-              ...p,
-              wheel_scan: { ...(p.wheel_scan || {} as any), auto_push_minutes: Number(e.target.value) },
-            } : p)} />
-        </div>
-        <div className="settings-row">
-          <label>点差上限%(硬过滤)</label>
-          <input type="number" value={cfg.wheel_scan?.max_spread_pct ?? 10}
-            onChange={e => setCfg(p => p ? {
-              ...p,
-              wheel_scan: { ...(p.wheel_scan || {} as any), max_spread_pct: Number(e.target.value) },
-            } : p)} />
-        </div>
-      </div>
+          <div className="editor-section">
+            <h4>外部 API</h4>
+            <div className="settings-row">
+              <label>Finnhub API Key</label>
+              <input type="password" value={cfg.finnhub_api_key}
+                onChange={e => setCfg(p => p ? { ...p, finnhub_api_key: e.target.value } : p)} />
+            </div>
+            <div className="settings-row">
+              <label>Finnhub Base URL</label>
+              <input value={cfg.finnhub_base_url} placeholder="https://finnhub.io/api/v1"
+                onChange={e => setCfg(p => p ? { ...p, finnhub_base_url: e.target.value } : p)} />
+            </div>
+            <div className="settings-row">
+              <label>Yahoo Finance Base URL</label>
+              <input value={cfg.yahoo_base_url} placeholder="https://query1.finance.yahoo.com/..."
+                onChange={e => setCfg(p => p ? { ...p, yahoo_base_url: e.target.value } : p)} />
+            </div>
+          </div>
 
-      <div className="editor-section">
-        <h4>组合风控（组合优化页用）</h4>
-        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-          填写组合净值后，才可正确计算利用率/闲置资金/净值占比。单标的资金上限在
-          <b> Wheel → 标的设置</b> 的「资金上限 max_capital」中配置。
-        </p>
-        <div className="settings-row">
-          <label>组合净值(USD,0=未设)</label>
-          <input type="number" step="1000" value={cfg.wheel_portfolio?.total_equity ?? 0}
-            placeholder="例如 300000"
-            onChange={e => up('wheel_portfolio', 'total_equity', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>组合占用上限(0~1)</label>
-          <input type="number" step="0.05" min={0} max={1}
-            value={cfg.wheel_portfolio?.max_portfolio_pct ?? 0.8}
-            onChange={e => up('wheel_portfolio', 'max_portfolio_pct', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>单标的占净值上限(0~1)</label>
-          <input type="number" step="0.05" min={0} max={1}
-            value={cfg.wheel_portfolio?.max_symbol_pct ?? 0.25}
-            onChange={e => up('wheel_portfolio', 'max_symbol_pct', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>高相关阈值</label>
-          <input type="number" step="0.05" min={0} max={1}
-            value={cfg.wheel_portfolio?.high_corr_threshold ?? 0.7}
-            onChange={e => up('wheel_portfolio', 'high_corr_threshold', Number(e.target.value))} />
-        </div>
-      </div>
+          <div className="editor-section">
+            <h4>后台 OpenD（扫描/任务用）</h4>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              与「研究」Tab 里前端行情 Host/Port 可分开配置；后台任务（触线/高分）读这里。
+            </p>
+            <div className="settings-row">
+              <label>OpenD Host</label>
+              <input value={cfg.futu.host} onChange={e => up('futu', 'host', e.target.value)} />
+            </div>
+            <div className="settings-row">
+              <label>OpenD Port</label>
+              <input type="number" value={cfg.futu.port}
+                onChange={e => up('futu', 'port', Number(e.target.value))} />
+            </div>
+          </div>
+        </>
+      )}
 
-      <div className="editor-section">
-        <h4>管理规则 · 持仓与通知</h4>
-        <div className="settings-row">
-          <label>平仓利润目标(%)</label>
-          <input type="number" value={cfg.wheel_position.profit_target_pct}
-            onChange={e => up('wheel_position', 'profit_target_pct', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>保证金估算比例(0~1)</label>
-          <input type="number" step="0.05" value={cfg.wheel_position.margin_ratio}
-            onChange={e => up('wheel_position', 'margin_ratio', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>财报警示提前天数</label>
-          <input type="number" value={cfg.wheel_position.earnings_warn_days}
-            onChange={e => up('wheel_position', 'earnings_warn_days', Number(e.target.value))} />
-        </div>
-        <div className="settings-row">
-          <label>持仓通知模式</label>
-          <select value={cfg.wheel_position.notify_mode || 'realtime'}
-            onChange={e => up('wheel_position', 'notify_mode', e.target.value)}>
-            <option value="realtime">即时(每条推)</option>
-            <option value="digest">每日汇总(深度ITM仍即时)</option>
-          </select>
-        </div>
-        <div className="settings-row">
-          <label>每周一 Telegram 周报</label>
-          <select value={cfg.wheel_position.weekly_report ? '1' : '0'}
-            onChange={e => up('wheel_position', 'weekly_report', e.target.value === '1')}>
-            <option value="1">开启</option>
-            <option value="0">关闭</option>
-          </select>
-        </div>
-      </div>
+      {mode === 'wheel' && (
+        <>
+          <div className="editor-section">
+            <h4>触线扫描（EMA 时机）</h4>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              对应机会里的「触线」来源：合约价摸到自身 EMA50/200。标的级 delta/年化在 Wheel→标的设置。
+            </p>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{
+              marginBottom: 14, padding: '12px 14px', borderRadius: 10,
+              border: '1px solid rgba(56,189,248,0.35)', background: 'rgba(56,189,248,0.08)',
+            }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Strike 扫描区间（相对现价）</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                只扫现价附近合约：区间 = 现价 × [1 − 下方%, 1 + 上方%]。
+                例：现价 100、下 20% / 上 10% → 扫 strike <b style={{ color: 'var(--text)' }}>80 ~ 110</b>。
+                CALL 另有 strike ≥ cost_basis。
+              </div>
+              <div className="settings-row">
+                <label>下方幅度 %（OTM Put 侧）</label>
+                <input
+                  type="number" min={1} max={80} step={1}
+                  value={downPct}
+                  onChange={e => up('wheel_timing', 'strike_range_down', Math.max(0, Number(e.target.value) || 0) / 100)}
+                />
+              </div>
+              <div className="settings-row">
+                <label>上方幅度 %（OTM Call 侧）</label>
+                <input
+                  type="number" min={1} max={80} step={1}
+                  value={upPct}
+                  onChange={e => up('wheel_timing', 'strike_range_up', Math.max(0, Number(e.target.value) || 0) / 100)}
+                />
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                当前：现价 × [1−{downPct}%, 1+{upPct}%] · 默认 20% / 10%
+              </div>
+            </div>
+
+            <div className="settings-row">
+              <label>全局 DTE 兜底(天)</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_min}
+                  onChange={e => up('wheel_timing', 'dte_min', Number(e.target.value))} />
+                ~
+                <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_max}
+                  onChange={e => up('wheel_timing', 'dte_max', Number(e.target.value))} />
+              </div>
+            </div>
+            <div className="settings-row">
+              <label>对齐标的 DTE</label>
+              <select value={cfg.wheel_timing.align_target_dte !== false ? '1' : '0'}
+                onChange={e => up('wheel_timing', 'align_target_dte', e.target.value === '1')}>
+                <option value="1">开启（标的设置 ± pad）</option>
+                <option value="0">关闭（仅用全局范围）</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>DTE 外扩 pad(天)</label>
+              <input type="number" value={cfg.wheel_timing.dte_pad_days ?? 7}
+                onChange={e => up('wheel_timing', 'dte_pad_days', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>每标的合约上限(0=不限)</label>
+              <input type="number" value={cfg.wheel_timing.contract_max_per_symbol}
+                onChange={e => up('wheel_timing', 'contract_max_per_symbol', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>IV 分位硬条件(0=仅记录)</label>
+              <input type="number" value={cfg.wheel_timing.iv_percentile_threshold}
+                onChange={e => up('wheel_timing', 'iv_percentile_threshold', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>合约冷却(交易日)</label>
+              <input type="number" value={cfg.wheel_timing.cooldown_trading_days}
+                onChange={e => up('wheel_timing', 'cooldown_trading_days', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>自动扫描间隔(分钟,0=关)</label>
+              <input type="number" value={cfg.wheel_timing.auto_scan_minutes}
+                onChange={e => up('wheel_timing', 'auto_scan_minutes', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>TG 仅推可做/强信号</label>
+              <select value={cfg.wheel_timing.push_strong_only !== false ? '1' : '0'}
+                onChange={e => up('wheel_timing', 'push_strong_only', e.target.value === '1')}>
+                <option value="1">开启</option>
+                <option value="0">关闭(全部推)</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>强信号 IVR 阈值</label>
+              <input type="number" value={cfg.wheel_timing.push_min_iv_rank ?? 50}
+                onChange={e => up('wheel_timing', 'push_min_iv_rank', Number(e.target.value))} />
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>高分扫描（截面打分）</h4>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              机会里的「高分 / 优先」来源。按规则筛合约再综合打分。
+            </p>
+            <div className="settings-row">
+              <label>跨标的展示条数</label>
+              <input type="number" value={cfg.wheel_scan?.top_overall ?? 15}
+                onChange={e => upScan('top_overall', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>TG 推送 Top N</label>
+              <input type="number" value={cfg.wheel_scan?.telegram_top_n ?? 3}
+                onChange={e => upScan('telegram_top_n', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>高分自动推送(分钟,0=关)</label>
+              <input type="number" value={cfg.wheel_scan?.auto_push_minutes ?? 0}
+                onChange={e => upScan('auto_push_minutes', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>点差上限%(硬过滤)</label>
+              <input type="number" value={cfg.wheel_scan?.max_spread_pct ?? 10}
+                onChange={e => upScan('max_spread_pct', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>排序模式</label>
+              <select value={cfg.wheel_scan?.sort_mode || 'score'}
+                onChange={e => upScan('sort_mode', e.target.value)}>
+                <option value="score">综合分 score</option>
+                <option value="robust">稳健分 robust</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>持仓管理与通知</h4>
+            <div className="settings-row">
+              <label>平仓利润目标(%)</label>
+              <input type="number" value={cfg.wheel_position.profit_target_pct}
+                onChange={e => up('wheel_position', 'profit_target_pct', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>软止盈阈值(%)</label>
+              <input type="number" value={cfg.wheel_position.soft_profit_pct ?? 30}
+                onChange={e => up('wheel_position', 'soft_profit_pct', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>硬 Roll DTE</label>
+              <input type="number" value={cfg.wheel_position.hard_roll_dte ?? 21}
+                onChange={e => up('wheel_position', 'hard_roll_dte', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>保证金估算比例(0~1)</label>
+              <input type="number" step="0.05" value={cfg.wheel_position.margin_ratio}
+                onChange={e => up('wheel_position', 'margin_ratio', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>财报警示提前天数</label>
+              <input type="number" value={cfg.wheel_position.earnings_warn_days}
+                onChange={e => up('wheel_position', 'earnings_warn_days', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>持仓通知模式</label>
+              <select value={cfg.wheel_position.notify_mode || 'realtime'}
+                onChange={e => up('wheel_position', 'notify_mode', e.target.value)}>
+                <option value="realtime">即时(每条推)</option>
+                <option value="digest">每日汇总(深度ITM仍即时)</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>每周一 TG 周报</label>
+              <select value={cfg.wheel_position.weekly_report ? '1' : '0'}
+                onChange={e => up('wheel_position', 'weekly_report', e.target.value === '1')}>
+                <option value="1">开启</option>
+                <option value="0">关闭</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>组合风控</h4>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              用于风控 Tab 的利用率/闲置资金。单标的上限在 <b>Wheel → 标的设置</b> 的 max_capital。
+            </p>
+            <div className="settings-row">
+              <label>组合净值(USD,0=未设)</label>
+              <input type="number" step="1000" value={cfg.wheel_portfolio?.total_equity ?? 0}
+                placeholder="例如 300000"
+                onChange={e => up('wheel_portfolio', 'total_equity', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>组合占用上限(0~1)</label>
+              <input type="number" step="0.05" min={0} max={1}
+                value={cfg.wheel_portfolio?.max_portfolio_pct ?? 0.8}
+                onChange={e => up('wheel_portfolio', 'max_portfolio_pct', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>单标的占净值上限(0~1)</label>
+              <input type="number" step="0.05" min={0} max={1}
+                value={cfg.wheel_portfolio?.max_symbol_pct ?? 0.25}
+                onChange={e => up('wheel_portfolio', 'max_symbol_pct', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>高相关阈值</label>
+              <input type="number" step="0.05" min={0} max={1}
+                value={cfg.wheel_portfolio?.high_corr_threshold ?? 0.7}
+                onChange={e => up('wheel_portfolio', 'high_corr_threshold', Number(e.target.value))} />
+            </div>
+          </div>
+        </>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
         <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-          保存后立即生效,无需重启;所有配置均存本地数据库,不再读取任何配置文件
+          保存后立即生效 · 存本地数据库
         </span>
-        <button className="btn" onClick={save} disabled={saving}>
-          {saving ? '保存中...' : '保存后端配置'}
+        <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>
+          {saving ? '保存中…' : mode === 'wheel' ? '保存 Wheel 配置' : '保存通用配置'}
         </button>
       </div>
     </div>
