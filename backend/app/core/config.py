@@ -52,32 +52,74 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "yield_method": "premium_over_strike",
     },
     "wheel_timing": {
-        "dte_min": 21, "dte_max": 60, "contract_max_per_symbol": 30,
+        "dte_min": 30, "dte_max": 500, "contract_max_per_symbol": 0,
         "iv_percentile_threshold": 0, "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
         # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
         "strike_range_down": 0.20, "strike_range_up": 0.10,
-        # 每标的对齐其 dte_min/max(±pad),减少宽 DTE 噪音
-        "align_target_dte": True,
-        "dte_pad_days": 7,
-        # TG:仅推强信号(EMA200 或 IVR≥阈值);push_strong_only=False 时仍推全部
-        "push_min_iv_rank": 50,
-        "push_strong_only": True,
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
         "earnings_warn_days": 14, "weekly_report": True,
         # 通知模式:realtime=每条即时推;digest=每日一条汇总(深度ITM/临期ITM仍即时)
         "notify_mode": "realtime",
+        "soft_profit_pct": 30,
+        "hard_roll_dte": 21,
+        "gamma_warn_dte": 7,
+        "hold_theta_min_profit_pct": 40,
+        "dividend_warn_days": 14,
+        "alert_push_minutes": 0,  # 在场体检告警推送间隔,0=关
     },
     "wheel_scan": {
         "max_spread_pct": 10.0, "spread_soft_pct": 4.0,
         "earnings_penalty": 0.85, "iv_rank_bonus": 0.20,
         "trend_penalty_below_ema50": 0.90, "trend_penalty_below_ema200": 0.70,
-        "top_per_symbol": 3, "top_overall": 15,
+        "top_per_symbol": 3, "top_overall": 20,
         "chain_cache_ttl_sec": 900, "symbol_interval_sec": 2,
         "auto_push_minutes": 0,
-        "telegram_top_n": 3,
+        "earnings_hard_filter": True,
+        "premium_pricing": "mid",
+        "pop_weight": 0.35,
+        "buffer_atr_min": 0.8,
+        "buffer_weight": 0.25,
+        "headroom_boost": 0.15,
+        "min_iv_history_for_bonus": 30,
+        "sort_mode": "score",  # score | robust
+        "log_suggestions": True,
+    },
+    "wheel_portfolio": {
+        "total_equity": 0,  # 0=用 max_capital 之和估算
+        "max_portfolio_pct": 0.80,
+        "max_symbol_pct": 0.25,
+        "high_corr_threshold": 0.70,
+    },
+    "wheel_profiles": {
+        "active": "balanced",
+        "presets": {
+            "conservative": {
+                "wheel_scan": {
+                    "sort_mode": "robust", "earnings_hard_filter": True,
+                    "pop_weight": 0.5, "buffer_atr_min": 1.0,
+                    "trend_penalty_below_ema200": 0.5,
+                },
+                "wheel_position": {"profit_target_pct": 40, "soft_profit_pct": 25},
+            },
+            "balanced": {
+                "wheel_scan": {
+                    "sort_mode": "score", "earnings_hard_filter": True,
+                    "pop_weight": 0.35, "buffer_atr_min": 0.8,
+                },
+                "wheel_position": {"profit_target_pct": 50, "soft_profit_pct": 30},
+            },
+            "aggressive": {
+                "wheel_scan": {
+                    "sort_mode": "score", "earnings_hard_filter": False,
+                    "earnings_penalty": 0.9, "pop_weight": 0.2,
+                    "buffer_atr_min": 0.5, "iv_rank_bonus": 0.25,
+                },
+                "wheel_position": {"profit_target_pct": 60, "soft_profit_pct": 35},
+            },
+        },
     },
 }
 

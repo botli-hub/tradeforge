@@ -1,63 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   getAppSettings, subscribeSettings, type AppSettings,
   getWheelTargets, getWheelCandidates, addWheelTarget, updateWheelTarget, deleteWheelTarget,
   getWheelCycles, getWheelTrades, recordWheelTrade, updateWheelTrade, deleteWheelTrade,
   getWheelStats, getWheelSuggest, triggerWheelTimingScan, getWheelTimingSignals,
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
-  getWheelPoolScan, pushWheelPoolScan, WheelScanResult, WheelScanOpportunity, getBackendConfig,
+  getWheelPoolScan, pushWheelPoolScan, WheelScanResult, getBackendConfig,
+  getWheelOpportunities, type WheelOpportunitiesResult, type WheelOpportunity, type OppFilter,
+  registerWheelRoll,
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
-  WheelScanStatus, WheelTimingHistoryPage, WheelTimingHistoryItem, WheelOpenPositionItem, WheelRollOptions,
+  WheelScanStatus, WheelTimingHistoryPage, WheelOpenPositionItem, WheelRollOptions,
 } from '../services/api'
-import {
-  addPendingReg, annPerDelta, buildFutuOrderMemo, computeOpsMetrics, contractCodeWarning, copyText,
-  dailyRentPer10k, dteBucket, DTE_BUCKET_META, estimateAnnualized, evaluateTradeability, explainOpenOpp,
-  getPortfolioBudget, getRiskTier, isOnboardDone, loadPendingQueue,
-  normalizeContractCode, removePendingReg, resolveTradeTier, savePendingQueue, scanFailureHint,
-  setOnboardDone, setPortfolioBudget, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
-  type DteBucket, type PendingRegItem, type RiskTier, type TradeTier,
-} from '../services/wheelProduct'
-import Drawer from '../components/ui/Drawer'
-import EmptyState from '../components/ui/EmptyState'
-import { useToast } from '../components/ui/Toast'
-
-/** 离散选项下拉：当前值不在列表里时自动补上，避免丢历史数据 */
-function SelectNum({
-  value, onChange, options, style, emptyLabel,
-}: {
-  value: string | number
-  onChange: (v: string) => void
-  options: number[]
-  style?: React.CSSProperties
-  emptyLabel?: string
-}) {
-  const str = value === '' || value == null ? '' : String(value)
-  const num = str === '' ? NaN : Number(str)
-  const opts = [...options]
-  if (str !== '' && !Number.isNaN(num) && !opts.some(o => o === num || String(o) === str)) {
-    opts.push(num)
-    opts.sort((a, b) => a - b)
-  }
-  return (
-    <select value={str} onChange={e => onChange(e.target.value)} style={style}>
-      {emptyLabel != null && <option value="">{emptyLabel}</option>}
-      {opts.map(o => (
-        <option key={o} value={String(o)}>{o}</option>
-      ))}
-    </select>
-  )
-}
-
-const QTY_CONTRACT_OPTS = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20]
-const QTY_SHARE_OPTS = [100, 200, 300, 400, 500, 1000]
-const FEE_OPTS = [0, 0.65, 1, 1.5, 2, 3, 5, 10]
-const CONTRACT_SIZE_OPTS = [100]
-const BUDGET_OPTS = [10_000, 25_000, 50_000, 100_000, 200_000, 500_000, 1_000_000]
-const DELTA_OPTS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
-const DTE_OPTS = [7, 14, 21, 30, 35, 45, 60, 90]
-const ANN_OPTS = [8, 10, 12, 15, 18, 20, 25, 30, 40]
-const OI_OPTS = [10, 50, 100, 200, 500, 1000]
+import WheelOptimizePanel from '../components/WheelOptimizePanel'
 
 const STAGE_LABELS: Record<string, string> = {
   IDLE: '空仓', CSP_OPEN: '卖Put中', HOLDING: '持股', CC_OPEN: '卖Call中', CLOSED: '已结束',
@@ -121,614 +76,6 @@ function StatusDot({ ok, label }: { ok: boolean | null; label: string }) {
       {label}
     </span>
   )
-}
-
-// ── 机会扫描 M1:可交易性/三档/DTE桶/日租/事件 ──────────────────────────────
-type OppCategory =
-  | 'ACTIONABLE' | 'RANKED' | 'EMA_TOUCH'
-  | 'CLOSE' | 'ROLL' | 'LOW_YIELD' | 'UNCOVERED' | 'IDLE'
-type OppCategoryFilter =
-  | 'all' | 'PRIORITY' | 'QUEUE' | 'WATCH' | 'KILLED' | 'ACTIONABLE' | 'RANKED' | 'EMA_TOUCH'
-  | 'MANAGE' | 'CLOSE' | 'ROLL' | 'UNCOVERED' | 'IDLE'
-type OppSideFilter = 'all' | 'PUT' | 'CALL'
-type OppBucketFilter = 'core_extend' | 'core' | 'all_buckets' | 'far'
-/** legacy strength 仍用于 Badge 色;真正档位看 trade_tier */
-type OppStrength = 'WATCH' | 'READY' | 'STRONG' | 'MANAGE'
-
-type OppRow = {
-  id: string
-  kind: 'OPEN' | 'MANAGE'
-  categories: OppCategory[]
-  strength: OppStrength
-  /** M1 双轨确认档:观察/可排单/优先 */
-  trade_tier: TradeTier
-  tradeable: boolean
-  kill_reasons: string[]
-  dte_bucket: DteBucket
-  /** 日租 $/万保/天 — 同桶排序主键 */
-  daily_rent: number | null
-  /** 年化/|Δ| */
-  ann_per_delta: number | null
-  covers_earnings: boolean
-  open_interest?: number | null
-  actionable: boolean
-  symbol: string
-  side?: 'PUT' | 'CALL'
-  contract_code?: string
-  strike?: number | null
-  expiry?: string | null
-  dte?: number | null
-  score?: number | null
-  annualized?: number | null
-  remaining_annualized?: number | null
-  delta?: number | null
-  bid?: number | null
-  spread_pct?: number | null
-  tags: string[]
-  risk_hard: string[]
-  risk_soft: string[]
-  risk_block: boolean
-  efficiency: number
-  capital?: number | null
-  cycle_id?: string | null
-  ranked?: WheelScanOpportunity
-  ema_type?: string | null
-  ema_value?: number | null
-  trigger_price?: number | null
-  iv_rank?: number | null
-  underlying_price?: number | null
-  times_triggered?: number
-  profit_pct?: number | null
-  action_hint?: string | null
-  signal?: LeapsSignal
-  history?: WheelTimingHistoryItem
-  check?: WheelOpenPositionItem
-  seen_at?: string | null
-  headline?: string
-  suggest_qty?: number
-}
-
-function oppKey(code: string | null | undefined, symbol: string, side: string, strike?: number | null, expiry?: string | null) {
-  if (code) return code
-  return `${symbol}|${side}|${strike ?? ''}|${(expiry || '').slice(0, 10)}`
-}
-
-function rankedTags(o: WheelScanOpportunity): string[] {
-  const tags: string[] = []
-  if (o.trend === 'DOWN') tags.push('趋势弱')
-  if (o.trend === 'WEAK') tags.push('↓EMA50')
-  if (o.covers_earnings) tags.push('含财报')
-  if (o.exceeds_capital) tags.push('超上限')
-  if ((o.iv_rank ?? 0) >= 70) tags.push('IV高')
-  return tags
-}
-
-function capitalForOpp(side: 'PUT' | 'CALL' | undefined, strike?: number | null, size = 100): number | null {
-  if (strike == null || !side) return null
-  return strike * size
-}
-
-/** 优先度 ≈ 年化×流动性 / 资金占用 × 触线加成 × IV加成 × 风控折扣 */
-function computeEfficiency(row: Pick<OppRow, 'annualized' | 'ranked' | 'categories' | 'ema_type' | 'iv_rank' | 'risk_block' | 'risk_soft' | 'strike' | 'side' | 'bid'>): number {
-  const ann = row.annualized ?? 0
-  const liq = row.ranked?.score_factors?.liquidity ?? (row.categories.includes('EMA_TOUCH') ? 0.8 : 1)
-  const cap = capitalForOpp(row.side, row.strike) || 1
-  let mult = 1
-  if (row.categories.includes('EMA_TOUCH')) mult *= row.ema_type === 'EMA200' ? 1.3 : 1.15
-  if ((row.iv_rank ?? 0) >= 70) mult *= 1.15
-  else if ((row.iv_rank ?? 0) >= 50) mult *= 1.08
-  if (row.risk_block) mult *= 0.25
-  else if (row.risk_soft.length) mult *= 0.75
-  // 归一:年化% / 万美元占用
-  return (ann * liq / (cap / 10000)) * mult
-}
-
-function enrichOpenRow(
-  row: OppRow,
-  targetsBySym: Record<string, WheelTarget>,
-  stressHigh: boolean,
-  portfolioAvailable: number,
-): OppRow {
-  const t = targetsBySym[row.symbol]
-  const hard: string[] = []
-  const soft: string[] = [...row.risk_soft]
-
-  row.covers_earnings = !!(row.ranked?.covers_earnings || row.ranked?.earnings_warn || row.tags.includes('含财报'))
-  row.dte_bucket = dteBucket(row.dte)
-  // 触线-only 常缺 bid:用 trigger_price 估权利金;缺年化则粗算
-  const prem = (row.bid != null && row.bid > 0) ? row.bid
-    : (row.trigger_price != null && row.trigger_price > 0) ? row.trigger_price
-      : null
-  if ((row.annualized == null || row.annualized <= 0) && prem != null) {
-    const est = estimateAnnualized(prem, row.strike, row.dte)
-    if (est != null) row.annualized = est
-  }
-  row.daily_rent = dailyRentPer10k(prem, row.strike, row.dte)
-  row.ann_per_delta = annPerDelta(row.annualized, row.delta)
-  row.open_interest = row.ranked?.open_interest ?? row.open_interest ?? null
-  row.capital = capitalForOpp(row.side, row.strike)
-  // 可交易性用真实 bid;仅有触价时仍可算展示指标但不算有买价
-  if (row.bid == null && prem != null) {
-    // 保留 trigger 仅供展示,gate 仍会因无买价进观察 — 符合预期
-  }
-
-  // 建议张数(额度)
-  const used = t ? targetCapital(t.active_cycles || []) : 0
-  const headroom = t && (t.max_capital ?? 0) > 0 ? Math.max(0, t.max_capital - used) : null
-  row.suggest_qty = row.strike != null
-    ? suggestQty({
-      strike: row.strike, side: row.side || 'PUT',
-      symbolHeadroom: headroom, portfolioAvailable,
-    })
-    : 1
-
-  // 可交易性门槛
-  const gate = evaluateTradeability({
-    bid: row.bid,
-    spread_pct: row.spread_pct,
-    open_interest: row.open_interest,
-    min_oi: t?.min_open_interest ?? 100,
-    max_spread_pct: 10,
-    suggest_qty: row.side === 'PUT' ? row.suggest_qty : 1,
-    side: row.side,
-    strike: row.strike,
-    exceeds_capital: !!(row.ranked?.exceeds_capital || row.tags.includes('超上限')),
-  })
-  row.tradeable = gate.ok
-  row.kill_reasons = gate.reasons
-
-  if (row.ranked?.exceeds_capital || row.tags.includes('超上限')) hard.push('超资金上限')
-  if (row.side === 'PUT' && t && row.strike != null && t.floor_price > 0 && row.strike > t.floor_price) {
-    soft.push('行权价高于底线')
-  }
-  if (row.side === 'PUT' && row.signal && (row.signal as any).below_floor) soft.push('现价低于底线')
-  if (row.side === 'CALL' && t) {
-    const holding = (t.active_cycles || []).find(c => c.status === 'HOLDING' || c.status === 'CC_OPEN')
-    const cb = holding?.cost_basis
-    if (cb != null && row.strike != null && row.strike < cb * 1.02) soft.push('Call接近成本')
-  }
-  if (row.covers_earnings) soft.push('含财报')
-  if (row.ranked?.trend === 'DOWN' || row.tags.includes('趋势弱')) soft.push('趋势弱')
-  if (row.side === 'PUT' && stressHigh) hard.push('组合行权压力高')
-  if (row.dte_bucket === 'far') soft.push('远月假高年化风险')
-  if (!gate.ok) hard.push(...gate.reasons.map(r => `门槛:${r}`))
-
-  // 同标的拥挤:已有 CSP 时新 Put 软降权
-  if (row.side === 'PUT' && t) {
-    const cspN = (t.active_cycles || []).filter(c => c.status === 'CSP_OPEN').length
-    if (cspN >= 1) soft.push(`同标的已有${cspN}轮CSP`)
-  }
-
-  row.risk_hard = [...new Set([...row.risk_hard, ...hard])]
-  row.risk_soft = [...new Set(soft)]
-  row.risk_block = row.risk_hard.some(h => !h.startsWith('门槛:')) // 纯门槛不阻断展示,只降档
-  // 不可交易或硬风控 → 不可优先
-  const blocked = row.risk_block || !row.tradeable
-
-  row.efficiency = computeEfficiency(row)
-  // 排序分:同桶内日租为主,兼效率
-  if (row.daily_rent != null) {
-    row.efficiency = row.daily_rent * 10 + (row.ann_per_delta ?? 0) * 0.1
-  }
-
-  const hasRanked = row.categories.includes('RANKED')
-  const hasTouch = row.categories.includes('EMA_TOUCH')
-  const ivOk = (row.iv_rank ?? 0) >= 50
-  const strongTouch = row.ema_type === 'EMA200'
-
-  row.trade_tier = resolveTradeTier({
-    kind: 'OPEN',
-    hasRanked,
-    hasTouch,
-    tradeable: row.tradeable && !row.risk_block,
-    risk_block: blocked && row.risk_block,
-    ema_type: row.ema_type,
-    iv_rank: row.iv_rank,
-    covers_earnings: row.covers_earnings,
-    demote_earnings: true,
-  })
-  // 不可交易强制观察
-  if (!row.tradeable || row.risk_block) row.trade_tier = 'WATCH'
-
-  if (row.trade_tier === 'PRIORITY') row.strength = strongTouch && ivOk ? 'STRONG' : 'READY'
-  else if (row.trade_tier === 'QUEUE') row.strength = 'READY'
-  else row.strength = 'WATCH'
-
-  row.actionable = row.trade_tier === 'PRIORITY'
-  if (row.trade_tier === 'PRIORITY' && !row.categories.includes('ACTIONABLE')) {
-    row.categories = ['ACTIONABLE', ...row.categories]
-  }
-
-  return row
-}
-
-function sortOppRows(rows: OppRow[]): OppRow[] {
-  return [...rows].sort((a, b) => {
-    // 管理类置顶按 efficiency
-    if (a.kind !== b.kind) return a.kind === 'MANAGE' ? -1 : 1
-    if (a.kind === 'MANAGE') return b.efficiency - a.efficiency
-    // 开仓:档位优先 > 可排单 > 观察
-    const tierOrder = { PRIORITY: 0, QUEUE: 1, WATCH: 2, MANAGE: 0 }
-    const ta = tierOrder[a.trade_tier] ?? 3
-    const tb = tierOrder[b.trade_tier] ?? 3
-    if (ta !== tb) return ta - tb
-    // 同档:DTE 桶(核心优先)
-    const ba = DTE_BUCKET_META[a.dte_bucket]?.order ?? 9
-    const bb = DTE_BUCKET_META[b.dte_bucket]?.order ?? 9
-    if (ba !== bb) return ba - bb
-    // 同桶:日租 desc → 年化/Δ desc → 评分
-    const ra = a.daily_rent ?? -1
-    const rb = b.daily_rent ?? -1
-    if (rb !== ra) return rb - ra
-    const da = a.ann_per_delta ?? -1
-    const db = b.ann_per_delta ?? -1
-    if (db !== da) return db - da
-    return (b.score ?? 0) - (a.score ?? 0)
-  })
-}
-
-function emptyOpenMetrics() {
-  return {
-    trade_tier: 'WATCH' as TradeTier,
-    tradeable: false,
-    kill_reasons: [] as string[],
-    dte_bucket: 'unknown' as DteBucket,
-    daily_rent: null as number | null,
-    ann_per_delta: null as number | null,
-    covers_earnings: false,
-  }
-}
-
-function buildOppRows(
-  pool: WheelScanResult | null,
-  signals: LeapsSignal[],
-  historyItems: WheelTimingHistoryItem[] | undefined,
-  targets: WheelTarget[],
-  openChecks: Record<string, WheelOpenPositionItem>,
-  stats: WheelStats | null,
-  profitTarget: number,
-  portfolioAvailable = 100000,
-): OppRow[] {
-  const map = new Map<string, OppRow>()
-  const targetsBySym = Object.fromEntries(targets.map(t => [t.symbol, t]))
-  const stress = stats?.capital?.assignment_stress ?? 0
-  const committed = stats?.capital?.total_committed ?? 0
-  const stressHigh = stress > 0 && committed > 0 && stress >= committed * 1.5
-
-  for (const o of pool?.opportunities || []) {
-    const key = oppKey(o.contract_code, o.symbol, o.side, o.strike, o.expiry)
-    map.set(key, {
-      id: key,
-      kind: 'OPEN',
-      categories: ['RANKED'],
-      strength: 'READY',
-      actionable: false,
-      ...emptyOpenMetrics(),
-      symbol: o.symbol,
-      side: o.side,
-      contract_code: o.contract_code,
-      strike: o.strike,
-      expiry: o.expiry,
-      dte: o.dte,
-      score: o.score,
-      annualized: o.annualized,
-      delta: o.delta,
-      bid: o.bid,
-      spread_pct: o.spread_pct,
-      open_interest: o.open_interest,
-      tags: rankedTags(o),
-      risk_hard: [],
-      risk_soft: [],
-      risk_block: false,
-      efficiency: 0,
-      cycle_id: o.cycle_id,
-      ranked: o,
-      iv_rank: o.iv_rank,
-      underlying_price: o.spot_price,
-      seen_at: pool?.scanned_at || null,
-    })
-  }
-
-  const mergeTouch = (
-    symbol: string,
-    side: 'PUT' | 'CALL',
-    code: string | undefined,
-    fields: Partial<OppRow>,
-  ) => {
-    const key = oppKey(code, symbol, side, fields.strike, fields.expiry)
-    const existing = map.get(key)
-    if (existing) {
-      if (!existing.categories.includes('EMA_TOUCH')) existing.categories.push('EMA_TOUCH')
-      Object.assign(existing, Object.fromEntries(
-        Object.entries(fields).filter(([, v]) => v !== undefined && v !== null),
-      ))
-      if (fields.ema_type === 'EMA200' && !existing.tags.includes('EMA200')) existing.tags.push('EMA200')
-      if (fields.history) existing.history = fields.history
-      if (fields.signal) existing.signal = fields.signal
-    } else {
-      map.set(key, {
-        id: key,
-        kind: 'OPEN',
-        categories: ['EMA_TOUCH'],
-        strength: 'WATCH',
-        actionable: false,
-        ...emptyOpenMetrics(),
-        symbol,
-        side,
-        contract_code: code,
-        tags: fields.ema_type === 'EMA200' ? ['EMA200'] : [],
-        risk_hard: [],
-        risk_soft: [],
-        risk_block: false,
-        efficiency: 0,
-        ...fields,
-      })
-    }
-  }
-
-  // 先历史(字段全:bid/Δ/年化/DTE),再信号(补触线标记),避免信号空字段盖住历史
-  for (const h of historyItems || []) {
-    mergeTouch(h.symbol, h.side, h.contract_code, {
-      history: h,
-      ema_type: h.ema_type,
-      ema_value: h.ema_value,
-      trigger_price: h.trigger_price,
-      iv_rank: h.iv_rank,
-      underlying_price: h.underlying_price,
-      times_triggered: h.times_triggered,
-      strike: h.strike,
-      expiry: h.expiry,
-      dte: h.dte,
-      delta: h.delta,
-      bid: h.bid,
-      annualized: h.annualized,
-      seen_at: h.last_seen,
-    })
-  }
-
-  for (const sig of signals) {
-    const side: 'PUT' | 'CALL' = sig.signal_level === 'WHEEL_CALL' ? 'CALL' : 'PUT'
-    const ext = sig as LeapsSignal & {
-      strike?: number; dte?: number; delta?: number; bid?: number
-      annualized?: number; expiry?: string
-    }
-    mergeTouch(sig.symbol, side, sig.contract_code, {
-      signal: sig,
-      ema_type: sig.ema_type,
-      ema_value: sig.ema_value,
-      trigger_price: sig.trigger_price,
-      iv_rank: sig.iv_rank,
-      underlying_price: sig.underlying_price,
-      seen_at: sig.created_at,
-      // 仅在有值时写入(mergeTouch 已过滤 null);避免冲掉 history 的 bid/年化
-      strike: ext.strike,
-      dte: ext.dte,
-      delta: ext.delta,
-      bid: ext.bid,
-      annualized: ext.annualized,
-      expiry: ext.expiry,
-    })
-  }
-
-  const openRows = [...map.values()].map(r => enrichOpenRow(r, targetsBySym, stressHigh, portfolioAvailable))
-
-  // 管理类:平仓/Roll/换仓/裸奔/空转
-  const manage: OppRow[] = []
-  const manageBase = {
-    trade_tier: 'MANAGE' as TradeTier,
-    tradeable: true,
-    kill_reasons: [] as string[],
-    dte_bucket: 'unknown' as DteBucket,
-    daily_rent: null as number | null,
-    ann_per_delta: null as number | null,
-    covers_earnings: false,
-  }
-  for (const item of Object.values(openChecks)) {
-    if (item.profit_hit) {
-      manage.push({
-        id: `close-${item.cycle_id}`,
-        kind: 'MANAGE',
-        categories: ['CLOSE'],
-        strength: 'MANAGE',
-        ...manageBase,
-        dte_bucket: dteBucket(item.dte),
-        actionable: true,
-        symbol: item.symbol,
-        side: item.side as 'PUT' | 'CALL',
-        contract_code: item.contract_code,
-        strike: item.strike,
-        expiry: item.expiry,
-        dte: item.dte,
-        remaining_annualized: item.remaining_annualized,
-        profit_pct: item.profit_pct,
-        action_hint: item.action_hint || `浮盈≥${profitTarget}%可平仓`,
-        tags: ['该平仓'],
-        risk_hard: [],
-        risk_soft: item.deep_itm ? ['深度ITM'] : [],
-        risk_block: false,
-        efficiency: 1000 + (item.profit_pct || 0),
-        cycle_id: item.cycle_id,
-        check: item,
-        headline: `浮盈 ${item.profit_pct ?? '--'}% · 买回 $${fmt(item.buyback_ask || item.current_price)}`,
-        seen_at: null,
-      })
-    }
-    if ((item.action_hint || '').includes('Roll') || item.roll_21dte) {
-      manage.push({
-        id: `roll-${item.cycle_id}`,
-        kind: 'MANAGE',
-        categories: ['ROLL'],
-        strength: 'MANAGE',
-        ...manageBase,
-        dte_bucket: dteBucket(item.dte),
-        actionable: true,
-        symbol: item.symbol,
-        side: item.side as 'PUT' | 'CALL',
-        contract_code: item.contract_code,
-        strike: item.strike,
-        expiry: item.expiry,
-        dte: item.dte,
-        remaining_annualized: item.remaining_annualized,
-        profit_pct: item.profit_pct,
-        action_hint: item.action_hint || '考虑 Roll',
-        tags: ['该Roll'],
-        risk_hard: [],
-        risk_soft: item.itm ? ['ITM'] : [],
-        risk_block: false,
-        efficiency: 900 + (item.dte != null ? Math.max(0, 30 - item.dte) : 0),
-        cycle_id: item.cycle_id,
-        check: item,
-        headline: item.action_hint || `DTE ${item.dte ?? '--'} · 可对比展期净权利金`,
-        seen_at: null,
-      })
-    }
-    if (item.low_yield && !item.profit_hit) {
-      manage.push({
-        id: `lowy-${item.cycle_id}`,
-        kind: 'MANAGE',
-        categories: ['LOW_YIELD'],
-        strength: 'MANAGE',
-        ...manageBase,
-        dte_bucket: dteBucket(item.dte),
-        actionable: true,
-        symbol: item.symbol,
-        side: item.side as 'PUT' | 'CALL',
-        contract_code: item.contract_code,
-        strike: item.strike,
-        expiry: item.expiry,
-        dte: item.dte,
-        annualized: item.remaining_annualized,
-        remaining_annualized: item.remaining_annualized,
-        action_hint: item.action_hint || '剩余年化偏低,考虑换仓',
-        tags: ['该换仓'],
-        risk_hard: [],
-        risk_soft: [],
-        risk_block: false,
-        efficiency: 800,
-        cycle_id: item.cycle_id,
-        check: item,
-        headline: `剩余年化 ${item.remaining_annualized ?? '--'}%`,
-        seen_at: null,
-      })
-    }
-  }
-  for (const t of targets.filter(x => x.enabled)) {
-    for (const c of t.active_cycles || []) {
-      if (c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3) {
-        manage.push({
-          id: `uncov-${c.id}`,
-          kind: 'MANAGE',
-          categories: ['UNCOVERED'],
-          strength: 'MANAGE',
-          ...manageBase,
-          actionable: true,
-          symbol: t.symbol,
-          side: 'CALL',
-          cycle_id: c.id,
-          tags: ['裸奔'],
-          risk_hard: [],
-          risk_soft: ['theta流失'],
-          risk_block: false,
-          efficiency: 700 + (c.uncovered_days || 0),
-          headline: `持股 ${c.shares} 股已裸奔 ${c.uncovered_days} 天 · CB $${fmt(c.cost_basis)}`,
-          action_hint: '去找 Call',
-          seen_at: null,
-        })
-      }
-    }
-    if ((t.idle_days ?? 0) >= 5) {
-      const working = (t.active_cycles || []).some(c => ['CSP_OPEN', 'CC_OPEN', 'HOLDING'].includes(c.status))
-      if (!working) {
-        manage.push({
-          id: `idle-${t.symbol}`,
-          kind: 'MANAGE',
-          categories: ['IDLE'],
-          strength: 'MANAGE',
-          ...manageBase,
-          actionable: true,
-          symbol: t.symbol,
-          side: 'PUT',
-          tags: ['空转'],
-          risk_hard: [],
-          risk_soft: [],
-          risk_block: false,
-          efficiency: 600 + (t.idle_days || 0),
-          headline: `空转 ${t.idle_days} 天 · 资金闲置`,
-          action_hint: '找 Put 开轮',
-          seen_at: null,
-        })
-      }
-    }
-  }
-
-  return sortOppRows([...manage, ...openRows])
-}
-
-function symbolAllowsSide(t: WheelTarget | undefined, side: 'PUT' | 'CALL' | undefined): boolean {
-  if (!t || !side) return true
-  const cycles = t.active_cycles || []
-  if (side === 'CALL') return cycles.some(c => c.status === 'HOLDING')
-  // PUT: 有资金余量或未设上限
-  if ((t.max_capital ?? 0) <= 0) return true
-  const used = targetCapital(cycles)
-  return used < t.max_capital
-}
-
-function filterOppRows(
-  rows: OppRow[],
-  cat: OppCategoryFilter,
-  side: OppSideFilter,
-  opts: {
-    stateAware: boolean
-    hideBlocked: boolean
-    targets: WheelTarget[]
-    selectedSymbol: string | null
-    bucketFilter: OppBucketFilter
-    hideUntradeable: boolean
-  },
-): OppRow[] {
-  const bySym = Object.fromEntries(opts.targets.map(t => [t.symbol, t]))
-  return rows.filter(r => {
-    if (opts.hideBlocked && r.kind === 'OPEN' && r.risk_block && cat !== 'KILLED') return false
-    // 杀掉视图必须展示不可交易；其它档位才可隐藏
-    if (opts.hideUntradeable && r.kind === 'OPEN' && !r.tradeable && cat !== 'KILLED') return false
-    if (opts.selectedSymbol && r.symbol !== opts.selectedSymbol) return false
-
-    // DTE 桶:杀掉视图看全部桶；其它默认核心+延伸
-    if (r.kind === 'OPEN' && cat !== 'KILLED') {
-      if (opts.bucketFilter === 'core' && r.dte_bucket !== 'core') return false
-      if (opts.bucketFilter === 'core_extend' && r.dte_bucket !== 'core' && r.dte_bucket !== 'extend') return false
-      if (opts.bucketFilter === 'far' && r.dte_bucket !== 'far') return false
-    }
-
-    if (cat === 'KILLED') return r.kind === 'OPEN' && !r.tradeable
-    if (cat === 'PRIORITY') {
-      if (r.kind === 'MANAGE') return r.actionable
-      return r.trade_tier === 'PRIORITY'
-    }
-    if (cat === 'QUEUE') return r.kind === 'OPEN' && r.trade_tier === 'QUEUE'
-    if (cat === 'WATCH') return r.kind === 'OPEN' && r.trade_tier === 'WATCH'
-    if (cat === 'ACTIONABLE') {
-      if (r.kind === 'MANAGE') return r.actionable
-      return r.trade_tier === 'PRIORITY'
-    }
-    if (cat === 'MANAGE') return r.kind === 'MANAGE'
-    if (cat !== 'all') {
-      if (!r.categories.includes(cat as OppCategory)) return false
-    }
-    if (side !== 'all' && r.side && r.side !== side) return false
-    if (opts.stateAware && r.kind === 'OPEN' && r.side) {
-      if (!symbolAllowsSide(bySym[r.symbol], r.side)) return false
-    }
-    return true
-  })
-}
-
-function tierLabel(t: TradeTier): { text: string; color: SemColor } {
-  if (t === 'PRIORITY') return { text: '优先', color: 'green' }
-  if (t === 'QUEUE') return { text: '可排单', color: 'blue' }
-  if (t === 'MANAGE') return { text: '该管', color: 'orange' }
-  return { text: '观察', color: 'purple' }
 }
 
 function fmtMoney(v: number) {
@@ -850,13 +197,33 @@ function nowLocal(): string {
   return d.toISOString().slice(0, 16)
 }
 
+/** 成交时间 datetime-local 字符串；保证不早于 minIso（开仓腿之后） */
+function defaultTradedAt(minIso?: string | null): string {
+  const now = nowLocal()
+  if (!minIso) return now
+  // minIso 可能是完整 ISO；截到分钟后 +1 分钟，避免与开仓同秒导致顺序歧义
+  const min = minIso.replace('T', ' ').slice(0, 16).replace(' ', 'T')
+  if (now >= min) return now
+  try {
+    const d = new Date(min.length === 16 ? min + ':00' : min)
+    if (Number.isNaN(d.getTime())) return now
+    d.setMinutes(d.getMinutes() + 1)
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset())
+    return d.toISOString().slice(0, 16)
+  } catch {
+    return now
+  }
+}
+
 function TradeModal({
-  initial, cycleStatus, cycleId, newCycle, onClose, onSaved,
+  initial, cycleStatus, cycleId, newCycle, minTradedAt, onClose, onSaved,
 }: {
   initial: Partial<TradeFormState> & { symbol: string }
   cycleStatus: string
   cycleId?: string
   newCycle?: boolean
+  /** 本轮已有腿的最晚成交时间；新腿默认不得早于此 */
+  minTradedAt?: string | null
   onClose: () => void
   onSaved: () => void
 }) {
@@ -872,7 +239,7 @@ function TradeModal({
     fee: initial.fee || '0',
     contract_size: initial.contract_size || '100',
     note: initial.note || '',
-    traded_at: nowLocal(),
+    traded_at: defaultTradedAt(minTradedAt),
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -903,11 +270,10 @@ function TradeModal({
     setErr(null)
     setSaving(true)
     try {
-      const code = normalizeContractCode(form.contract_code, form.symbol) || form.contract_code || undefined
       await recordWheelTrade({
         symbol: form.symbol,
         trade_type: form.trade_type,
-        contract_code: code,
+        contract_code: form.contract_code || undefined,
         strike: form.strike ? parseFloat(form.strike) : undefined,
         expiry: form.expiry || undefined,
         qty: form.qty ? parseFloat(form.qty) : 1,
@@ -928,8 +294,6 @@ function TradeModal({
     }
   }
 
-  const codeWarn = needContract ? contractCodeWarning(form.contract_code) : null
-
   const inputStyle = {
     width: '100%', padding: '6px 8px', background: 'var(--bg-secondary)',
     border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13,
@@ -943,6 +307,13 @@ function TradeModal({
       <div className="modal-card" style={{ width: 440, maxWidth: '100%', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         <h3 style={{ margin: '0 0 16px', fontSize: 16 }}>登记交易 — {form.symbol}</h3>
         {err && <div className="alert alert-error" style={{ marginBottom: 12 }}>{err}</div>}
+        {cycleStatus !== 'NONE' && cycleStatus !== 'IDLE' && (
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.45 }}>
+            当前轮子：{STAGE_LABELS[cycleStatus] || cycleStatus}
+            {cycleId ? ` · 绑定 cycle` : ''}
+            {minTradedAt ? ` · 开仓腿时间 ${fmtDate(minTradedAt)}，成交时间须不早于此（状态机按时间重放）` : ''}
+          </div>
+        )}
         <div style={{ display: 'grid', gap: 12 }}>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
             类型
@@ -965,17 +336,9 @@ function TradeModal({
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               合约代码(选填,留空将按 Strike+到期日自动补全)
               <input value={form.contract_code} style={inputStyle} placeholder="留空自动生成,如 US.AAPL260821P00200000"
-                onChange={e => setForm(f => ({ ...f, contract_code: e.target.value }))}
-                onBlur={() => setForm(f => ({
-                  ...f,
-                  contract_code: normalizeContractCode(f.contract_code, f.symbol) || f.contract_code,
-                }))} />
-              {codeWarn && <div style={{ color: '#fb923c', fontSize: 11, marginTop: 4 }}>{codeWarn}</div>}
+                onChange={e => setForm(f => ({ ...f, contract_code: e.target.value }))} />
             </label>
           )}
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '8px 10px', borderRadius: 6 }}>
-            最少填<strong>成交价</strong>+数量;合约代码建议填全以便体检与转化率。富途成交后在此登记即可驱动状态机。
-          </div>
           {(needContract || ['ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type)) && (
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               行权价 Strike {['ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type) ? '(留空则用在场合约的)' : ''}
@@ -1009,35 +372,24 @@ function TradeModal({
             {(needContract || form.trade_type === 'BUY_SHARES') && (
               <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 {form.trade_type === 'BUY_SHARES' ? '股数' : '张数'}
-                <SelectNum
-                  value={form.qty}
-                  options={form.trade_type === 'BUY_SHARES' ? QTY_SHARE_OPTS : QTY_CONTRACT_OPTS}
-                  style={inputStyle}
-                  onChange={v => setForm(f => ({ ...f, qty: v }))}
-                />
+                <input type="number" value={form.qty} style={inputStyle}
+                  placeholder={form.trade_type === 'BUY_SHARES' ? '如 100' : undefined}
+                  onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
               </label>
             )}
             {needPrice && (
               <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 {form.trade_type === 'SELL_SHARES' ? '每股卖价' : form.trade_type === 'BUY_SHARES' ? '每股成本' : '权利金/张'}
-                <input type="number" step="any" value={form.price} style={inputStyle}
-                  placeholder="成交价"
+                <input type="number" value={form.price} style={inputStyle}
                   onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
               </label>
             )}
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               手续费
-              <SelectNum value={form.fee} options={FEE_OPTS} style={inputStyle}
-                onChange={v => setForm(f => ({ ...f, fee: v }))} />
+              <input type="number" value={form.fee} style={inputStyle}
+                onChange={e => setForm(f => ({ ...f, fee: e.target.value }))} />
             </label>
           </div>
-          {needContract && (
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-              合约乘数
-              <SelectNum value={form.contract_size} options={CONTRACT_SIZE_OPTS} style={inputStyle}
-                onChange={v => setForm(f => ({ ...f, contract_size: v }))} />
-            </label>
-          )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               成交时间
@@ -1082,28 +434,21 @@ function TradeModal({
 // ── 主页面 ────────────────────────────────────────────────────────────────────
 export default function WheelPage() {
   const [settings, setSettings] = useState<AppSettings>(getAppSettings())
-  const { toast } = useToast()
-  const [tab, setTab] = useState<'home' | 'board' | 'opps' | 'timing' | 'ledger' | 'targets'>('home')
-  const [cockpitOpen, setCockpitOpen] = useState(false)
-  const [filterOpen, setFilterOpen] = useState(false)
+  const [tab, setTab] = useState<'board' | 'scan' | 'ledger' | 'targets' | 'optimize'>('board')
+  /** 机会页内视图:今日可做 | 全部机会 | 触线档案 */
+  const [oppView, setOppView] = useState<'actionable' | 'all' | 'archive'>('actionable')
   const [targets, setTargets] = useState<WheelTarget[]>([])
   const [stats, setStats] = useState<WheelStats | null>(null)
   const [cycles, setCycles] = useState<WheelCycle[]>([])
   const [trades, setTrades] = useState<WheelTrade[]>([])
   const [candidates, setCandidates] = useState<LeapsCandidate[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [pendingQueue, setPendingQueue] = useState<PendingRegItem[]>(() => loadPendingQueue())
-  const [pendingLeaving, setPendingLeaving] = useState<string | null>(null)
-  const [riskTier, setRiskTierState] = useState<RiskTier>(() => getRiskTier())
-  const [budget, setBudgetState] = useState(() => getPortfolioBudget())
-  const [showOnboard, setShowOnboard] = useState(() => !isOnboardDone())
-  const [manageCompare, setManageCompare] = useState<WheelOpenPositionItem | null>(null)
-  const [expandedExplain, setExpandedExplain] = useState<string | null>(null)
-  const [rowCursor, setRowCursor] = useState(0)
 
   // 助手
   const [suggest, setSuggest] = useState<WheelSuggestResponse | null>(null)
   const [suggestLoading, setSuggestLoading] = useState(false)
+  const [suggestSide, setSuggestSide] = useState<'put' | 'call'>('put')
+  const [suggestSymbol, setSuggestSymbol] = useState<string>('')
 
   // 登记弹窗
   const [tradeModal, setTradeModal] = useState<{
@@ -1116,11 +461,11 @@ export default function WheelPage() {
   const [editTrade, setEditTrade] = useState<WheelTrade | null>(null)
   // 建议面板对应的 cycle
   const [suggestCycleId, setSuggestCycleId] = useState<string | undefined>(undefined)
-  // EMA 触线信号(机会扫描的一类)
+  // 开仓时机信号
   const [timingSignals, setTimingSignals] = useState<LeapsSignal[]>([])
   const [timingScanning, setTimingScanning] = useState(false)
   const [scanStatus, setScanStatus] = useState<WheelScanStatus | null>(null)
-  // 触线历史(分页)
+  // 时机历史(分页)
   const [timingHistory, setTimingHistory] = useState<WheelTimingHistoryPage | null>(null)
   const [historyPage, setHistoryPage] = useState(1)
   // 在场合约体检(cycle_id → item)
@@ -1146,22 +491,26 @@ export default function WheelPage() {
   const [symbolQuery, setSymbolQuery] = useState('')
   // 看板行内编辑标的参数
   const [editParams, setEditParams] = useState<{
-    floor_price: string; delta_min: string; delta_max: string
+    floor_price: string; max_capital: string
+    delta_min: string; delta_max: string
     dte_min: string; dte_max: string; min_annualized: string
   } | null>(null)
   const [savingParams, setSavingParams] = useState(false)
-  // 机会扫描(高分候选 + EMA 触线)
+  // 全池扫描(底层)
   const [poolScan, setPoolScan] = useState<WheelScanResult | null>(null)
   const [poolScanLoading, setPoolScanLoading] = useState(false)
   const [poolPushing, setPoolPushing] = useState(false)
-  const [oppCatFilter, setOppCatFilter] = useState<OppCategoryFilter>('PRIORITY')
-  const [oppSideFilter, setOppSideFilter] = useState<OppSideFilter>('all')
-  const [oppBucketFilter, setOppBucketFilter] = useState<OppBucketFilter>('core_extend')
-  const [oppStateAware, setOppStateAware] = useState(true)
-  const [oppHideBlocked, setOppHideBlocked] = useState(true)
-  const [oppHideUntradeable, setOppHideUntradeable] = useState(true)
-  const [oppOnlySelected, setOppOnlySelected] = useState(false)
-  const [killedDiag, setKilledDiag] = useState(false)
+  // 统一机会流
+  const [opps, setOpps] = useState<WheelOpportunitiesResult | null>(null)
+  const [oppsLoading, setOppsLoading] = useState(false)
+  const [oppFilter, setOppFilter] = useState<OppFilter>('actionable')
+  const [oppSide, setOppSide] = useState<'ALL' | 'PUT' | 'CALL'>('ALL')
+  const [ignoredOppIds, setIgnoredOppIds] = useState<Record<string, number>>(() => {
+    try {
+      const raw = localStorage.getItem('tradeforge.wheel.ignored_opps')
+      return raw ? JSON.parse(raw) : {}
+    } catch { return {} }
+  })
 
   // 添加标的表单
   const [addSymbol, setAddSymbol] = useState('')
@@ -1169,27 +518,17 @@ export default function WheelPage() {
   const [adding, setAdding] = useState(false)
 
   useEffect(() => subscribeSettings(next => setSettings(next)), [])
-  useEffect(() => {
-    const sync = () => setPendingQueue(loadPendingQueue())
-    window.addEventListener('tradeforge:pending-reg', sync)
-    return () => window.removeEventListener('tradeforge:pending-reg', sync)
-  }, [])
-
-  function flash(msg: string, kind: 'info' | 'success' | 'error' = 'info') {
-    toast(msg, kind)
-  }
 
   const loadAll = useCallback(async () => {
     setError(null)
     try {
-      const [t, s, c, tr, cand, tim, hist] = await Promise.all([
+      const [t, s, c, tr, cand, tim] = await Promise.all([
         getWheelTargets().catch(() => []),
         getWheelStats().catch(() => null),
         getWheelCycles().catch(() => []),
         getWheelTrades().catch(() => []),
         getWheelCandidates().catch(() => []),
-        getWheelTimingSignals(20).catch(() => []),
-        getWheelTimingHistory(1, 40).catch(() => null),
+        getWheelTimingSignals(10).catch(() => []),
       ])
       setTargets(t)
       setStats(s)
@@ -1197,7 +536,6 @@ export default function WheelPage() {
       setTrades(tr)
       setCandidates(cand)
       setTimingSignals(tim)
-      if (hist) setTimingHistory(hist)
       // 在场合约体检(需 OpenD,失败静默)
       refreshChecks()
       // Telegram 配置状态
@@ -1226,68 +564,85 @@ export default function WheelPage() {
     return () => { clearInterval(t1); clearInterval(t2) }
   }, [refreshChecks])
 
-  /** 触线扫描:后台异步 + 轮询状态 */
-  async function runTimingScan(): Promise<void> {
-    setTimingScanning(true)
-    setScanStatus(null)
+  async function handlePoolScan(refresh = false) {
+    setPoolScanLoading(true)
+    setError(null)
     try {
-      await triggerWheelTimingScan()
-      const deadline = Date.now() + 5 * 60 * 1000
-      await new Promise<void>((resolve) => {
-        const poll = async () => {
-          const st = await getWheelScanStatus().catch(() => null)
-          if (st) setScanStatus(st)
-          if (st && !st.running && st.finished_at) {
-            setTimingSignals(await getWheelTimingSignals(20).catch(() => []))
-            setTimingScanning(false)
-            resolve()
-            return
-          }
-          if (Date.now() > deadline) {
-            setTimingScanning(false)
-            resolve()
-            return
-          }
-          setTimeout(poll, 3000)
-        }
-        setTimeout(poll, 2000)
-      })
+      const st = getAppSettings()
+      setPoolScan(await getWheelPoolScan(st.marketHost, st.marketPort, refresh))
     } catch (e: any) {
-      setError('触线扫描失败:' + e.message)
-      setTimingScanning(false)
+      setError('全池扫描失败:' + e.message)
+    } finally {
+      setPoolScanLoading(false)
     }
   }
 
-  /** 机会扫描:并行刷新高分候选(全池) + EMA 触线 */
-  async function handleOpportunityScan(opts: { force?: boolean; push?: boolean } = {}) {
-    const { force = false, push = false } = opts
+  async function loadOpportunities(refresh = false) {
+    setOppsLoading(true)
     setError(null)
-    setPoolScanLoading(true)
-    if (push) setPoolPushing(true)
+    try {
+      const st = getAppSettings()
+      const r = await getWheelOpportunities(st.marketHost, st.marketPort, {
+        refresh,
+        run_pool: true,
+        filter: oppFilter,
+        side: oppSide === 'ALL' ? undefined : oppSide,
+        hide_blocked: oppFilter !== 'blocked' && oppFilter !== 'all',
+      })
+      setOpps(r)
+    } catch (e: any) {
+      setError('机会流加载失败:' + e.message)
+    } finally {
+      setOppsLoading(false)
+    }
+  }
 
-    const st = getAppSettings()
-    const rankedPromise = (async () => {
-      try {
-        if (push) {
-          const r = await pushWheelPoolScan(st.marketHost, st.marketPort)
-          setPoolScan(r)
-          if (!r.telegram_sent) {
-            setError('高分候选已刷新,但 Telegram 未配置或发送失败(前往「设置」页检查)')
-          }
-        } else {
-          setPoolScan(await getWheelPoolScan(st.marketHost, st.marketPort, force))
-        }
-      } catch (e: any) {
-        setError((push ? '机会扫描推送失败:' : '高分候选扫描失败:') + e.message)
-      } finally {
-        setPoolScanLoading(false)
-        if (push) setPoolPushing(false)
-      }
-    })()
+  function ignoreOpp(id: string, days = 3) {
+    const until = Date.now() + days * 86400000
+    const next = { ...ignoredOppIds, [id]: until }
+    setIgnoredOppIds(next)
+    localStorage.setItem('tradeforge.wheel.ignored_opps', JSON.stringify(next))
+  }
 
-    // 触线与高分并行;强制刷新时也重扫触线
-    const timingPromise = runTimingScan()
-    await Promise.all([rankedPromise, timingPromise])
+  function isOppIgnored(id: string) {
+    const until = ignoredOppIds[id]
+    return !!until && until > Date.now()
+  }
+
+  function goBoardSymbol(symbol: string) {
+    setSelectedSymbol(symbol)
+    setTab('board')
+  }
+
+  function registerFromOpp(o: WheelOpportunity) {
+    setTradeModal({
+      initial: {
+        symbol: o.symbol,
+        trade_type: o.side === 'CALL' ? 'SELL_CALL' : 'SELL_PUT',
+        contract_code: o.contract_code || '',
+        strike: o.strike != null ? String(o.strike) : '',
+        expiry: (o.expiry || '').slice(0, 10),
+        price: o.premium_used != null ? String(o.premium_used) : (o.bid != null ? String(o.bid) : ''),
+        contract_size: '100',
+      },
+      status: o.side === 'CALL' ? 'HOLDING' : 'IDLE',
+      cycleId: o.cycle_id || undefined,
+    })
+  }
+
+  async function handlePoolPush() {
+    setPoolPushing(true)
+    setError(null)
+    try {
+      const st = getAppSettings()
+      const r = await pushWheelPoolScan(st.marketHost, st.marketPort)
+      setPoolScan(r)
+      if (!r.telegram_sent) setError('扫描完成,但 Telegram 未配置或发送失败(前往「设置」页检查)')
+    } catch (e: any) {
+      setError('扫描推送失败:' + e.message)
+    } finally {
+      setPoolPushing(false)
+    }
   }
 
   async function handleRoll(cycleId: string) {
@@ -1306,33 +661,71 @@ export default function WheelPage() {
   useEffect(() => { loadAll() }, [loadAll])
 
   useEffect(() => {
-    if (tab === 'timing') {
+    if (tab !== 'scan') return
+    if (oppView === 'archive') {
       getWheelTimingHistory(historyPage, 20).then(setTimingHistory).catch(() => setTimingHistory(null))
+      return
     }
-  }, [tab, historyPage])
+    // 今日可做 / 全部 → 合流列表
+    setOppFilter(oppView === 'actionable' ? 'actionable' : 'all')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, oppView, historyPage])
 
-  // 切换 tab / 筛选时重置键盘行光标
   useEffect(() => {
-    setRowCursor(0)
-  }, [tab, oppCatFilter, oppSideFilter, oppBucketFilter])
+    if (tab !== 'scan' || oppView === 'archive') return
+    loadOpportunities(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, oppView, oppFilter, oppSide])
 
   async function handleSuggest(symbol: string, side: 'put' | 'call', cycleId?: string) {
     setSelectedSymbol(symbol)
+    setSuggestSymbol(symbol)
+    setSuggestSide(side)
     setSuggestLoading(true)
     setSuggest(null)
     setSuggestCycleId(cycleId)
     setError(null)
-    flash(`正在拉 ${symbol} ${side === 'put' ? 'Put' : 'Call'} 期权链…`)
     try {
       const r = await getWheelSuggest(symbol, side, settings.marketHost, settings.marketPort, cycleId)
       setSuggest(r)
-      flash(`${symbol} 详情已加载`, 'success')
     } catch (e: any) {
-      const msg = `获取${side === 'put' ? 'Put' : 'Call'}建议失败:` + e.message
-      setError(msg)
-      flash(msg, 'error')
+      setSuggest(null)
+      setSuggestSymbol('')
+      setError(`获取${side === 'put' ? 'Put' : 'Call'}建议失败:` + e.message)
     } finally {
       setSuggestLoading(false)
+    }
+  }
+
+  function closeSuggestModal() {
+    setSuggest(null)
+    setSuggestLoading(false)
+    setSuggestSymbol('')
+  }
+
+  async function handleTimingScan() {
+    setTimingScanning(true)
+    setScanStatus(null)
+    setError(null)
+    try {
+      await triggerWheelTimingScan()
+      // 轮询扫描状态,最长 5 分钟(首次扫描需为每张合约拉历史K线,较慢)
+      const deadline = Date.now() + 5 * 60 * 1000
+      const poll = async () => {
+        const st = await getWheelScanStatus().catch(() => null)
+        if (st) setScanStatus(st)
+        if (st && !st.running && st.finished_at) {
+          setTimingSignals(await getWheelTimingSignals(10).catch(() => []))
+          setTimingScanning(false)
+          return
+        }
+        if (Date.now() > deadline) { setTimingScanning(false); return }
+        setTimeout(poll, 3000)
+      }
+      setTimeout(poll, 2000)
+    } catch (e: any) {
+      setError('时机扫描失败:' + e.message)
+      setTimingScanning(false)
     }
   }
 
@@ -1404,538 +797,115 @@ export default function WheelPage() {
   }
 
   const profitHits = Object.values(openChecks).filter(i => i.profit_hit)
-
-  const putBlocked = stressBlocksNewPuts(
-    stats?.capital?.assignment_stress ?? 0,
-    stats?.capital?.total_committed ?? 0,
-    riskTier,
-  )
-  const ops = useMemo(() => {
-    const idleCount = targets.filter(t => t.enabled && (t.idle_days ?? 0) >= 5).length
-    const uncoveredCount = targets.reduce((n, t) =>
-      n + (t.active_cycles || []).filter(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3).length, 0)
-    return computeOpsMetrics({
-      trades, cycles, capital: stats?.capital ?? null,
-      conversion: stats?.conversion ?? null, idleCount, uncoveredCount,
-    })
-  }, [trades, cycles, stats, targets])
-
-  const allOppRows = useMemo(
-    () => buildOppRows(
-      poolScan, timingSignals, timingHistory?.items, targets, openChecks, stats, profitTarget,
-      ops.available,
-    ),
-    [poolScan, timingSignals, timingHistory, targets, openChecks, stats, profitTarget, ops.available],
-  )
-  const filteredOppRows = useMemo(() => {
-    let rows = filterOppRows(allOppRows, oppCatFilter, oppSideFilter, {
-      stateAware: oppStateAware,
-      hideBlocked: oppHideBlocked,
-      targets,
-      selectedSymbol: oppOnlySelected ? selectedSymbol : null,
-      bucketFilter: oppBucketFilter,
-      hideUntradeable: oppHideUntradeable,
-    })
-    if (putBlocked) rows = rows.filter(r => !(r.kind === 'OPEN' && r.side === 'PUT'))
-    return rows
-  }, [allOppRows, oppCatFilter, oppSideFilter, oppStateAware, oppHideBlocked, targets, oppOnlySelected, selectedSymbol, putBlocked, oppBucketFilter, oppHideUntradeable])
-  const oppCounts = useMemo(() => {
-    const open = allOppRows.filter(r => r.kind === 'OPEN')
-    const killed = open.filter(r => !r.tradeable)
-    return {
-      all: allOppRows.length,
-      priority: open.filter(r => r.trade_tier === 'PRIORITY').length,
-      queue: open.filter(r => r.trade_tier === 'QUEUE').length,
-      watch: open.filter(r => r.trade_tier === 'WATCH').length,
-      actionable: open.filter(r => r.trade_tier === 'PRIORITY').length
-        + allOppRows.filter(r => r.kind === 'MANAGE' && r.actionable).length,
-      ranked: open.filter(r => r.categories.includes('RANKED')).length,
-      touch: open.filter(r => r.categories.includes('EMA_TOUCH')).length,
-      manage: allOppRows.filter(r => r.kind === 'MANAGE').length,
-      close: allOppRows.filter(r => r.categories.includes('CLOSE')).length,
-      roll: allOppRows.filter(r => r.categories.includes('ROLL')).length,
-      put: allOppRows.filter(r => r.side === 'PUT').length,
-      call: allOppRows.filter(r => r.side === 'CALL').length,
-      killed: killed.length,
-      far: open.filter(r => r.dte_bucket === 'far').length,
-      killBreakdown: killed.reduce((acc, r) => {
-        for (const k of r.kill_reasons) acc[k] = (acc[k] || 0) + 1
-        return acc
-      }, {} as Record<string, number>),
-    }
-  }, [allOppRows])
-  const oppScanning = poolScanLoading || timingScanning || poolPushing
-
-  async function copyOrderMemo(p: {
-    symbol: string; side: 'PUT' | 'CALL'; action: 'SELL' | 'BUY'
-    contract_code?: string; strike?: number | null; expiry?: string | null
-    qty?: number; price?: number | null; note?: string
-  }) {
-    const ok = await copyText(buildFutuOrderMemo(p))
-    flash(ok ? '已复制富途下单备忘' : '复制失败,请手动抄写', ok ? 'success' : 'error')
-  }
-
-  function enqueuePending(item: Omit<PendingRegItem, 'id' | 'created_at'>) {
-    addPendingReg(item)
-    setPendingQueue(loadPendingQueue())
-    flash(`已加入待登记: ${item.symbol}`, 'success')
-  }
-
-  function openOppRegister(row: OppRow) {
-    if (row.kind === 'MANAGE') {
-      if (row.categories.includes('ROLL') && row.check) {
-        setManageCompare(row.check)
-        return
-      }
-      if (row.categories.includes('ROLL') && row.cycle_id) {
-        handleRoll(row.cycle_id)
-        return
-      }
-      if (row.categories.includes('CLOSE') && row.check) {
-        setManageCompare(row.check)
-        return
-      }
-      if (row.categories.includes('UNCOVERED')) {
-        handleSuggest(row.symbol, 'call', row.cycle_id || undefined)
-        return
-      }
-      if (row.categories.includes('IDLE')) {
-        handleSuggest(row.symbol, 'put')
-        return
-      }
-      if ((row.categories.includes('CLOSE') || row.categories.includes('LOW_YIELD')) && row.side) {
-        const closeType = row.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE'
-        setTradeModal({
-          initial: {
-            symbol: row.symbol,
-            trade_type: closeType,
-            contract_code: normalizeContractCode(row.contract_code, row.symbol) || row.contract_code || '',
-            strike: row.strike != null ? String(row.strike) : '',
-            expiry: row.expiry ? String(row.expiry).slice(0, 10) : '',
-            price: row.check?.buyback_ask != null ? String(row.check.buyback_ask)
-              : row.check?.current_price != null ? String(row.check.current_price) : '',
-            qty: '1',
-            note: row.action_hint || (row.categories.includes('CLOSE') ? '利润达标平仓' : '剩余年化低换仓'),
-          },
-          status: row.side === 'PUT' ? 'CSP_OPEN' : 'CC_OPEN',
-          cycleId: row.cycle_id || undefined,
-        })
-        return
-      }
-    }
-    if (row.side === 'PUT' && putBlocked) {
-      flash('组合行权压力过高,已暂停新开 Put(可在标的设置调风险档位)')
-      return
-    }
-    const t = targets.find(x => x.symbol === row.symbol)
-    const used = targetCapital(t?.active_cycles || [])
-    const headroom = t && (t.max_capital ?? 0) > 0 ? Math.max(0, t.max_capital - used) : null
-    const qty = row.strike != null
-      ? suggestQty({
-        strike: row.strike, side: row.side || 'PUT',
-        symbolHeadroom: headroom,
-        portfolioAvailable: ops.available,
-      })
-      : 1
-    const noteParts = [
-      row.categories.includes('ACTIONABLE') ? '可下单' : '',
-      row.strength === 'STRONG' ? '强信号' : row.strength === 'READY' ? '可做' : '观察',
-      row.ema_type ? `触${row.ema_type}` : '',
-      row.score != null ? `评分${fmt(row.score, 1)}` : '',
-      row.annualized != null ? `年化${fmt(row.annualized, 1)}%` : '',
-    ].filter(Boolean)
-    const code = normalizeContractCode(row.contract_code, row.symbol) || row.contract_code || ''
-    const price = row.bid ?? row.trigger_price ?? null
-    enqueuePending({
-      symbol: row.symbol,
-      side: row.side || 'PUT',
-      trade_type: row.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-      contract_code: code,
-      strike: row.strike,
-      expiry: row.expiry ? String(row.expiry).slice(0, 10) : undefined,
-      qty: Math.max(1, qty),
-      price,
-      note: noteParts.join(' · '),
-      cycle_id: row.cycle_id || undefined,
-      source: 'opp',
-    })
-    setTradeModal({
-      initial: {
-        symbol: row.symbol,
-        trade_type: row.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-        contract_code: code,
-        strike: row.strike != null ? String(row.strike) : '',
-        expiry: row.expiry ? String(row.expiry).slice(0, 10) : '',
-        price: price != null ? String(price) : '',
-        qty: String(Math.max(1, qty)),
-        note: noteParts.join(' · '),
-      },
-      status: row.side === 'PUT' ? 'IDLE' : 'HOLDING',
-      cycleId: row.cycle_id || undefined,
-    })
-  }
-
-  // 键盘快捷键: J/K 行 · Enter 登记 · C 备忘 · ? 为何 · / 筛选 · 1-3 Tab
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement)?.isContentEditable) return
-      if (e.key === '1') { setTab('home'); return }
-      if (e.key === '2') { setTab('opps'); return }
-      if (e.key === '3') { setTab('board'); return }
-      if (tab !== 'opps' && tab !== 'home') return
-      const rows = tab === 'opps'
-        ? filteredOppRows
-        : allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT'))
-      if (e.key === 'j' || e.key === 'J') {
-        e.preventDefault()
-        setRowCursor(c => Math.min(c + 1, Math.max(0, rows.length - 1)))
-      } else if (e.key === 'k' || e.key === 'K') {
-        e.preventDefault()
-        setRowCursor(c => Math.max(0, c - 1))
-      } else if (e.key === 'Enter' && rows[rowCursor]) {
-        e.preventDefault()
-        openOppRegister(rows[rowCursor])
-      } else if ((e.key === 'c' || e.key === 'C') && rows[rowCursor]?.kind === 'OPEN') {
-        e.preventDefault()
-        const r = rows[rowCursor]
-        copyOrderMemo({
-          symbol: r.symbol, side: r.side || 'PUT', action: 'SELL',
-          contract_code: r.contract_code, strike: r.strike, expiry: r.expiry,
-          price: r.bid ?? r.trigger_price,
-        })
-      } else if (e.key === '?' && rows[rowCursor]?.kind === 'OPEN') {
-        e.preventDefault()
-        setExpandedExplain(rows[rowCursor].id)
-      } else if (e.key === '/' && tab === 'opps') {
-        e.preventDefault()
-        setFilterOpen(true)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [tab, filteredOppRows, allOppRows, rowCursor, putBlocked])
+  const statCards = [
+    { label: '活跃轮子', value: stats?.active_cycles ?? '--', sub: `已完成 ${stats?.closed_cycles ?? 0} 轮` },
+    { label: '本月净权利金', value: `$${fmt(stats?.premium_month)}`, sub: '卖出−买回,含费' },
+    { label: '累计净权利金', value: `$${fmt(stats?.premium_total)}`, sub: '全部历史' },
+    { label: '已实现盈亏', value: `$${fmt(stats?.realized_pnl_total)}`, sub: '已结束周期合计' },
+    {
+      label: '资金占用', value: `$${fmt(stats?.capital?.total_committed, 0)}`,
+      sub: `担保 $${fmt(stats?.capital?.csp_collateral, 0)} + 持股 $${fmt(stats?.capital?.holding_cost, 0)}`,
+    },
+    {
+      label: '压力测试', value: `$${fmt(stats?.capital?.assignment_stress, 0)}`,
+      sub: '若在场Put全部被行权的总占用',
+    },
+    { label: '⚠ 待处理', value: (stats?.expiring_soon.length ?? 0) + profitHits.length, sub: `临期 ${stats?.expiring_soon.length ?? 0} · 利润达标 ${profitHits.length}` },
+  ]
 
   const inputStyle = {
     padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)',
     borderRadius: 4, color: 'var(--text)', fontSize: 13,
   } as const
 
-  const manageCount = allOppRows.filter(r => r.kind === 'MANAGE').length
-  const priorityCount = oppCounts.priority
-  const pageTabs: { k: typeof tab; label: string }[] = [
-    { k: 'home', label: '今日' },
-    { k: 'opps', label: priorityCount ? `机会(${priorityCount})` : '机会' },
-    { k: 'board', label: '持仓' },
-    { k: 'timing', label: '触线历史' },
-    { k: 'ledger', label: '台账' },
-    { k: 'targets', label: `标的(${targets.length})` },
-  ]
-
-  function showKilledOpps() {
-    setOppHideUntradeable(false)
-    setOppHideBlocked(false)
-    setOppBucketFilter('all_buckets')
-    setOppCatFilter('KILLED')
-    setKilledDiag(true)
-    flash(`已显示 ${oppCounts.killed} 条被杀掉机会`, 'info')
-  }
-
   return (
-    <div className="page" style={{ maxWidth: 1280 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>Wheel</h2>
-        <button type="button" className="btn btn-sm btn-secondary" onClick={loadAll} title="刷新台账与标的">刷新</button>
-        <span style={{ display: 'flex', gap: 12, alignItems: 'center', marginLeft: 'auto', fontSize: 12, color: 'var(--text-secondary)' }}>
-          <StatusDot ok={opendOk} label="富途" />
-          <StatusDot ok={tgOk} label="TG" />
+    <div style={{ padding: '20px 24px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0, fontSize: 20 }}>Wheel 车轮策略</h2>
+        <button className="btn" style={{ fontSize: 13, padding: '5px 12px' }} onClick={loadAll}>刷新</button>
+        <span style={{ display: 'flex', gap: 12, alignItems: 'center', marginLeft: 'auto' }}>
+          <StatusDot ok={opendOk} label="富途行情" />
+          <StatusDot ok={tgOk} label="Telegram" />
           {(() => {
             void nowTick
-            if (!checksAt) return <span>行情未加载</span>
+            if (!checksAt) return <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>实时数据未加载</span>
             const mins = Math.floor((Date.now() - checksAt.getTime()) / 60000)
-            return <span style={{ color: mins >= 10 ? 'var(--warning)' : undefined }}>
-              截至 {checksAt.toTimeString().slice(0, 5)}{mins > 0 ? ` (${mins}m)` : ''}
-            </span>
+            const stale = mins >= 10
+            return (
+              <span style={{ fontSize: 11, color: stale ? C.orange : 'var(--text-secondary)' }}>
+                数据截至 {checksAt.toTimeString().slice(0, 5)}{mins > 0 ? `(${mins}分钟前)` : ''}
+                {stale && ' ⚠'}
+              </span>
+            )
           })()}
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => refreshChecks()} title="刷新 OpenD 体检">↻</button>
+          <button className="btn" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => refreshChecks()}>↻ 刷新行情</button>
         </span>
       </div>
 
       {opendOk === false && (
-        <div className="banner warn">
-          <span style={{ flex: 1 }}>富途 OpenD 未连接 — 实时数据不可用，台账/登记仍可用</span>
-          <button type="button" className="btn btn-sm btn-secondary" onClick={() => refreshChecks()}>重试连接</button>
+        <div style={{ marginBottom: 12, border: `1px solid ${C.orange}55`, background: C.orange + '11', padding: '8px 14px', borderRadius: 6, fontSize: 12 }}>
+          ⚠ 富途 OpenD 未连接:现价/浮盈/Δ/θ 等实时数据不可用,当前显示的是登记数据。启动 OpenD 后点「↻ 刷新行情」。
         </div>
       )}
       {undoTrade && (
-        <div className="banner info">
-          <span style={{ flex: 1 }}>已删除「{TRADE_LABELS[undoTrade.trade_type]}」({undoTrade.symbol})</span>
-          <button type="button" className="btn btn-sm btn-primary" onClick={handleUndoDelete}>撤销</button>
+        <div style={{ marginBottom: 12, border: '1px solid var(--border)', background: 'var(--bg-secondary)', padding: '8px 14px', borderRadius: 6, fontSize: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+          已删除「{TRADE_LABELS[undoTrade.trade_type]}」({undoTrade.symbol})
+          <button className="btn" style={{ fontSize: 11, padding: '2px 10px', color: 'var(--accent)' }} onClick={handleUndoDelete}>撤销</button>
         </div>
       )}
       {error && (
-        <div className="banner error">
+        <div className="alert alert-error" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ flex: 1 }}>{error}</span>
-          <button type="button" className="btn btn-sm btn-secondary" onClick={loadAll}>重试</button>
-          <span style={{ fontSize: 11, opacity: 0.85 }}>{scanFailureHint(error).tips.join(' · ')}</span>
+          <button className="btn" style={{ fontSize: 11, padding: '2px 10px', flexShrink: 0 }} onClick={loadAll}>重试</button>
         </div>
       )}
 
-      {showOnboard && (
-        <div className="panel" style={{ borderColor: 'rgba(56,189,248,0.35)' }}>
-          <div className="panel-title">👋 3 步上手</div>
-          <ol style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            <li>标的里添加代码并设接货底线</li>
-            <li>机会扫描 → 优先 → 备忘 → 富途成交</li>
-            <li>今日「待登记」填成交价，驱动状态机</li>
-          </ol>
-          <div className="empty-actions" style={{ justifyContent: 'flex-start' }}>
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => { setTab('targets'); setShowOnboard(false); setOnboardDone() }}>去加标的</button>
-            <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setTab('opps'); setShowOnboard(false); setOnboardDone() }}>去扫描</button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setShowOnboard(false); setOnboardDone() }}>知道了</button>
+      {/* 统计卡片 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 20 }}>
+        {statCards.map(({ label, value, sub }) => (
+          <div key={label} className="card" style={{ padding: '14px 18px' }}>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>{label}</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{sub}</div>
           </div>
-        </div>
-      )}
-
-      {/* 组合摘要 — 默认折叠 */}
-      <div className="metric-row">
-        <span className={`metric-chip ${ops.available > 0 ? 'ok' : 'warn'}`}><span>可用</span><b>${fmtMoney(ops.available)}</b></span>
-        <span className={`metric-chip ${pendingQueue.length ? 'warn' : ''}`}><span>待登记</span><b>{pendingQueue.length}</b></span>
-        <span className={`metric-chip ${putBlocked ? 'danger' : ''}`}><span>压力</span><b>{putBlocked ? '高·停Put' : '正常'}</b></span>
-        <span className="metric-chip"><span>优先</span><b>{priorityCount}</b></span>
-        <span className="metric-chip"><span>该管</span><b>{manageCount}</b></span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCockpitOpen(v => !v)}>
-          {cockpitOpen ? '收起指标' : '展开指标'}
-        </button>
-      </div>
-      {cockpitOpen && (
-        <div className="metrics-grid" style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
-          {[
-            { label: '预算', value: `$${fmtMoney(ops.budget)}` },
-            { label: '占用', value: `$${fmtMoney(ops.committed)}` },
-            { label: '本月权利金', value: `$${fmt(stats?.premium_month)}` },
-            { label: '活跃轮子', value: String(stats?.active_cycles ?? '—') },
-            { label: '行权压力', value: `$${fmtMoney(ops.assignment_stress)}` },
-            { label: '触线转化', value: ops.conversion_rate != null ? `${ops.conversion_rate}%` : '—' },
-            { label: '临期', value: String(stats?.expiring_soon.length ?? 0) },
-            { label: '利润达标', value: String(profitHits.length) },
-          ].map(m => (
-            <div key={m.label} className="metric-card">
-              <div className="value" style={{ fontSize: 18 }}>{m.value}</div>
-              <div className="label">{m.label}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {(profitHits.length > 0 || (stats?.expiring_soon.length ?? 0) > 0) && tab === 'home' && (
-        <div className="banner warn">
-          {profitHits.length > 0 && <span>💰 达标 {profitHits.length} 笔</span>}
-          {(stats?.expiring_soon.length ?? 0) > 0 && <span>⚠ 临期 {stats!.expiring_soon.length} 笔</span>}
-          <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setTab('opps'); setOppCatFilter('MANAGE') }}>去处理</button>
-        </div>
-      )}
-
-      {/* 主 Tab：全部平铺，不折叠 */}
-      <div className="page-tabs">
-        {pageTabs.map(t => (
-          <button key={t.k} type="button" className={`page-tab ${tab === t.k ? 'active' : ''}`}
-            onClick={() => setTab(t.k)}>
-            {t.label}
-          </button>
         ))}
-        <span className="desktop-only" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-tertiary)', alignSelf: 'center' }}>
-          快捷键 1/2/3 · J/K · Enter · C · ? · /
-        </span>
       </div>
 
-      {/* ── 今日(首屏决策) ── */}
-      {tab === 'home' && (
-        <div className="tab-panel">
-          <div className="context-strip">
-            <div>
-              <div className="headline">
-                {manageCount > 0 || pendingQueue.length > 0 || priorityCount > 0
-                  ? `${manageCount} 项待处理 · ${priorityCount} 笔优先 · ${pendingQueue.length} 待登记`
-                  : '今日清闲 — 可扫描找新机会'}
-              </div>
-              <div className="sub">
-                档位 {STRATEGY_TEMPLATES[riskTier].label}
-                {putBlocked ? ' · 行权压力高已停新 Put' : ''}
-                {opendOk === false ? ' · OpenD 离线' : ''}
-              </div>
-            </div>
-            <div className="context-actions">
-              <button type="button" className="btn btn-primary"
-                disabled={oppScanning}
-                onClick={() => { setTab('opps'); handleOpportunityScan() }}>
-                {oppScanning ? '扫描中…' : '扫机会'}
-              </button>
-              <button type="button" className="btn btn-secondary"
-                onClick={() => { setTab('opps'); setOppCatFilter('MANAGE') }}>
-                处理待办
-              </button>
-            </div>
-          </div>
-
-          {oppScanning && (
-            <div className="scan-progress panel">
-              <div className="scan-progress-row">
-                <span className="label">高分</span>
-                <div className="bar"><div className={`fill ${poolScanLoading ? 'pulse' : ''}`} style={{ width: poolScanLoading ? '40%' : poolScan ? '100%' : '0%' }} /></div>
-                <span>{poolScanLoading ? '扫描中' : poolScan ? '完成' : '—'}</span>
-              </div>
-              <div className="scan-progress-row">
-                <span className="label">触线</span>
-                <div className="bar"><div className={`fill ${timingScanning ? 'pulse' : ''}`} style={{ width: timingScanning ? '40%' : scanStatus?.finished_at ? '100%' : '0%' }} /></div>
-                <span>{timingScanning ? '扫描中' : scanStatus?.finished_at ? `触发${scanStatus.signals_found}` : '—'}</span>
-              </div>
-            </div>
-          )}
-
-          <div className="panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="panel-title" style={{ margin: 0 }}>必须处理</div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('MANAGE') }}>全部</button>
-            </div>
-            {manageCount === 0 ? (
-              <EmptyState title="暂无紧急管理项" description="没有临期/达标/裸奔/空转需要立刻处理" />
-            ) : (
-              allOppRows.filter(r => r.kind === 'MANAGE').slice(0, 5).map(r => (
-                <div key={r.id} className="opp-row">
-                  <div className="opp-row-main">
-                    <div className="opp-row-title">
-                      <Badge color={r.categories.includes('CLOSE') ? 'green' : 'orange'}>
-                        {r.categories.includes('CLOSE') ? '平仓' : r.categories.includes('ROLL') ? 'Roll'
-                          : r.categories.includes('LOW_YIELD') ? '换仓'
-                            : r.categories.includes('UNCOVERED') ? '裸奔' : '空转'}
-                      </Badge>
-                      {r.symbol}
-                    </div>
-                    <div className="opp-row-meta">
-                      <span>{r.headline || r.action_hint}</span>
-                      {r.remaining_annualized != null && <span>剩余年化 {fmt(r.remaining_annualized, 1)}%</span>}
-                    </div>
-                  </div>
-                  <div className="opp-row-actions">
-                    <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>处理</button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="panel-title" style={{ margin: 0 }}>优先可下单</div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('PRIORITY') }}>更多</button>
-            </div>
-            {allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).length === 0 ? (
-              <EmptyState
-                title="暂无优先档"
-                description="需要可交易高分 + 触线确认。可先扫描，或查看可排单/观察。"
-              >
-                <button type="button" className="btn btn-primary btn-sm" disabled={oppScanning}
-                  onClick={() => { setTab('opps'); handleOpportunityScan() }}>扫描</button>
-                <button type="button" className="btn btn-secondary btn-sm"
-                  onClick={() => { setTab('opps'); setOppCatFilter('QUEUE') }}>看可排单</button>
-              </EmptyState>
-            ) : (
-              allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).map((r, i) => (
-                <div key={r.id} className="opp-row" style={i === rowCursor && tab === 'home' ? { background: 'var(--green-dim)' } : undefined}>
-                  <div className="opp-row-main">
-                    <div className="opp-row-title">
-                      {r.symbol}
-                      <span style={{ fontWeight: 500, color: r.side === 'PUT' ? 'var(--green)' : 'var(--purple)' }}>
-                        {r.side === 'PUT' ? '卖Put' : '卖Call'}
-                      </span>
-                    </div>
-                    <div className="opp-row-meta">
-                      <span>年化 <b style={{ color: 'var(--green)' }}>{r.annualized != null ? `${fmt(r.annualized, 1)}%` : '—'}</b></span>
-                      <span>日租 {r.daily_rent != null ? fmt(r.daily_rent, 2) : '—'}</span>
-                      <span>{DTE_BUCKET_META[r.dte_bucket]?.label}</span>
-                    </div>
-                  </div>
-                  <div className="opp-row-actions">
-                    <button type="button" className="btn btn-secondary btn-sm"
-                      onClick={() => copyOrderMemo({
-                        symbol: r.symbol, side: r.side || 'PUT', action: 'SELL',
-                        contract_code: r.contract_code, strike: r.strike, expiry: r.expiry,
-                        price: r.bid ?? r.trigger_price,
-                      })}>备忘</button>
-                    <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>登记</button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="panel-title" style={{ margin: 0 }}>待登记</div>
-              {pendingQueue.length > 0 && (
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => { savePendingQueue([]); setPendingQueue([]) }}>清空</button>
-              )}
-            </div>
-            {pendingQueue.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>队列空。机会点「登记」会自动入队。</div>
-            ) : (
-              pendingQueue.map(p => (
-                <div key={p.id} className={`opp-row ${pendingLeaving === p.id ? 'pending-done' : ''}`}>
-                  <div className="opp-row-main">
-                    <div className="opp-row-title">
-                      {p.symbol}
-                      <span style={{ fontWeight: 500 }}>{p.trade_type.includes('BUY') ? '平' : '卖'}{p.side}</span>
-                    </div>
-                    <div className="opp-row-meta mono">
-                      <span>{p.contract_code || '—'}</span>
-                      {p.strike != null && <span>${fmt(p.strike)}</span>}
-                      {p.price != null && <span>参考 {p.price}</span>}
-                      <span>×{p.qty ?? 1}</span>
-                    </div>
-                  </div>
-                  <div className="opp-row-actions">
-                    <button type="button" className="btn btn-secondary btn-sm"
-                      onClick={() => copyOrderMemo({
-                        symbol: p.symbol, side: p.side,
-                        action: p.trade_type.startsWith('BUY') ? 'BUY' : 'SELL',
-                        contract_code: p.contract_code, strike: p.strike, expiry: p.expiry,
-                        qty: p.qty, price: p.price, note: p.note,
-                      })}>备忘</button>
-                    <button type="button" className="btn btn-primary btn-sm"
-                      onClick={() => setTradeModal({
-                        initial: {
-                          symbol: p.symbol, trade_type: p.trade_type,
-                          contract_code: p.contract_code || '',
-                          strike: p.strike != null ? String(p.strike) : '',
-                          expiry: p.expiry || '',
-                          price: p.price != null ? String(p.price) : '',
-                          qty: String(p.qty ?? 1),
-                          note: p.note || '',
-                        },
-                        status: p.trade_type === 'SELL_PUT' ? 'IDLE'
-                          : p.trade_type === 'SELL_CALL' ? 'HOLDING'
-                            : p.trade_type === 'BUY_PUT_CLOSE' ? 'CSP_OPEN' : 'CC_OPEN',
-                        cycleId: p.cycle_id,
-                      })}>登记</button>
-                    <button type="button" className="btn btn-ghost btn-sm" title="完成/移除"
-                      onClick={() => {
-                        setPendingLeaving(p.id)
-                        setTimeout(() => {
-                          removePendingReg(p.id)
-                          setPendingQueue(loadPendingQueue())
-                          setPendingLeaving(null)
-                        }, 320)
-                      }}>完成</button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+      {/* 利润达标提醒 */}
+      {profitHits.length > 0 && (
+        <div style={{ marginBottom: 16, border: '1px solid #4ade8055', background: '#4ade8011', padding: '10px 16px', borderRadius: 6, fontSize: 13 }}>
+          💰 利润达标(≥{profitTarget}%):{profitHits.map(i =>
+            `${i.symbol} ${i.side} $${i.strike}(浮盈 ${i.profit_pct}%)`).join('、')}
+          —— 可平仓锁定再开新轮,提高资金周转
         </div>
       )}
 
-      {/* ── 看板 ── */}
+      {/* 临期提醒 */}
+      {(stats?.expiring_soon.length ?? 0) > 0 && (
+        <div className="alert" style={{ marginBottom: 16, border: '1px solid #fb923c55', background: '#fb923c11', padding: '10px 16px', borderRadius: 6, fontSize: 13 }}>
+          ⚠ 临期:{stats!.expiring_soon.map(e => `${e.symbol} ${e.open_option_type} $${e.open_strike}(${e.dte}天)`).join('、')}
+          —— 尽快决定放任到期 / 买回 / Roll
+        </div>
+      )}
+
+      {/* Tab 导航 */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, borderBottom: '1px solid var(--border)' }}>
+        {([
+          ['board', '标的看板'],
+          ['scan', `机会${opps?.summary?.actionable ? `(${opps.summary.actionable})` : ''}`],
+          ['optimize', '组合优化'],
+          ['ledger', '台账'],
+          ['targets', `标的设置(${targets.length})`],
+        ] as const).map(([k, label]) => (
+          <div key={k} onClick={() => setTab(k as typeof tab)} style={{
+            padding: '8px 16px', cursor: 'pointer', fontSize: 13,
+            borderBottom: tab === k ? '2px solid var(--accent)' : '2px solid transparent',
+            color: tab === k ? 'var(--accent)' : 'var(--text-secondary)',
+          }}>{label}</div>
+        ))}
+      </div>
+
+      {/* ── 看板：今日行动 + 标的主从 ── */}
       {tab === 'board' && (
         <div>
           {/* 今日行动 */}
@@ -1972,6 +942,10 @@ export default function WheelPage() {
                   <button className="btn" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => setActionFilter(null)}>清除过滤</button>
                 )}
                 <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>点击类别过滤左侧标的</span>
+                <button className="btn" style={{ fontSize: 11, padding: '2px 10px', marginLeft: 'auto' }}
+                  onClick={() => { setOppView('actionable'); setTab('scan') }}>
+                  去机会 →
+                </button>
               </div>
             )
           })()}
@@ -1990,7 +964,7 @@ export default function WheelPage() {
               (a, b) => targetCapital(b.active_cycles || []) - targetCapital(a.active_cycles || []))
             if (symbolQuery.trim()) {
               const q = symbolQuery.trim().toUpperCase()
-              enabled = enabled.filter(t => t.symbol.toUpperCase() === q)
+              enabled = enabled.filter(t => t.symbol.includes(q))
             }
             if (actionFilter) {
               const checks = Object.values(openChecks)
@@ -2021,20 +995,12 @@ export default function WheelPage() {
                 <div className="card" style={{ flex: '1 0 250px', maxWidth: 320, minWidth: 220, padding: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px 8px' }}>
                     <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>标的({enabled.length})</span>
-                    <select value={symbolQuery} onChange={e => {
-                      setSymbolQuery(e.target.value)
-                      if (e.target.value) setSelectedSymbol(e.target.value)
-                    }}
+                    <input value={symbolQuery} onChange={e => setSymbolQuery(e.target.value)} placeholder="筛选…"
                       style={{
                         width: '100%', minWidth: 0, padding: '2px 8px', fontSize: 11,
                         background: 'var(--bg-secondary)', border: '1px solid var(--border)',
                         borderRadius: 4, color: 'var(--text)',
-                      }}>
-                      <option value="">全部</option>
-                      {targets.filter(t => t.enabled).map(t => (
-                        <option key={t.symbol} value={t.symbol}>{t.symbol}</option>
-                      ))}
-                    </select>
+                      }} />
                   </div>
                   {enabled.map(t => {
                     const cs = t.active_cycles || []
@@ -2106,12 +1072,17 @@ export default function WheelPage() {
                           <>
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                               底线 <b style={{ color: 'var(--text)' }}>${fmt(sel.floor_price)}</b>
+                              {' · '}资金上限 <b style={{ color: 'var(--text)' }}>
+                                {(sel.max_capital ?? 0) > 0 ? `$${fmt(sel.max_capital)}` : '未设'}
+                              </b>
                               {' · '}Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
                               {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
                               {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
                             </span>
                             <button title="修改找货参数" onClick={() => setEditParams({
-                              floor_price: String(sel.floor_price), delta_min: String(sel.delta_min),
+                              floor_price: String(sel.floor_price),
+                              max_capital: String(sel.max_capital ?? 0),
+                              delta_min: String(sel.delta_min),
                               delta_max: String(sel.delta_max), dte_min: String(sel.dte_min),
                               dte_max: String(sel.dte_max), min_annualized: String(sel.min_annualized),
                             })} style={{
@@ -2140,33 +1111,19 @@ export default function WheelPage() {
                     </div>
                     {editParams && (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
-                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                          底线$
-                          <input type="number" step="any" value={editParams.floor_price} style={{
-                            display: 'block', width: 90, padding: '4px 6px', marginTop: 2,
-                            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                            borderRadius: 4, color: 'var(--text)', fontSize: 12,
-                          }} onChange={e => setEditParams(f => f ? { ...f, floor_price: e.target.value } : f)} />
-                        </label>
                         {([
-                          ['Δ min', 'delta_min', DELTA_OPTS],
-                          ['Δ max', 'delta_max', DELTA_OPTS],
-                          ['DTE min', 'dte_min', DTE_OPTS],
-                          ['DTE max', 'dte_max', DTE_OPTS],
-                          ['年化≥%', 'min_annualized', ANN_OPTS],
-                        ] as [string, keyof NonNullable<typeof editParams>, number[]][]).map(([lab, key, opts]) => (
+                          ['底线$', 'floor_price', 90],
+                          ['资金上限$', 'max_capital', 100],
+                          ['Δ min', 'delta_min', 64], ['Δ max', 'delta_max', 64],
+                          ['DTE min', 'dte_min', 64], ['DTE max', 'dte_max', 64], ['年化≥%', 'min_annualized', 64],
+                        ] as [string, keyof NonNullable<typeof editParams>, number][]).map(([lab, key, w]) => (
                           <label key={key} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
                             {lab}
-                            <SelectNum
-                              value={editParams[key]}
-                              options={opts}
-                              style={{
-                                display: 'block', width: 72, padding: '4px 6px', marginTop: 2,
-                                background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                                borderRadius: 4, color: 'var(--text)', fontSize: 12,
-                              }}
-                              onChange={v => setEditParams(f => f ? { ...f, [key]: v } : f)}
-                            />
+                            <input type="number" value={editParams[key]} style={{
+                              display: 'block', width: w, padding: '4px 6px', marginTop: 2,
+                              background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                              borderRadius: 4, color: 'var(--text)', fontSize: 12,
+                            }} onChange={e => setEditParams(f => f ? { ...f, [key]: e.target.value } : f)} />
                           </label>
                         ))}
                         <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 14px' }}
@@ -2176,6 +1133,7 @@ export default function WheelPage() {
                             try {
                               await updateWheelTarget(sel.symbol, {
                                 floor_price: parseFloat(editParams.floor_price),
+                                max_capital: parseFloat(editParams.max_capital) || 0,
                                 delta_min: parseFloat(editParams.delta_min),
                                 delta_max: parseFloat(editParams.delta_max),
                                 dte_min: parseInt(editParams.dte_min),
@@ -2420,332 +1378,368 @@ export default function WheelPage() {
             )
           })()}
 
-          {/* 找 Put/Call 详情走页面级 Drawer */}
         </div>
       )}
 
-      {/* ── 机会扫描 ── */}
-      {tab === 'opps' && (
-        <div className="tab-panel">
-          <div className="panel">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              <span className="panel-title" style={{ margin: 0, flex: 1 }}>机会</span>
-              <button type="button" className="btn btn-primary btn-sm" disabled={oppScanning}
-                onClick={() => handleOpportunityScan()}>{oppScanning ? '扫描中…' : '扫描'}</button>
-              <button type="button" className="btn btn-secondary btn-sm" disabled={oppScanning}
-                title="清空期权链缓存并重扫" onClick={() => handleOpportunityScan({ force: true })}>强制</button>
-              <button type="button" className="btn btn-secondary btn-sm" disabled={oppScanning}
-                title="推送 TG Top3" onClick={() => handleOpportunityScan({ push: true })}>
-                {poolPushing ? '推送中' : '推TG'}
-              </button>
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setFilterOpen(true)}>
-                筛选{oppCatFilter !== 'PRIORITY' || oppSideFilter !== 'all' || oppBucketFilter !== 'core_extend' ? '·' : ''}
-              </button>
-            </div>
+      {/* ── 机会：今日可做 / 全部 / 触线档案 ── */}
+      {tab === 'scan' && (() => {
+        const sum = opps?.summary
+        // 时间倒序
+        const visible = [...(opps?.items || [])]
+          .filter(o => !isOppIgnored(o.id))
+          .sort((a, b) => {
+            const ta = a.timing?.last_seen || a.event_at || ''
+            const tb = b.timing?.last_seen || b.event_at || ''
+            if (ta !== tb) return ta < tb ? 1 : -1 // 倒序
+            return (b.score || 0) - (a.score || 0)
+          })
 
-            {oppScanning && (
-              <div className="scan-progress">
-                <div className="scan-progress-row">
-                  <span className="label">高分</span>
-                  <div className="bar"><div className={`fill ${poolScanLoading ? 'pulse' : ''}`} style={{ width: poolScanLoading ? '45%' : '100%' }} /></div>
-                  <span>{poolScanLoading ? '…' : poolScan ? `${poolScan.opportunities.length}` : '—'}</span>
-                </div>
-                <div className="scan-progress-row">
-                  <span className="label">触线</span>
-                  <div className="bar"><div className={`fill ${timingScanning ? 'pulse' : ''}`} style={{ width: timingScanning ? '45%' : '100%' }} /></div>
-                  <span>{timingScanning ? '…' : (scanStatus?.signals_found ?? '—')}</span>
-                </div>
+        return (
+          <div>
+            {/* 摘要 + 操作 */}
+            <div className="card" style={{ padding: '14px 16px', marginBottom: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8 }}>
+                {oppView === 'archive'
+                  ? '触线档案 · 按最近发现倒序'
+                  : (opps?.headline || (oppsLoading ? '正在合流…' : '点「刷新」生成清单'))}
               </div>
-            )}
-
-            <div className="chip-row" style={{ marginBottom: 10 }}>
-              {([
-                ['PRIORITY', `优先 ${oppCounts.priority}`],
-                ['QUEUE', `可排单 ${oppCounts.queue}`],
-                ['WATCH', `观察 ${oppCounts.watch}`],
-                ['MANAGE', `该管 ${oppCounts.manage}`],
-              ] as const).map(([key, label]) => (
-                <button key={key} type="button" className={`chip ${oppCatFilter === key ? 'active' : ''}`}
-                  onClick={() => { setOppCatFilter(key); setKilledDiag(false) }}>{label}</button>
-              ))}
-              {oppCounts.killed > 0 && (
-                <button type="button" className={`chip orange ${oppCatFilter === 'KILLED' ? 'active' : ''}`}
-                  onClick={() => {
-                    if (oppCatFilter === 'KILLED') {
-                      setOppCatFilter('PRIORITY')
-                      setKilledDiag(false)
-                    } else {
-                      showKilledOpps()
-                    }
-                  }}>
-                  杀掉 {oppCounts.killed}
-                </button>
+              {oppView !== 'archive' && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(100px,1fr))', gap: 10, marginBottom: 12 }}>
+                  {[
+                    { label: '可做', v: sum?.actionable ?? '—', c: C.green },
+                    { label: 'Put/Call', v: sum ? `${sum.actionable_put}/${sum.actionable_call}` : '—', c: C.blue },
+                    { label: '★双满足', v: sum?.dual ?? '—', c: C.purple },
+                    { label: '观察', v: sum?.watch ?? '—', c: C.orange },
+                    { label: '资金空档', v: sum?.idle_slots ?? '—', c: C.blue },
+                  ].map(x => (
+                    <div key={x.label} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
+                      <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>{x.label}</div>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: x.c }}>{x.v}</div>
+                    </div>
+                  ))}
+                </div>
               )}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 12 }}>
+                {oppView !== 'archive' && (
+                  <>
+                    <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 12px' }}
+                      disabled={oppsLoading} onClick={() => loadOpportunities(false)}>
+                      {oppsLoading ? '加载中…' : '刷新机会'}
+                    </button>
+                    <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }}
+                      disabled={oppsLoading} onClick={() => loadOpportunities(true)}>
+                      强制重扫全池
+                    </button>
+                  </>
+                )}
+                <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }}
+                  disabled={timingScanning} onClick={async () => {
+                    await handleTimingScan()
+                    setTimeout(() => {
+                      if (oppView === 'archive') {
+                        getWheelTimingHistory(1, 20).then(setTimingHistory)
+                        setHistoryPage(1)
+                      } else loadOpportunities(false)
+                    }, 2000)
+                  }}>
+                  {timingScanning ? '时机扫描中…' : '跑开仓时机'}
+                </button>
+                {oppView !== 'archive' && (
+                  <button className="btn" style={{ fontSize: 12, padding: '4px 12px' }}
+                    disabled={poolPushing} onClick={handlePoolPush}>
+                    {poolPushing ? '推送中…' : '全池推 TG'}
+                  </button>
+                )}
+                <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
+                  列表按时间倒序 · 默认今日可做
+                </span>
+              </div>
             </div>
 
-            {(killedDiag || oppCatFilter === 'KILLED') && oppCounts.killed > 0 && (
-              <div className="banner warn">
-                <span style={{ flex: 1 }}>
-                  不可交易 {oppCounts.killed} 条
-                  {Object.keys(oppCounts.killBreakdown).length > 0
-                    ? `：${Object.entries(oppCounts.killBreakdown).map(([k, n]) => `${k} ${n}`).join(' · ')}`
-                    : ''}
-                  {oppCatFilter === 'KILLED' ? '（当前列表）' : ''}
-                </span>
-                {oppCatFilter !== 'KILLED' ? (
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={showKilledOpps}>显示</button>
-                ) : (
-                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => {
-                    setOppCatFilter('PRIORITY'); setKilledDiag(false)
-                  }}>返回优先</button>
+            {/* Segment: 今日可做 | 全部机会 | 触线档案 */}
+            <div style={{ display: 'flex', gap: 0, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
+              {([
+                ['actionable', '今日可做'],
+                ['all', '全部机会'],
+                ['archive', '触线档案'],
+              ] as const).map(([k, lab]) => (
+                <div key={k} onClick={() => { setOppView(k); if (k === 'archive') setHistoryPage(1) }}
+                  style={{
+                    padding: '8px 18px', cursor: 'pointer', fontSize: 13, fontWeight: oppView === k ? 700 : 400,
+                    borderBottom: oppView === k ? '2px solid var(--accent)' : '2px solid transparent',
+                    color: oppView === k ? 'var(--accent)' : 'var(--text-secondary)',
+                  }}>
+                  {lab}
+                  {k === 'actionable' && sum?.actionable != null ? ` (${sum.actionable})` : ''}
+                </div>
+              ))}
+            </div>
+
+            {/* ── 触线档案 ── */}
+            {oppView === 'archive' && (
+              <div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                  触线落库档案（按合约去重合并）· 最近发现倒序 · 完整复盘用
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                      {['最近发现', '方向', '标的', '合约', 'Strike', '到期(DTE)', '触发价', 'Δ', '年化%', '触及均线', 'IV分位', '标的价', '次数', '首次发现', '操作'].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 500 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(!timingHistory || timingHistory.items.length === 0) && (
+                      <tr><td colSpan={15} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                        暂无档案，点上方「跑开仓时机」
+                      </td></tr>
+                    )}
+                    {[...(timingHistory?.items || [])]
+                      .sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1))
+                      .map(item => (
+                      <tr key={item.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{fmtDate(item.last_seen)}</td>
+                        <td style={{ padding: '7px 10px' }}>
+                          <span style={{
+                            padding: '1px 8px', borderRadius: 4, fontWeight: 700, fontSize: 11,
+                            background: item.side === 'PUT' ? '#38bdf822' : '#fbbf2422',
+                            color: item.side === 'PUT' ? '#38bdf8' : '#fbbf24',
+                          }}>{item.side === 'PUT' ? '卖Put' : '卖Call'}</span>
+                        </td>
+                        <td style={{ padding: '7px 10px', fontWeight: 600 }}>{item.symbol}</td>
+                        <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11 }}>{item.contract_code}</td>
+                        <td style={{ padding: '7px 10px' }}>{item.strike != null ? `$${fmt(item.strike)}` : '--'}</td>
+                        <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{item.expiry || '--'}{item.dte != null ? `(${item.dte}天)` : ''}</td>
+                        <td style={{ padding: '7px 10px' }}>
+                          ${fmt(item.trigger_price)}
+                          {!!item.below_floor && <span title="低于接货底线" style={{ color: '#f87171', fontSize: 10, marginLeft: 4 }}>低于底线</span>}
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>{item.delta != null ? item.delta.toFixed(2) : '--'}</td>
+                        <td style={{ padding: '7px 10px', color: '#4ade80', fontWeight: 600 }}>{item.annualized != null ? fmt(item.annualized, 1) : '--'}</td>
+                        <td style={{ padding: '7px 10px' }}>
+                          {item.ema_type === 'EMA200' ? '🔥' : ''}{item.ema_type}({fmt(item.ema_value)})
+                        </td>
+                        <td style={{ padding: '7px 10px' }}>{item.iv_rank != null ? fmt(item.iv_rank, 0) : '--'}</td>
+                        <td style={{ padding: '7px 10px' }}>${fmt(item.underlying_price)}</td>
+                        <td style={{ padding: '7px 10px', textAlign: 'center' }}>{item.times_triggered}</td>
+                        <td style={{ padding: '7px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{fmtDate(item.first_seen)}</td>
+                        <td style={{ padding: '7px 10px' }}>
+                          <button className="btn" style={{ fontSize: 11, padding: '2px 8px', marginRight: 4 }}
+                            disabled={suggestLoading}
+                            onClick={() => handleSuggest(item.symbol, item.side === 'PUT' ? 'put' : 'call')}>
+                            详情
+                          </button>
+                          <button className="btn btn-primary" style={{ fontSize: 11, padding: '2px 8px' }}
+                            onClick={() => setTradeModal({
+                              initial: {
+                                symbol: item.symbol,
+                                trade_type: item.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
+                                contract_code: item.contract_code,
+                                strike: item.strike != null ? String(item.strike) : '',
+                                expiry: item.expiry || '',
+                                price: item.trigger_price != null ? String(item.trigger_price) : '',
+                              },
+                              status: item.side === 'PUT' ? 'IDLE' : 'HOLDING',
+                            })}>
+                            已下单,登记
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {timingHistory && timingHistory.total > timingHistory.page_size && (
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, fontSize: 13 }}>
+                    <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+                      disabled={historyPage <= 1} onClick={() => setHistoryPage(p => p - 1)}>上一页</button>
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      第 {timingHistory.page} / {Math.ceil(timingHistory.total / timingHistory.page_size)} 页 · 共 {timingHistory.total} 条
+                    </span>
+                    <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+                      disabled={historyPage >= Math.ceil(timingHistory.total / timingHistory.page_size)}
+                      onClick={() => setHistoryPage(p => p + 1)}>下一页</button>
+                  </div>
                 )}
               </div>
             )}
-            {putBlocked && <div className="banner error">行权压力过高：已隐藏新开 Put</div>}
 
-            {filteredOppRows.length === 0 && !oppScanning ? (
-              <EmptyState
-                title={
-                  oppCatFilter === 'PRIORITY' ? '暂无优先机会'
-                    : oppCatFilter === 'MANAGE' ? '暂无管理项'
-                      : oppCatFilter === 'KILLED' ? '暂无被杀机会'
-                        : '没有匹配机会'
-                }
-                description={
-                  oppCatFilter === 'PRIORITY'
-                    ? '优先 = 可交易高分 ∩ 触线。可扫一遍，或改筛选看可排单/观察。'
-                    : oppCatFilter === 'KILLED'
-                      ? '没有不可交易机会，或尚未扫描。'
-                      : '试试放宽筛选或重新扫描。'
-                }
-              >
-                <button type="button" className="btn btn-primary btn-sm" disabled={oppScanning} onClick={() => handleOpportunityScan()}>扫描</button>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setFilterOpen(true)}>筛选</button>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => {
-                  setOppCatFilter('all'); setOppBucketFilter('all_buckets'); setOppHideUntradeable(false)
-                }}>看全部</button>
-              </EmptyState>
-            ) : (
-              filteredOppRows.map((row, idx) => {
-                const tl = tierLabel(row.trade_tier)
-                const remAnn = row.remaining_annualized ?? row.check?.remaining_annualized ?? null
-                const expAnn = row.kind === 'OPEN' ? (row.annualized ?? null) : null
-                const cta = row.kind === 'MANAGE'
-                  ? (row.categories.includes('ROLL') ? 'Roll' : row.categories.includes('CLOSE') || row.categories.includes('LOW_YIELD') ? '平仓' : row.categories.includes('UNCOVERED') ? '找Call' : '找Put')
-                  : row.tradeable ? '登记' : '门槛'
-                const open = expandedExplain === row.id
-                return (
-                  <div key={row.id}>
-                    <div className="opp-row" style={idx === rowCursor ? { background: 'var(--green-dim)' } : undefined}>
-                      <div className="opp-row-main">
-                        <div className="opp-row-title">
-                          <Badge color={tl.color}>{tl.text}</Badge>
-                          <span>{row.symbol}</span>
-                          <span style={{ fontWeight: 500, color: row.side === 'PUT' ? 'var(--green)' : 'var(--purple)' }}>
-                            {row.side === 'PUT' ? 'Put' : row.side === 'CALL' ? 'Call' : ''}
-                          </span>
-                          {row.covers_earnings && <Badge color="orange">财报</Badge>}
-                          {!row.tradeable && row.kind === 'OPEN' && <Badge color="red">门槛</Badge>}
-                        </div>
-                        <div className="opp-row-meta">
-                          {row.kind === 'OPEN' ? (
-                            <>
-                              <span className="num">年化 <b style={{ color: 'var(--green)' }}>{expAnn != null ? `${fmt(expAnn, 1)}%` : '—'}</b></span>
-                              <span className="num">日租 {row.daily_rent != null ? fmt(row.daily_rent, 2) : '—'}</span>
-                              <span className="num">年化/Δ {row.ann_per_delta != null ? fmt(row.ann_per_delta, 1) : '—'}</span>
-                              <span>{DTE_BUCKET_META[row.dte_bucket]?.label}</span>
-                              <span className="mono">{row.contract_code || '—'}</span>
-                              {row.kill_reasons.length > 0 && (
-                                <span style={{ color: 'var(--warning)' }}>杀:{row.kill_reasons.join(',')}</span>
-                              )}
-                            </>
-                          ) : (
-                            <>
-                              <span>{row.headline || row.action_hint}</span>
-                              {remAnn != null && <span>剩余年化 {fmt(remAnn, 1)}%</span>}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <div className="opp-row-actions">
-                        {row.kind === 'OPEN' ? (
-                          <>
-                            <button type="button" className="btn btn-ghost btn-sm"
-                              onClick={() => setExpandedExplain(open ? null : row.id)}>
-                              {open ? '收起' : '为何'}
-                            </button>
-                            <button type="button" className="btn btn-secondary btn-sm"
-                              disabled={suggestLoading}
-                              title="需 OpenD"
-                              onClick={() => handleSuggest(row.symbol, row.side === 'PUT' ? 'put' : 'call', row.cycle_id ?? undefined)}>
-                              {suggestLoading ? '详情…' : '详情'}
-                            </button>
-                            <button type="button" className="btn btn-secondary btn-sm"
-                              onClick={() => copyOrderMemo({
-                                symbol: row.symbol, side: row.side || 'PUT', action: 'SELL',
-                                contract_code: row.contract_code, strike: row.strike, expiry: row.expiry,
-                                price: row.bid ?? row.trigger_price,
-                              })}>备忘</button>
-                            <button type="button" className="btn btn-primary btn-sm"
-                              disabled={row.risk_block || !row.tradeable}
-                              title={row.risk_block ? '风控阻断' : !row.tradeable ? row.kill_reasons.join(',') || '未过门槛' : '登记'}
-                              onClick={() => openOppRegister(row)}>登记</button>
-                          </>
-                        ) : (
-                          <button type="button" className="btn btn-primary btn-sm"
-                            onClick={() => openOppRegister(row)}>{cta}</button>
-                        )}
-                      </div>
+            {/* ── 今日可做 / 全部机会 ── */}
+            {oppView !== 'archive' && (
+              <div>
+                {/* 方向 + 细过滤 */}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
+                  {(['ALL', 'PUT', 'CALL'] as const).map(s => (
+                    <button key={s} type="button" className="btn" style={{
+                      fontSize: 11, padding: '3px 10px',
+                      borderColor: oppSide === s ? C.green : undefined,
+                      color: oppSide === s ? C.green : undefined,
+                      fontWeight: oppSide === s ? 700 : 400,
+                    }} onClick={() => setOppSide(s)}>{s === 'ALL' ? '全部方向' : s}</button>
+                  ))}
+                  {oppView === 'all' && (
+                    <>
+                      <span style={{ width: 1, height: 16, background: 'var(--border)' }} />
+                      {([
+                        ['all', '不过滤'],
+                        ['dual', '★双满足'],
+                        ['timing', '含触线'],
+                        ['score', '含打分'],
+                        ['watch', '观察'],
+                        ['blocked', '红线'],
+                      ] as [OppFilter, string][]).map(([k, lab]) => (
+                        <button key={k} type="button" className="btn" style={{
+                          fontSize: 11, padding: '3px 10px',
+                          borderColor: oppFilter === k ? C.blue : undefined,
+                          color: oppFilter === k ? C.blue : undefined,
+                          fontWeight: oppFilter === k ? 700 : 400,
+                        }} onClick={() => setOppFilter(k)}>{lab}</button>
+                      ))}
+                    </>
+                  )}
+                </div>
+
+                {(opps?.idle_slots?.length ?? 0) > 0 && (
+                  <div className="card" style={{ padding: '10px 14px', marginBottom: 12, fontSize: 12 }}>
+                    <b>资金空档标的</b>（有余量但无可做 Put）:{' '}
+                    {opps!.idle_slots.map(s => (
+                      <button key={s.symbol} type="button" className="btn" style={{ fontSize: 11, padding: '1px 8px', marginRight: 6 }}
+                        onClick={() => goBoardSymbol(s.symbol)}>
+                        {s.symbol}{s.headroom != null ? `(余${fmt(s.headroom, 0)})` : ''}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="card" style={{ padding: '12px 14px' }}>
+                  {oppsLoading && <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>合流中…</div>}
+                  {!oppsLoading && visible.length === 0 && (
+                    <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                      {oppView === 'actionable'
+                        ? '今日暂无可做。可切「全部机会」、跑「开仓时机」或「强制重扫全池」(需 OpenD)。'
+                        : '当前过滤下无机会。可切「不过滤」、跑「开仓时机」或「强制重扫全池」。'}
                     </div>
-                    {open && row.kind === 'OPEN' && (
-                      <div className="row-expand" id="wheel-explain-panel">
-                        <b>{row.symbol} · {tl.text}{!row.tradeable ? ' · 已杀掉' : ''}</b>
-                        <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-                          {explainOpenOpp(row).map((x, i) => <li key={i}>{x}</li>)}
-                          {row.kill_reasons.map((k, i) => (
-                            <li key={`k${i}`} style={{ color: 'var(--warning)' }}>门槛: {k}</li>
+                  )}
+                  {visible.length > 0 && (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border)' }}>
+                          {['来源', '时间', '标的', '阶段', '方向', 'Strike', '到期', 'DTE', 'δ', '权利金', '年化', '分', '时机', '标签', '动作'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '6px 6px', fontWeight: 500 }}>{h}</th>
                           ))}
-                        </ul>
-                        <div style={{ marginTop: 6, fontSize: 11 }}>
-                          bid={row.bid ?? '无'} · 触价={row.trigger_price ?? '无'} · Δ={row.delta ?? '无'} · DTE={row.dte ?? '无'}
-                        </div>
-                      </div>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visible.map(o => {
+                          const srcLabel = o.source === 'dual' ? '★双' : o.source === 'timing' ? '触线' : '打分'
+                          const srcColor = o.source === 'dual' ? C.purple : o.source === 'timing' ? C.blue : C.green
+                          const seen = o.timing?.last_seen || o.event_at
+                          const seenLabel = seen ? fmtDate(seen) : '—'
+                          return (
+                            <tr key={o.id} style={{
+                              borderTop: '1px solid var(--border)',
+                              background: o.actionable ? C.green + '08' : undefined,
+                            }}>
+                              <td style={{ padding: '6px', fontWeight: 700, color: srcColor }} title={o.contract_code || o.id}>
+                                {srcLabel}
+                              </td>
+                              <td style={{ padding: '6px', fontSize: 11, whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}
+                                title={seen || ''}>
+                                {seenLabel}
+                              </td>
+                              <td style={{ padding: '6px', fontWeight: 600 }}>
+                                <button type="button" onClick={() => goBoardSymbol(o.symbol)}
+                                  style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontWeight: 700, padding: 0 }}>
+                                  {o.symbol}
+                                </button>
+                                {o.contract_code && (
+                                  <div style={{ fontSize: 10, color: 'var(--text-secondary)', fontFamily: 'monospace' }}
+                                    title={o.contract_code}>
+                                    {(o as any).contract_short || o.contract_code.replace(/^US\./, '')}
+                                  </div>
+                                )}
+                              </td>
+                              <td style={{ padding: '6px', fontSize: 11, color: 'var(--text-secondary)' }}>
+                                {STAGE_LABELS[o.context?.stage || ''] || o.context?.stage || '—'}
+                                {o.context?.headroom != null && <div>余{fmt(o.context.headroom, 0)}</div>}
+                              </td>
+                              <td style={{ padding: '6px', color: o.side === 'PUT' ? C.green : C.purple }}>
+                                {o.side === 'PUT' ? 'Put' : 'Call'}
+                              </td>
+                              <td style={{ padding: '6px', fontWeight: 600 }}>{o.strike != null ? `$${fmt(o.strike)}` : '—'}</td>
+                              <td style={{ padding: '6px', whiteSpace: 'nowrap' }}>{o.expiry || '—'}</td>
+                              <td style={{ padding: '6px' }}>{o.dte ?? '—'}</td>
+                              <td style={{ padding: '6px' }}>{o.delta != null ? Number(o.delta).toFixed(2) : '—'}</td>
+                              <td style={{ padding: '6px' }}>{o.premium_used != null ? fmt(o.premium_used) : o.bid != null ? fmt(o.bid) : '—'}</td>
+                              <td style={{ padding: '6px', color: C.green }}>{o.annualized != null ? fmt(o.annualized, 1) : '—'}</td>
+                              <td style={{ padding: '6px', fontWeight: 700 }}
+                                title={o.score_factors ? Object.entries(o.score_factors).map(([k, v]) => `${k}=${v}`).join(' × ') : '需全池扫描匹配后才有综合分'}>
+                                {o.score != null ? fmt(o.score, 1) : '—'}
+                              </td>
+                              <td style={{ padding: '6px', fontSize: 11 }}>
+                                {o.timing ? (
+                                  <>
+                                    {o.timing.ema_type}
+                                    {o.timing.strength === 'STRONG' && ' 🔥'}
+                                    {o.timing.strength === 'READY' && ' ✓'}
+                                    {o.timing.strength === 'WATCH' && ' 👀'}
+                                    {o.timing.trigger_price != null && (
+                                      <div style={{ color: 'var(--text-secondary)' }}>@{fmt(o.timing.trigger_price)}</div>
+                                    )}
+                                  </>
+                                ) : '—'}
+                              </td>
+                              <td style={{ padding: '6px', fontSize: 10 }}>
+                                {(o.flags || []).map(f => (
+                                  <span key={f} style={{ color: C.orange, marginRight: 4 }}>{f}</span>
+                                ))}
+                                {o.actionable && <span style={{ color: C.green }}>可做</span>}
+                              </td>
+                              <td style={{ padding: '6px', whiteSpace: 'nowrap' }}>
+                                <button className="btn" style={{ fontSize: 10, padding: '1px 6px', marginRight: 4 }}
+                                  disabled={suggestLoading}
+                                  onClick={() => handleSuggest(o.symbol, o.side === 'CALL' ? 'call' : 'put', o.cycle_id || undefined)}>
+                                  详情
+                                </button>
+                                <button className="btn btn-primary" style={{ fontSize: 10, padding: '1px 6px', marginRight: 4 }}
+                                  onClick={() => registerFromOpp(o)}>
+                                  登记
+                                </button>
+                                <button className="btn" style={{ fontSize: 10, padding: '1px 6px', marginRight: 4 }}
+                                  onClick={() => goBoardSymbol(o.symbol)}>
+                                  看板
+                                </button>
+                                <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }}
+                                  onClick={() => ignoreOpp(o.id, 3)} title="忽略 3 天">
+                                  忽略
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {(timingScanning || scanStatus?.finished_at) && (
+                  <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-secondary)' }}>
+                    {timingScanning && '时机扫描进行中…完成后点刷新机会合流。'}
+                    {!timingScanning && scanStatus?.finished_at && (
+                      <>最近时机扫描 {fmtDate(scanStatus.finished_at)} · 触发 {scanStatus.signals_found} 条
+                        {scanStatus.telegram_sent ? ` · TG ${scanStatus.telegram_sent}` : ''}</>
                     )}
                   </div>
-                )
-              })
+                )}
+              </div>
             )}
           </div>
+        )
+      })()}
 
-          {/* 筛选 Drawer */}
-          <Drawer open={filterOpen} onClose={() => setFilterOpen(false)} title="筛选机会" mode="auto">
-            <div className="filter-grid">
-              <div className="filter-group">
-                <label className="group-label">档位</label>
-                <div className="chip-row">
-                  {([
-                    ['PRIORITY', '优先'], ['QUEUE', '可排单'], ['WATCH', '观察'], ['MANAGE', '该管'],
-                    ['KILLED', '杀掉'], ['all', '全部'],
-                  ] as const).map(([k, l]) => (
-                    <button key={k} type="button" className={`chip ${oppCatFilter === k ? 'active' : ''}`}
-                      onClick={() => setOppCatFilter(k)}>{l}</button>
-                  ))}
-                </div>
-              </div>
-              <div className="filter-group">
-                <label className="group-label">方向</label>
-                <div className="chip-row">
-                  {([['all', '全部'], ['PUT', 'Put'], ['CALL', 'Call']] as const).map(([k, l]) => (
-                    <button key={k} type="button" className={`chip ${oppSideFilter === k ? 'active' : ''}`}
-                      onClick={() => setOppSideFilter(k)}>{l}</button>
-                  ))}
-                </div>
-              </div>
-              <div className="filter-group">
-                <label className="group-label">DTE 桶</label>
-                <div className="chip-row">
-                  {([
-                    ['core_extend', '核心+延伸'], ['core', '仅核心'], ['all_buckets', '含短端'], ['far', '远月'],
-                  ] as const).map(([k, l]) => (
-                    <button key={k} type="button" className={`chip orange ${oppBucketFilter === k ? 'active' : ''}`}
-                      onClick={() => setOppBucketFilter(k)}>{l}</button>
-                  ))}
-                </div>
-              </div>
-              <div className="filter-group">
-                <label className="group-label">开关</label>
-                <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
-                  <label><input type="checkbox" checked={oppStateAware} onChange={e => setOppStateAware(e.target.checked)} /> 状态过滤</label>
-                  <label><input type="checkbox" checked={oppHideBlocked} onChange={e => setOppHideBlocked(e.target.checked)} /> 隐藏风控阻断</label>
-                  <label><input type="checkbox" checked={oppHideUntradeable} onChange={e => setOppHideUntradeable(e.target.checked)} /> 隐藏不可交易</label>
-                  <label><input type="checkbox" checked={oppOnlySelected} onChange={e => setOppOnlySelected(e.target.checked)} /> 仅选中标的</label>
-                </div>
-              </div>
-              <button type="button" className="btn btn-primary" onClick={() => setFilterOpen(false)}>完成</button>
-            </div>
-          </Drawer>
-
-        </div>
-      )}
-
-      {/* ── 触线历史(EMA 触线持久化) ── */}
-      {tab === 'timing' && (
-        <div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-            EMA 触线机会的历史记录:按合约代码去重合并(同一合约再次触发只更新并累计次数),按最近发现时间倒序。
-            高分候选不在此落库,请到「机会扫描」Tab 查看。
-          </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['最近发现', '方向', '标的', '合约', 'Strike', '到期(DTE)', '触发价', 'Δ', '年化%', '触及均线', 'IV分位', '标的价', '次数', '首次发现', '操作'].map(h => (
-                  <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 500 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(!timingHistory || timingHistory.items.length === 0) && (
-                <tr><td colSpan={15} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无触线历史,去「机会扫描」Tab 点扫描</td></tr>
-              )}
-              {timingHistory?.items.map(item => (
-                <tr key={item.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{fmtDate(item.last_seen)}</td>
-                  <td style={{ padding: '7px 10px' }}>
-                    <span style={{
-                      padding: '1px 8px', borderRadius: 4, fontWeight: 700, fontSize: 11,
-                      background: item.side === 'PUT' ? '#38bdf822' : '#fbbf2422',
-                      color: item.side === 'PUT' ? '#38bdf8' : '#fbbf24',
-                    }}>{item.side === 'PUT' ? '卖Put' : '卖Call'}</span>
-                  </td>
-                  <td style={{ padding: '7px 10px', fontWeight: 600 }}>{item.symbol}</td>
-                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11 }}>{item.contract_code}</td>
-                  <td style={{ padding: '7px 10px' }}>{item.strike != null ? `$${fmt(item.strike)}` : '--'}</td>
-                  <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{item.expiry || '--'}{item.dte != null ? `(${item.dte}天)` : ''}</td>
-                  <td style={{ padding: '7px 10px' }}>
-                    ${fmt(item.trigger_price)}
-                    {!!item.below_floor && <span title="信号触发时标的现价低于接货底线" style={{ color: '#f87171', fontSize: 10, marginLeft: 4 }}>低于底线</span>}
-                  </td>
-                  <td style={{ padding: '7px 10px' }}>{item.delta != null ? item.delta.toFixed(2) : '--'}</td>
-                  <td style={{ padding: '7px 10px', color: '#4ade80', fontWeight: 600 }}>{item.annualized != null ? fmt(item.annualized, 1) : '--'}</td>
-                  <td style={{ padding: '7px 10px' }}>
-                    {item.ema_type === 'EMA200' ? '🔥' : ''}{item.ema_type}({fmt(item.ema_value)})
-                  </td>
-                  <td style={{ padding: '7px 10px' }}>{item.iv_rank != null ? fmt(item.iv_rank, 0) : '--'}</td>
-                  <td style={{ padding: '7px 10px' }}>${fmt(item.underlying_price)}</td>
-                  <td style={{ padding: '7px 10px', textAlign: 'center' }}>{item.times_triggered}</td>
-                  <td style={{ padding: '7px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{fmtDate(item.first_seen)}</td>
-                  <td style={{ padding: '7px 10px' }}>
-                    <button className="btn btn-primary" style={{ fontSize: 11, padding: '2px 10px' }}
-                      onClick={() => setTradeModal({
-                        initial: {
-                          symbol: item.symbol,
-                          trade_type: item.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-                          contract_code: item.contract_code,
-                          strike: item.strike != null ? String(item.strike) : '',
-                          expiry: item.expiry || '',
-                          price: item.trigger_price != null ? String(item.trigger_price) : '',
-                        },
-                        status: item.side === 'PUT' ? 'IDLE' : 'HOLDING',
-                      })}>
-                      已下单,登记
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {timingHistory && timingHistory.total > timingHistory.page_size && (
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, fontSize: 13 }}>
-              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
-                disabled={historyPage <= 1} onClick={() => setHistoryPage(p => p - 1)}>上一页</button>
-              <span style={{ color: 'var(--text-secondary)' }}>
-                第 {timingHistory.page} / {Math.ceil(timingHistory.total / timingHistory.page_size)} 页 · 共 {timingHistory.total} 条
-              </span>
-              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
-                disabled={historyPage >= Math.ceil(timingHistory.total / timingHistory.page_size)}
-                onClick={() => setHistoryPage(p => p + 1)}>下一页</button>
-            </div>
-          )}
+      {tab === 'optimize' && (
+        <div className="card" style={{ padding: 16 }}>
+          <WheelOptimizePanel />
         </div>
       )}
 
@@ -2753,38 +1747,6 @@ export default function WheelPage() {
       {tab === 'ledger' && (
         <div>
           {/* 绩效复盘 */}
-          <div className="card" style={{ padding: '12px 16px', marginBottom: 16, fontSize: 13 }}>
-            <b>经营面板</b>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginTop: 10 }}>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>资金利用率</div>
-                <div style={{ fontWeight: 700 }}>{(ops.utilization * 100).toFixed(0)}%</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>平均轮转天数</div>
-                <div style={{ fontWeight: 700 }}>{ops.turn_days != null ? fmt(ops.turn_days, 0) : '--'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>本月平仓腿占比</div>
-                <div style={{ fontWeight: 700 }}>{ops.early_close_share != null ? `${(ops.early_close_share * 100).toFixed(0)}%` : '--'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>触线转化(30d)</div>
-                <div style={{ fontWeight: 700, color: C.green }}>
-                  {stats?.conversion
-                    ? `${stats.conversion.converted_30d}/${stats.conversion.signal_count_30d} (${stats.conversion.rate_pct}%)`
-                    : '--'}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>空转 / 裸奔</div>
-                <div style={{ fontWeight: 700 }}>{ops.idle_count} / {ops.uncovered_count}</div>
-              </div>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8 }}>
-              转化低=信号噪音或登记缺合约代码。周转天数偏高=平仓/Roll 偏慢。利用率过低=资金空转。
-            </div>
-          </div>
           {stats?.monthly_premium && stats.monthly_premium.length > 0 && (
             <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <div className="card" style={{ padding: '12px 16px', flex: '1 1 320px', minWidth: 0 }}>
@@ -2912,133 +1874,33 @@ export default function WheelPage() {
       {/* ── 标的设置 ── */}
       {tab === 'targets' && (
         <div>
-          <div className="card" style={{ padding: '14px 18px', marginBottom: 16 }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>策略模板与组合预算</h3>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              {(Object.keys(STRATEGY_TEMPLATES) as RiskTier[]).map(tier => (
-                <button key={tier} type="button" className="btn"
-                  style={{
-                    fontSize: 12, fontWeight: riskTier === tier ? 700 : 400,
-                    borderColor: riskTier === tier ? 'var(--accent)' : undefined,
-                    background: riskTier === tier ? 'var(--accent)' : undefined,
-                    color: riskTier === tier ? '#fff' : undefined,
-                  }}
-                  onClick={() => { setRiskTier(tier); setRiskTierState(tier); flash(`已切换风险档:${STRATEGY_TEMPLATES[tier].label}`) }}
-                  title={STRATEGY_TEMPLATES[tier].desc}>
-                  {STRATEGY_TEMPLATES[tier].label}
-                </button>
-              ))}
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center' }}>
-                {STRATEGY_TEMPLATES[riskTier].desc}
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                组合预算 $
-                <SelectNum
-                  value={budget}
-                  options={BUDGET_OPTS}
-                  style={{ ...inputStyle, width: 140 }}
-                  onChange={v => {
-                    const n = Number(v) || 0
-                    setBudgetState(n)
-                    setPortfolioBudget(n)
-                    flash(`预算已设为 $${n.toLocaleString()}`, 'success')
-                  }}
-                />
-              </label>
-              <button className="btn" style={{ fontSize: 12 }}
-                onClick={async () => {
-                  const tpl = STRATEGY_TEMPLATES[riskTier]
-                  let n = 0
-                  for (const t of targets) {
-                    try {
-                      await updateWheelTarget(t.symbol, {
-                        delta_min: tpl.delta_min, delta_max: tpl.delta_max,
-                        dte_min: tpl.dte_min, dte_max: tpl.dte_max,
-                        min_annualized: tpl.min_annualized,
-                      })
-                      n++
-                    } catch { /* skip */ }
-                  }
-                  await loadAll()
-                  flash(`已将 ${n} 个标的参数套用「${tpl.label}」模板`)
-                }}>
-                套用到全部标的
-              </button>
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              开仓规则(delta/DTE/年化) · 管理规则(止盈/Roll) · 通知见设置页。模板只改标的筛选参数,不改历史台账。
-            </div>
-          </div>
-
           <div className="card" style={{ padding: '14px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>添加标的</span>
-            <select
-              value={addSymbol}
-              onChange={e => setAddSymbol(e.target.value)}
-              style={{ ...inputStyle, width: 260 }}
-            >
-              <option value="">选择标的…</option>
-              {(() => {
-                const existing = new Set(targets.map(t => t.symbol.toUpperCase()))
-                const avail = candidates.filter(c => !existing.has(c.symbol.toUpperCase()))
-                const us = avail.filter(c => c.market === 'US')
-                const hk = avail.filter(c => c.market === 'HK' || c.market === '港股')
-                const other = avail.filter(c => c.market !== 'US' && c.market !== 'HK' && c.market !== '港股')
-                return (
-                  <>
-                    {us.length > 0 && (
-                      <optgroup label="美股">
-                        {us.map(c => (
-                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {hk.length > 0 && (
-                      <optgroup label="港股">
-                        {hk.map(c => (
-                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {other.length > 0 && (
-                      <optgroup label="其他">
-                        {other.map(c => (
-                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {avail.length === 0 && (
-                      <option value="" disabled>
-                        {candidates.length === 0 ? '候选加载中或为空' : '候选均已添加'}
-                      </option>
-                    )}
-                  </>
-                )
-              })()}
-            </select>
-            <input type="number" step="any" value={addFloor} onChange={e => setAddFloor(e.target.value)}
-              placeholder="接货底线价" style={{ ...inputStyle, width: 110 }} title="标的接货意愿底线，按个股填写" />
-            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }}
-              disabled={adding || !addSymbol} onClick={handleAddTarget}>
+            <input list="wheel-candidates" value={addSymbol} onChange={e => setAddSymbol(e.target.value)}
+              placeholder="选择或输入,如 AAPL / 00700.HK" style={{ ...inputStyle, width: 220 }} />
+            <datalist id="wheel-candidates">
+              {candidates.map(c => (
+                <option key={c.symbol} value={c.symbol}>{`${c.name}(${c.market === 'US' ? '美股' : '港股'})`}</option>
+              ))}
+            </datalist>
+            <input type="number" value={addFloor} onChange={e => setAddFloor(e.target.value)}
+              placeholder="接货底线价" style={{ ...inputStyle, width: 110 }} />
+            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }} disabled={adding} onClick={handleAddTarget}>
               {adding ? '添加中...' : '添加'}
             </button>
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              从股票池候选下拉选择（已添加的不重复显示）；底线价需按个股填写
-            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>候选与股票池美股/港股打通;delta/DTE/年化参数添加后可逐项调整</span>
           </div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '底线价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '底线价', '资金上限', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {targets.length === 0 && <tr><td colSpan={8} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
+              {targets.length === 0 && <tr><td colSpan={9} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
               {targets.map(t => (
                 <TargetRow key={t.symbol} target={t} onSaved={loadAll}
                   onToggle={() => handleToggleTarget(t)} onDelete={() => handleDeleteTarget(t.symbol)} />
@@ -3048,170 +1910,169 @@ export default function WheelPage() {
         </div>
       )}
 
-      {/* 找 Put/Call / 机会详情 — 全页共用 Drawer */}
-      <Drawer
-        open={!!suggest || suggestLoading}
-        onClose={() => { setSuggest(null); setSuggestLoading(false) }}
-        title={suggest ? `${suggest.symbol} 卖 ${suggest.side}` : '加载详情'}
-        subtitle={
-          suggest
-            ? `现价 $${fmt(suggest.spot_price)}${suggest.cost_basis != null ? ` · Cost $${fmt(suggest.cost_basis)}` : ''}`
-            : '需富途 OpenD'
-        }
-        mode="auto"
-      >
-        {suggestLoading && !suggest && (
-          <div style={{ color: 'var(--warning)', fontSize: 13 }}>正在拉取期权链并筛选…</div>
-        )}
-        {suggest && (
-          <div>
-            {suggest.volatility && (
-              <div style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 6, marginBottom: 10 }}>
-                <VolatilityBar v={suggest.volatility} />
-              </div>
-            )}
-            {(suggest.earnings_warn || suggest.delta_preference || suggest.trend_warning) && (
-              <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-                {suggest.earnings_warn && (
-                  <span style={{ color: '#fb923c' }}>
-                    ⚠ 财报 {suggest.earnings_date}(距今 {suggest.days_to_earnings} 天)
+      {/* 找 Put / 找 Call 结果弹窗 */}
+      {(suggestLoading || suggest) && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: '#000a', zIndex: 110,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}
+          onClick={closeSuggestModal}
+        >
+          <div
+            className="modal-card"
+            style={{
+              width: 'min(960px, 100%)', maxHeight: '90vh', overflowY: 'auto',
+              padding: '16px 20px',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 16 }}>
+                {suggest
+                  ? `${suggest.symbol} 卖 ${suggest.side} 建议`
+                  : `${suggestSymbol || '…'} 找 ${suggestSide === 'put' ? 'Put' : 'Call'}`}
+                {suggest && (
+                  <span style={{ fontSize: 12, color: 'var(--text-secondary)', marginLeft: 10, fontWeight: 400 }}>
+                    现价 ${fmt(suggest.spot_price)}
+                    {suggest.cost_basis != null ? ` · Cost Basis $${fmt(suggest.cost_basis)}` : ''}
                   </span>
                 )}
-                {suggest.trend_warning && <span style={{ color: '#f87171' }}>⚠ {suggest.trend_warning}</span>}
-                {suggest.delta_preference && <span style={{ color: '#38bdf8' }}>ℹ {suggest.delta_preference}</span>}
-              </div>
-            )}
-            {suggest.suggestions.length === 0 ? (
-              <EmptyState
-                title="无符合条件合约"
-                description={suggest.message || '可在「标的设置」放宽 delta / DTE / 最低年化'}
-              >
-                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTab('targets')}>
-                  去标的设置
-                </button>
-              </EmptyState>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 640 }}>
-                  <thead>
-                    <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                      {['合约', 'Strike', 'Δ', 'DTE', 'Bid', '点差%', '年化%', ...(suggest.side === 'PUT' ? ['年化·保'] : []), '分', 'OI', ''].map(h => (
-                        <th key={h} style={{ textAlign: 'left', padding: '6px 8px', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {suggest.suggestions.map(s => (
-                      <tr key={s.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
-                          {s.contract_code}
-                          {s.covers_earnings && <span style={{ color: '#fb923c', marginLeft: 4 }}>财报</span>}
-                        </td>
-                        <td style={{ padding: '7px 8px', fontWeight: 600 }}>${fmt(s.strike)}</td>
-                        <td style={{ padding: '7px 8px' }}>{s.delta}</td>
-                        <td style={{ padding: '7px 8px' }}>{s.dte}</td>
-                        <td style={{ padding: '7px 8px' }}>${fmt(s.bid)}</td>
-                        <td style={{ padding: '7px 8px', color: (s.spread_pct ?? 0) > 6 ? '#fb923c' : undefined }}>
-                          {s.spread_pct != null ? s.spread_pct : '—'}
-                        </td>
-                        <td style={{ padding: '7px 8px', color: '#4ade80', fontWeight: 700 }}>{fmt(s.annualized, 1)}</td>
-                        {suggest.side === 'PUT' && (
-                          <td style={{ padding: '7px 8px', color: '#38bdf8' }}>
-                            {s.annualized_margin != null ? fmt(s.annualized_margin, 1) : '—'}
-                          </td>
-                        )}
-                        <td style={{ padding: '7px 8px', fontWeight: 700 }}
-                          title={s.score_factors
-                            ? `年化 ${s.score_factors.annualized} × 流动性 ${s.score_factors.liquidity} × 趋势 ${s.score_factors.trend} × 财报 ${s.score_factors.earnings} × IV ${s.score_factors.iv_bonus} × delta ${s.score_factors.delta_pref}`
-                            : undefined}>
-                          {s.score != null ? fmt(s.score, 1) : '—'}
-                        </td>
-                        <td style={{ padding: '7px 8px' }}>{s.open_interest}</td>
-                        <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
-                          <button type="button" className="btn btn-ghost btn-sm" style={{ minHeight: 28, padding: '2px 8px' }}
-                            onClick={() => copyOrderMemo({
-                              symbol: suggest.symbol, side: suggest.side, action: 'SELL',
-                              contract_code: s.contract_code, strike: s.strike, expiry: s.expiry, price: s.bid,
-                            })}>备忘</button>
-                          <button type="button" className="btn btn-primary btn-sm" style={{ minHeight: 28, padding: '2px 10px', marginLeft: 4 }}
-                            onClick={() => {
-                              enqueuePending({
-                                symbol: suggest.symbol, side: suggest.side,
-                                trade_type: suggest.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-                                contract_code: normalizeContractCode(s.contract_code, suggest.symbol) || s.contract_code,
-                                strike: s.strike, expiry: s.expiry, price: s.bid, qty: 1, source: 'suggest',
-                              })
-                              setTradeModal({
-                                initial: {
-                                  symbol: suggest.symbol,
-                                  trade_type: suggest.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-                                  contract_code: s.contract_code,
-                                  strike: String(s.strike),
-                                  expiry: s.expiry,
-                                  price: String(s.bid),
-                                  contract_size: String(s.contract_size),
-                                },
-                                status: suggest.side === 'PUT' ? 'IDLE' : 'HOLDING',
-                                cycleId: suggestCycleId,
-                              })
-                            }}>
-                            登记
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10 }}>
-              筛选来自标的设置 · 先在富途成交再登记实际价
+              </h3>
+              <button className="btn" style={{ fontSize: 12, padding: '4px 12px', flexShrink: 0 }} onClick={closeSuggestModal}>
+                关闭
+              </button>
             </div>
+
+            {suggestLoading && (
+              <div style={{ padding: '28px 12px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
+                正在拉取期权链并筛选（需富途 OpenD）…
+              </div>
+            )}
+
+            {!suggestLoading && suggest && (
+              <>
+                {suggest.volatility && (
+                  <div style={{ padding: '8px 12px', background: 'var(--bg-secondary)', borderRadius: 6, marginBottom: 10 }}>
+                    <VolatilityBar v={suggest.volatility} />
+                  </div>
+                )}
+                {(suggest.earnings_warn || suggest.delta_preference || suggest.trend_warning || suggest.dividend_warn || suggest.floor_suggest || suggest.term_structure || suggest.skew) && (
+                  <div style={{ display: 'flex', gap: 16, fontSize: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+                    {suggest.earnings_warn && (
+                      <span style={{ color: '#fb923c' }}>
+                        ⚠ 财报 {suggest.earnings_date}(距今 {suggest.days_to_earnings} 天)
+                        {(suggest.earnings_filtered_count || 0) > 0 && ` · 已硬过滤 ${suggest.earnings_filtered_count} 个含财报合约`}
+                      </span>
+                    )}
+                    {suggest.dividend_warn && (
+                      <span style={{ color: '#fb923c' }}>
+                        ⚠ 除息 {suggest.dividend_warn.date}(剩{suggest.dividend_warn.days_to_ex}天)
+                      </span>
+                    )}
+                    {suggest.trend_warning && <span style={{ color: '#f87171' }}>⚠ {suggest.trend_warning}</span>}
+                    {suggest.delta_preference && <span style={{ color: '#38bdf8' }}>ℹ {suggest.delta_preference}</span>}
+                    {suggest.term_structure?.shape && (
+                      <span style={{ color: '#a78bfa' }}>
+                        期限结构 {suggest.term_structure.shape}
+                        {suggest.term_structure.term_spread != null ? ` (ΔIV ${suggest.term_structure.term_spread})` : ''}
+                      </span>
+                    )}
+                    {suggest.skew?.warn && <span style={{ color: '#fb923c' }}>⚠ {suggest.skew.warn}</span>}
+                    {suggest.floor_suggest && (
+                      <span style={{ color: '#4ade80' }}>
+                        智能 floor 建议 ${fmt(suggest.floor_suggest.suggested_floor)}
+                        {suggest.floor_suggest.rationale ? ` · ${suggest.floor_suggest.rationale}` : ''}
+                      </span>
+                    )}
+                  </div>
+                )}
+                {suggest.suggestions.length === 0 ? (
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '16px 0' }}>
+                    {suggest.message || '没有符合筛选条件的合约(delta/DTE/年化/流动性/财报硬过滤),可在「标的设置」或设置页放宽参数'}
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                          {['合约编号', 'Strike', 'Delta', 'POP', 'DTE', '权利金', '点差%', '年化%(现金)', ...(suggest.side === 'PUT' ? ['年化%(保证金)'] : []), '评分', '缓冲ATR', '虚值%', 'OI', suggest.side === 'PUT' ? '接货成本' : '若被行权赚', ''].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {suggest.suggestions.map(s => (
+                          <tr key={s.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
+                            <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>{s.contract_code}</td>
+                            <td style={{ padding: '7px 10px', fontWeight: 600 }}>
+                              ${fmt(s.strike)}{s.covers_earnings && <span style={{ color: '#fb923c', fontSize: 10, marginLeft: 4 }}>含财报</span>}
+                            </td>
+                            <td style={{ padding: '7px 10px' }}>{s.delta}</td>
+                            <td style={{ padding: '7px 10px', color: '#38bdf8' }}>{s.pop != null ? `${(s.pop * 100).toFixed(0)}%` : '--'}</td>
+                            <td style={{ padding: '7px 10px' }}>{s.dte}</td>
+                            <td style={{ padding: '7px 10px' }} title={`bid ${s.bid} / mid ${s.premium_used}`}>
+                              ${fmt(s.premium_used ?? s.bid)}
+                              <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}> {s.premium_pricing || ''}</span>
+                            </td>
+                            <td style={{ padding: '7px 10px', color: (s.spread_pct ?? 0) > 6 ? '#fb923c' : undefined }}>{s.spread_pct != null ? s.spread_pct : '--'}</td>
+                            <td style={{ padding: '7px 10px', color: '#4ade80', fontWeight: 700 }}>{fmt(s.annualized, 1)}</td>
+                            {suggest.side === 'PUT' && (
+                              <td style={{ padding: '7px 10px', color: '#38bdf8' }}>{s.annualized_margin != null ? fmt(s.annualized_margin, 1) : '--'}</td>
+                            )}
+                            <td style={{ padding: '7px 10px', fontWeight: 700 }}
+                              title={s.score_factors ? Object.entries(s.score_factors).map(([k, v]) => `${k}=${v}`).join(' × ') : undefined}>
+                              {s.score != null ? fmt(s.score, 1) : '--'}
+                            </td>
+                            <td style={{ padding: '7px 10px' }}>{s.buffer_atr != null ? fmt(s.buffer_atr, 2) : '--'}</td>
+                            <td style={{ padding: '7px 10px' }}>{fmt(s.otm_pct, 1)}</td>
+                            <td style={{ padding: '7px 10px' }}>{s.open_interest}</td>
+                            <td style={{ padding: '7px 10px' }}>
+                              {suggest.side === 'PUT' ? `$${fmt(s.assigned_cost)}` : `$${fmt(s.if_called_total)}`}
+                            </td>
+                            <td style={{ padding: '7px 10px' }}>
+                              <button className="btn btn-primary" style={{ fontSize: 11, padding: '2px 10px', whiteSpace: 'nowrap' }}
+                                onClick={() => {
+                                  setTradeModal({
+                                    initial: {
+                                      symbol: suggest.symbol,
+                                      trade_type: suggest.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
+                                      contract_code: s.contract_code,
+                                      strike: String(s.strike),
+                                      expiry: s.expiry,
+                                      price: String(s.limit_price_hint ?? s.premium_used ?? s.bid),
+                                      contract_size: String(s.contract_size),
+                                    },
+                                    status: suggest.side === 'PUT' ? 'IDLE' : 'HOLDING',
+                                    cycleId: suggestCycleId,
+                                  })
+                                }}>
+                                已下单,登记
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 12 }}>
+                  权利金默认 mid 估价；年化=权利金/现金担保×365/DTE；POP≈1−|Δ|。先在富途下单后，点「已下单,登记」填实际成交价。
+                </div>
+              </>
+            )}
           </div>
-        )}
-      </Drawer>
+        </div>
+      )}
 
       {tradeModal && (
         <TradeModal initial={tradeModal.initial} cycleStatus={tradeModal.status}
           cycleId={tradeModal.cycleId} newCycle={tradeModal.newCycle}
-          onClose={() => setTradeModal(null)}
-          onSaved={() => {
-            setSuggest(null)
-            // 登记成功后从待登记队列移除同合约
-            const code = normalizeContractCode(tradeModal.initial.contract_code, tradeModal.initial.symbol)
-            const leaving = loadPendingQueue().find(p => {
-              if (code && (normalizeContractCode(p.contract_code, p.symbol) === code)) return true
-              return p.symbol === tradeModal.initial.symbol && p.trade_type === tradeModal.initial.trade_type
-                && String(p.strike || '') === String(tradeModal.initial.strike || '')
-            })
-            if (leaving) {
-              setPendingLeaving(leaving.id)
-              setTimeout(() => {
-                const q = loadPendingQueue().filter(p => p.id !== leaving.id)
-                // also drop any other matches
-                const q2 = q.filter(p => {
-                  if (code && (normalizeContractCode(p.contract_code, p.symbol) === code)) return false
-                  if (p.symbol === tradeModal.initial.symbol && p.trade_type === tradeModal.initial.trade_type
-                    && String(p.strike || '') === String(tradeModal.initial.strike || '')) return false
-                  return true
-                })
-                savePendingQueue(q2)
-                setPendingQueue(q2)
-                setPendingLeaving(null)
-              }, 420)
-            } else {
-              const q = loadPendingQueue().filter(p => {
-                if (code && (normalizeContractCode(p.contract_code, p.symbol) === code)) return false
-                if (p.symbol === tradeModal.initial.symbol && p.trade_type === tradeModal.initial.trade_type
-                  && String(p.strike || '') === String(tradeModal.initial.strike || '')) return false
-                return true
-              })
-              savePendingQueue(q)
-              setPendingQueue(q)
-            }
-            loadAll()
-            flash('登记成功', 'success')
-          }} />
+          minTradedAt={tradeModal.cycleId
+            ? trades.filter(t => t.cycle_id === tradeModal.cycleId)
+                .reduce<string | null>((m, t) => (!m || t.traded_at > m ? t.traded_at : m), null)
+            : null}
+          onClose={() => setTradeModal(null)} onSaved={() => { closeSuggestModal(); loadAll() }} />
       )}
       {editTrade && (
         <EditTradeModal trade={editTrade}
@@ -3220,141 +2081,101 @@ export default function WheelPage() {
       {rollData && (
         <RollModal data={rollData} onClose={() => setRollData(null)} onSaved={loadAll} />
       )}
-
-      {/* 该管三选一:放任到期 / 买回 / Roll */}
-      {manageCompare && (
-        <div style={{
-          position: 'fixed', inset: 0, background: '#0009', zIndex: 110,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }} onClick={() => setManageCompare(null)}>
-          <div className="card" style={{ width: 560, maxWidth: '96%', maxHeight: '85vh', overflow: 'auto', padding: 18 }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-              <h3 style={{ margin: 0, fontSize: 16 }}>
-                {manageCompare.symbol} {manageCompare.side} ${manageCompare.strike} 决策
-              </h3>
-              <button className="btn" style={{ fontSize: 12 }} onClick={() => setManageCompare(null)}>关闭</button>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-              合约 {manageCompare.contract_code} · DTE {manageCompare.dte ?? '--'}
-              · 浮盈 {manageCompare.profit_pct ?? '--'}% · 剩余年化 {manageCompare.remaining_annualized ?? '--'}%
-              · 买回约 ${fmt(manageCompare.buyback_ask || manageCompare.current_price)}
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-              <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>① 放任到期</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  保留全部剩余权利金;若到期仍 ITM 可能被行权接货/交货。适合深度 OTM 且买回摩擦大。
-                </div>
-                <button className="btn" style={{ fontSize: 12, width: '100%' }}
-                  onClick={() => {
-                    setTradeModal({
-                      initial: {
-                        symbol: manageCompare.symbol,
-                        trade_type: 'EXPIRE',
-                        contract_code: manageCompare.contract_code,
-                        strike: String(manageCompare.strike),
-                        expiry: manageCompare.expiry?.slice(0, 10) || '',
-                        note: '放任到期',
-                      },
-                      status: manageCompare.side === 'PUT' ? 'CSP_OPEN' : 'CC_OPEN',
-                      cycleId: manageCompare.cycle_id,
-                    })
-                    setManageCompare(null)
-                  }}>登记到期</button>
-              </div>
-              <div style={{ border: `1px solid ${C.green}66`, borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: C.green }}>② 买回平仓</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  成本约 ${fmt(manageCompare.buyback_ask || manageCompare.current_price)}/股权利金;
-                  落袋浮盈 {manageCompare.profit_pct ?? '--'}%,腾出资金再开新轮。
-                  {manageCompare.remaining_annualized != null && manageCompare.remaining_annualized < 15
-                    && ' 剩余年化偏低,优先考虑平。'}
-                </div>
-                <button className="btn btn-primary" style={{ fontSize: 12, width: '100%' }}
-                  onClick={() => {
-                    setTradeModal({
-                      initial: {
-                        symbol: manageCompare.symbol,
-                        trade_type: manageCompare.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE',
-                        contract_code: manageCompare.contract_code,
-                        strike: String(manageCompare.strike),
-                        expiry: manageCompare.expiry?.slice(0, 10) || '',
-                        price: String(manageCompare.buyback_ask || manageCompare.current_price || ''),
-                        qty: '1',
-                        note: '决策台买回',
-                      },
-                      status: manageCompare.side === 'PUT' ? 'CSP_OPEN' : 'CC_OPEN',
-                      cycleId: manageCompare.cycle_id,
-                    })
-                    setManageCompare(null)
-                  }}>登记买回</button>
-              </div>
-              <div style={{ border: `1px solid ${C.orange}66`, borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: C.orange }}>③ Roll 展期</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  买回当前 + 卖更远到期;看净 credit 与新预期年化。适合仍想保留敞口、剩余时间不够。
-                </div>
-                <button className="btn" style={{ fontSize: 12, width: '100%' }}
-                  disabled={rollLoading}
-                  onClick={() => {
-                    const id = manageCompare.cycle_id
-                    setManageCompare(null)
-                    handleRoll(id)
-                  }}>打开 Roll 对比</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
-// ── Roll 对比弹窗 ─────────────────────────────────────────────────────────────
-function RollModal({ data, onClose, onSaved }: {
+// ── Roll 决策台弹窗 ───────────────────────────────────────────────────────────
+function RollModal({ data: initial, onClose, onSaved }: {
   data: WheelRollOptions
   onClose: () => void
   onSaved: () => void
 }) {
-  const [selected, setSelected] = useState<string | null>(data.candidates[0]?.contract_code || null)
-  const [buyback, setBuyback] = useState(String(data.current.buyback_ask || ''))
-  const [newPrice, setNewPrice] = useState(String(data.candidates[0]?.bid ?? ''))
+  const [data, setData] = useState(initial)
+  const [allowDown, setAllowDown] = useState(!!initial.allow_down_strike)
+  const [showTable, setShowTable] = useState(false)
+  const [pricingMode, setPricingMode] = useState<'optimistic' | 'default' | 'conservative'>('default')
+  const defaultCode = initial.default_candidate?.contract_code
+    || initial.candidates[0]?.contract_code
+    || null
+  const [selected, setSelected] = useState<string | null>(defaultCode)
+  const [buyback, setBuyback] = useState(String(
+    initial.default_candidate?.limit_hints?.close_limit
+    ?? initial.current.buyback_ask ?? '',
+  ))
+  const [newPrice, setNewPrice] = useState(String(
+    initial.default_candidate?.limit_hints?.open_limit
+    ?? initial.default_candidate?.bid
+    ?? initial.candidates[0]?.bid
+    ?? '',
+  ))
   const [fee, setFee] = useState('0')
   const [saving, setSaving] = useState(false)
+  const [reloading, setReloading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   const cand = data.candidates.find(c => c.contract_code === selected)
+    || (data.default_candidate?.contract_code === selected ? data.default_candidate : null)
   const size = data.current.contract_size || 100
+  const qty = data.qty || 1
   const netCredit = cand && buyback && newPrice
-    ? ((parseFloat(newPrice) - parseFloat(buyback)) * size).toFixed(0) : null
+    ? ((parseFloat(newPrice) - parseFloat(buyback)) * size * qty).toFixed(0) : null
 
   const inputStyle = {
     width: 90, padding: '4px 6px', background: 'var(--bg-secondary)',
     border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 12,
   } as const
 
+  function pickCandidate(c: NonNullable<typeof cand>) {
+    setSelected(c.contract_code)
+    const lim = c.limit_hints
+    const pr = c.pricing?.[pricingMode]
+    setBuyback(String(lim?.close_limit ?? pr?.close_price ?? data.current.buyback_ask ?? ''))
+    setNewPrice(String(lim?.open_limit ?? pr?.open_price ?? c.bid ?? ''))
+  }
+
+  async function reload(nextAllow = allowDown) {
+    setReloading(true)
+    setErr(null)
+    try {
+      const st = getAppSettings()
+      const r = await getWheelRollOptions(data.cycle_id, st.marketHost, st.marketPort, {
+        allow_down_strike: nextAllow,
+        qty: data.qty,
+      })
+      setData(r)
+      const code = r.default_candidate?.contract_code || r.candidates[0]?.contract_code || null
+      setSelected(code)
+      const dc = r.default_candidate || r.candidates[0]
+      if (dc) {
+        setBuyback(String(dc.limit_hints?.close_limit ?? r.current.buyback_ask ?? ''))
+        setNewPrice(String(dc.limit_hints?.open_limit ?? dc.bid ?? ''))
+      }
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setReloading(false)
+    }
+  }
+
   async function submitRoll() {
-    if (!cand) { setErr('请选择新合约'); return }
+    if (!cand) { setErr('请选择新合约(或选择「不 Roll」的平仓路径)'); return }
     const bb = parseFloat(buyback); const np = parseFloat(newPrice); const f = parseFloat(fee) || 0
     if (isNaN(bb) || bb < 0 || isNaN(np) || np <= 0) { setErr('请填写有效价格'); return }
     setSaving(true)
     setErr(null)
     try {
-      // 两腿:买回旧 + 卖出新,同一 cycle
-      await recordWheelTrade({
-        symbol: data.symbol,
-        trade_type: data.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE',
-        contract_code: data.current.contract_code,
-        price: bb, fee: f, contract_size: size,
-        cycle_id: data.cycle_id, note: 'Roll 买回',
-      })
-      await recordWheelTrade({
-        symbol: data.symbol,
-        trade_type: data.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-        contract_code: cand.contract_code, strike: cand.strike, expiry: cand.expiry,
-        price: np, fee: f, contract_size: size,
-        cycle_id: data.cycle_id, note: 'Roll 卖出',
+      await registerWheelRoll({
+        cycle_id: data.cycle_id,
+        buyback_price: bb,
+        sell_contract_code: cand.contract_code,
+        sell_strike: cand.strike,
+        sell_expiry: cand.expiry,
+        sell_price: np,
+        qty,
+        fee_close: f,
+        fee_open: f,
+        contract_size: size,
       })
       onSaved()
       onClose()
@@ -3365,14 +2186,148 @@ function RollModal({ data, onClose, onSaved }: {
     }
   }
 
+  // 兼容旧接口:没有 cards 时用候选拼一个最小决策台,避免看起来像「只有明细表」
+  const cards = data.cards || {
+    roll_out: {
+      key: 'roll_out',
+      title: 'Roll Out',
+      available: !!data.candidates?.find(c => c.branch === 'out' || c.same_strike),
+      summary: data.candidates?.find(c => c.branch === 'out' || c.same_strike)
+        ? `K$${data.candidates.find(c => c.branch === 'out' || c.same_strike)!.strike}`
+        : '无候选(需 OpenD 拉链)',
+      candidate: data.candidates?.find(c => c.branch === 'out' || c.same_strike) || null,
+      blurb: '同 strike 换更远到期',
+    },
+    adjust_strike: {
+      key: 'adjust_strike',
+      title: '调 strike',
+      available: !!data.candidates?.find(c => c.branch && c.branch !== 'out'),
+      summary: data.candidates?.find(c => c.branch && c.branch !== 'out')
+        ? `K$${data.candidates.find(c => c.branch && c.branch !== 'out')!.strike}`
+        : '无候选(需 OpenD 拉链)',
+      candidate: data.candidates?.find(c => c.branch && c.branch !== 'out') || null,
+      blurb: 'Call 上移 / Put 下移',
+    },
+    no_roll: {
+      key: 'no_roll',
+      title: '不 Roll',
+      available: true,
+      options: {
+        close_now: {
+          action: 'close_now',
+          buyback_cost_per_contract: (data.current.buyback_ask || 0) * (data.current.contract_size || 100),
+          when: '浮盈达标或需要资金时',
+        },
+        let_expire: { action: 'let_expire', buyback_cost_per_contract: 0, when: 'OTM 临期可持有' },
+      },
+      recommended_sub: 'close_now',
+    },
+  }
+  const hl = data.highlighted_card || (data.candidates?.length ? 'roll_out' : 'no_roll')
+  const cardOrder: Array<'roll_out' | 'adjust_strike' | 'no_roll'> = ['roll_out', 'adjust_strike', 'no_roll']
+  const decision = data.decision || {
+    headline: data.candidates?.length
+      ? '已加载 Roll 候选,请在下方三卡片中选择'
+      : '暂无链上候选 — 先看「不 Roll」建议,或启动 OpenD 后刷新',
+    detail: '主界面是三张决策卡;明细表默认折叠,仅作备选浏览',
+    profit_pct: data.current.profit_pct,
+    remaining_annualized: data.current.remaining_annualized,
+    itm: data.current.itm,
+    deep_itm: false,
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#0009', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-      <div className="modal-card" style={{ width: 640, maxWidth: '100%', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>Roll 对比 — {data.symbol} {data.side}</h3>
-        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-          当前 ${fmt(data.current.strike)} {data.current.expiry}(DTE {data.current.dte ?? '--'}) ·
-          开仓 ${fmt(data.current.open_price)} · 买回约 ${fmt(data.current.buyback_ask)} · δ{data.current.delta}
+      <div className="modal-card" style={{ width: 780, maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 16 }}>Roll 决策台 — {data.symbol} {data.side}</h3>
+        <div style={{ fontSize: 11, color: C.blue, marginBottom: 10, fontWeight: 600 }}>
+          ① 顶部结论 → ② 三张决策卡(主) → ③ 需要时再展开明细表
         </div>
+
+        {/* 顶部场景结论 — 始终显示 */}
+        <div style={{
+          marginBottom: 12, padding: '10px 12px', borderRadius: 8,
+          border: `1px solid ${decision.itm ? C.orange : C.blue}55`,
+          background: (decision.itm ? C.orange : C.blue) + '14',
+        }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>{decision.headline}</div>
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{decision.detail}</div>
+          <div style={{ fontSize: 11, marginTop: 6, color: 'var(--text-secondary)' }}>
+            浮盈 {decision.profit_pct != null ? `${decision.profit_pct}%` : '--'}
+            {' · '}剩余年化 {decision.remaining_annualized != null ? `${decision.remaining_annualized}%` : '--'}
+            {' · '}{decision.itm ? (decision.deep_itm ? '深度 ITM' : 'ITM') : 'OTM'}
+            {' · '}DTE {data.current.dte ?? '--'} · δ{data.current.delta}
+            {data.spot_price != null && <> · 现价 ${fmt(data.spot_price)}</>}
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+          当前 K${fmt(data.current.strike)} {data.current.expiry}
+          {' · '}开仓 ${fmt(data.current.open_price)}
+          {' · '}买回 bid/ask ${fmt(data.current.buyback_bid)}/{fmt(data.current.buyback_ask)}
+        </div>
+
+        {/* 硬约束 */}
+        <div style={{ fontSize: 11, marginBottom: 10, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {data.side === 'CALL' && data.strike_floor?.call_min_strike != null && (
+            <span style={{ color: C.green, fontWeight: 600 }}>
+              硬底线 CALL strike ≥ 成本 ${fmt(data.strike_floor.call_min_strike)}（低于成本已全部过滤）
+            </span>
+          )}
+          {data.side === 'PUT' && data.strike_floor?.put_max_strike != null && (
+            <span style={{ color: C.green, fontWeight: 600 }}>
+              硬上限 PUT strike ≤ floor ${fmt(data.strike_floor.put_max_strike)}
+            </span>
+          )}
+          {data.delta_filter && (
+            <span style={{ color: C.blue }}>
+              δ {data.delta_filter.preferred[0].toFixed(2)}~{data.delta_filter.preferred[1].toFixed(2)}
+              （目标 {data.delta_filter.target[0]}~{data.delta_filter.target[1]}）
+              {data.liquidity && ` · 点差≤${data.liquidity.max_spread_pct}%`}
+            </span>
+          )}
+          {data.events?.earnings_date && (
+            <span style={{ color: C.orange }}>财报 {data.events.earnings_date}</span>
+          )}
+          {data.events?.dividend?.date && (
+            <span style={{ color: C.orange }}>除息 {data.events.dividend.date}</span>
+          )}
+        </div>
+
+        {/* 工具条 */}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, fontSize: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="checkbox" checked={allowDown} onChange={e => {
+              const v = e.target.checked
+              setAllowDown(v)
+              reload(v)
+            }} />
+            允许不利方向调 strike
+          </label>
+          <span style={{ color: 'var(--text-secondary)' }}>报价情景</span>
+          {(['default', 'conservative', 'optimistic'] as const).map(m => (
+            <button key={m} type="button" className="btn" style={{
+              fontSize: 11, padding: '2px 8px',
+              borderColor: pricingMode === m ? C.blue : undefined,
+              color: pricingMode === m ? C.blue : undefined,
+            }} onClick={() => {
+              setPricingMode(m)
+              if (cand?.pricing?.[m]) {
+                setBuyback(String(cand.pricing[m].close_price))
+                setNewPrice(String(cand.pricing[m].open_price))
+              }
+            }}>{m === 'default' ? '默认 ask/bid' : m === 'conservative' ? '保守' : '乐观 mid'}</button>
+          ))}
+          <button className="btn" style={{ fontSize: 11, padding: '2px 8px' }} disabled={reloading} onClick={() => reload()}>
+            {reloading ? '刷新中…' : '刷新'}
+          </button>
+        </div>
+        {data.pricing_legend && (
+          <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 10 }}>
+            默认={data.pricing_legend.default} · 保守={data.pricing_legend.conservative} · 乐观={data.pricing_legend.optimistic}
+          </div>
+        )}
+
         {err && <div className="alert alert-error" style={{ marginBottom: 10 }}>{err}</div>}
         {(data.warnings?.length ?? 0) > 0 && (
           <div style={{ marginBottom: 10, padding: '6px 10px', background: '#fb923c11', border: '1px solid #fb923c55', borderRadius: 6, fontSize: 12, color: '#fb923c' }}>
@@ -3380,52 +2335,199 @@ function RollModal({ data, onClose, onSaved }: {
           </div>
         )}
 
-        {data.candidates.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '10px 0' }}>
-            没有找到相近 delta 的下期合约(可先手动平仓,再用助手找新合约)
+        {/* 三卡片 — 主界面 */}
+        <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>三张决策卡</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 14 }}>
+          {cardOrder.map(key => {
+            const card = cards[key]
+            if (!card) return null
+            const active = hl === key
+            const isNoRoll = key === 'no_roll'
+            return (
+              <div key={key} style={{
+                padding: 12, borderRadius: 8,
+                border: `2px solid ${active ? C.blue : 'var(--border)'}`,
+                background: active ? C.blue + '12' : 'var(--bg-secondary)',
+                opacity: card.available === false && !isNoRoll ? 0.65 : 1,
+              }}>
+                <div style={{ fontSize: 11, color: active ? C.blue : 'var(--text-secondary)', fontWeight: 700, marginBottom: 4 }}>
+                  {active ? '★ 推荐 · ' : ''}{card.title}
+                </div>
+                {card.blurb && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>{card.blurb}</div>}
+                {isNoRoll && card.options ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {(['close_now', 'let_expire'] as const).map(sub => {
+                      const opt = card.options![sub]
+                      if (!opt) return null
+                      const rec = card.recommended_sub === sub
+                      return (
+                        <div key={sub} style={{
+                          padding: 8, borderRadius: 6, fontSize: 11,
+                          border: `1px solid ${rec ? C.green : 'var(--border)'}`,
+                          background: rec ? C.green + '12' : 'transparent',
+                        }}>
+                          <div style={{ fontWeight: 700 }}>{sub === 'close_now' ? '止盈/平仓' : '放任到期'}{rec ? ' · 建议' : ''}</div>
+                          <div>成本 ${fmt(opt.buyback_cost_per_contract, 0)}/张
+                            {opt.locked_premium_est != null && ` · 锁定约 $${fmt(opt.locked_premium_est, 0)}`}</div>
+                          <div style={{ color: 'var(--text-secondary)' }}>{opt.when}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : card.available && card.candidate ? (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>{card.summary}</div>
+                    <div style={{ fontSize: 11, marginBottom: 4 }}>
+                      {(card.pros || []).slice(0, 2).map((p, i) => <div key={i} style={{ color: C.green }}>✓ {p}</div>)}
+                      {(card.cons || []).slice(0, 2).map((p, i) => <div key={i} style={{ color: C.orange }}>· {p}</div>)}
+                    </div>
+                    {card.candidate.preview && (
+                      <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                        预览: 新K{String(card.candidate.preview.new_strike)} · DTE{String(card.candidate.preview.new_dte)}
+                        {card.candidate.new_cost_basis_est != null && ` · 新成本≈$${fmt(card.candidate.new_cost_basis_est)}`}
+                        {card.candidate.if_called_total != null && ` · 被call≈$${fmt(card.candidate.if_called_total, 0)}`}
+                      </div>
+                    )}
+                    <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 10px', width: '100%' }}
+                      onClick={() => pickCandidate(card.candidate!)}>
+                      选用此方案
+                    </button>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{card.summary || '无候选'}</div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* 同 strike 高亮 */}
+        {(data.same_strike_highlights?.length ?? 0) > 0 && (
+          <div style={{ marginBottom: 12, fontSize: 12 }}>
+            <span style={{ fontWeight: 600, marginRight: 8 }}>同 strike Roll out:</span>
+            {data.same_strike_highlights!.map(c => (
+              <button key={c.contract_code} type="button" className="btn" style={{ fontSize: 11, padding: '2px 8px', marginRight: 6 }}
+                onClick={() => pickCandidate(c)}>
+                {String(c.expiry).slice(0, 10)} δ{c.delta ?? '—'} net {c.net_credit_per_contract >= 0 ? '+' : ''}{fmt(c.net_credit_per_contract, 0)}
+              </button>
+            ))}
           </div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 12 }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['', '合约编号', 'Strike', '到期', 'DTE', 'δ', 'Bid', '净收权利金/张', '新仓年化%'].map(h => (
-                  <th key={h} style={{ textAlign: 'left', padding: '5px 8px' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.candidates.map(c => (
-                <tr key={c.contract_code} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
-                  onClick={() => { setSelected(c.contract_code); setNewPrice(String(c.bid)) }}>
-                  <td style={{ padding: '6px 8px' }}>
-                    <input type="radio" checked={selected === c.contract_code} readOnly />
-                  </td>
-                  <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>{c.contract_code}</td>
-                  <td style={{ padding: '6px 8px', fontWeight: 600 }}>${fmt(c.strike)}</td>
-                  <td style={{ padding: '6px 8px' }}>{c.expiry}</td>
-                  <td style={{ padding: '6px 8px' }}>{c.dte}</td>
-                  <td style={{ padding: '6px 8px' }}>{c.delta}</td>
-                  <td style={{ padding: '6px 8px' }}>${fmt(c.bid)}</td>
-                  <td style={{ padding: '6px 8px', fontWeight: 700, color: c.net_credit_per_contract >= 0 ? '#4ade80' : '#f87171' }}>
-                    {c.net_credit_per_contract >= 0 ? '+' : ''}{fmt(c.net_credit_per_contract, 0)}
-                  </td>
-                  <td style={{ padding: '6px 8px' }}>{c.annualized != null ? fmt(c.annualized, 1) : '--'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         )}
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, marginBottom: 14 }}>
+        {/* 明细表折叠 — 默认收起,不是主界面 */}
+        <div style={{ marginBottom: 12, paddingTop: 8, borderTop: '1px dashed var(--border)' }}>
+          <button type="button" className="btn" style={{ fontSize: 11, padding: '2px 10px' }}
+            onClick={() => setShowTable(s => !s)}>
+            {showTable ? '收起明细表' : `备选：展开候选明细表 (${data.candidates?.length || 0})`}
+          </button>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 8 }}>
+            明细仅供挑合约,优先用上面三张卡
+          </span>
+        </div>
+        {showTable && (
+          data.candidates.length === 0 ? (
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '10px 0' }}>
+              没有符合成本/δ/流动性的候选
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, marginBottom: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                  {['', '档', '分支', 'Strike', '到期', 'DTE', 'δ', '点差%', 'default净', '保守净', '$/天', '年化', 'OI', ''].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '4px 6px' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.candidates.map(c => {
+                  const pr = c.pricing?.[pricingMode]
+                  const net = pr?.net_credit_per_contract ?? c.net_credit_per_contract
+                  return (
+                    <tr key={c.contract_code} style={{
+                      borderBottom: '1px solid var(--border)', cursor: 'pointer',
+                      background: selected === c.contract_code ? C.blue + '18' : undefined,
+                    }} onClick={() => pickCandidate(c)}>
+                      <td style={{ padding: '4px 6px' }}><input type="radio" checked={selected === c.contract_code} readOnly /></td>
+                      <td style={{ padding: '4px 6px', color: c.band === 'preferred' ? C.green : C.orange }}>
+                        {c.same_strike ? '同K' : c.band === 'preferred' ? '优' : '宽'}
+                      </td>
+                      <td style={{ padding: '4px 6px', color: C.purple }}>{c.branch}</td>
+                      <td style={{ padding: '4px 6px', fontWeight: 600 }}>${fmt(c.strike)}</td>
+                      <td style={{ padding: '4px 6px' }}>{String(c.expiry).slice(0, 10)}</td>
+                      <td style={{ padding: '4px 6px' }}>{c.dte}</td>
+                      <td style={{ padding: '4px 6px' }}>{c.delta ?? '—'}</td>
+                      <td style={{ padding: '4px 6px', color: (c.spread_pct ?? 0) > 8 ? C.orange : undefined }}>{c.spread_pct ?? '—'}</td>
+                      <td style={{ padding: '4px 6px', fontWeight: 700, color: net >= 0 ? C.green : C.red }}>
+                        {net >= 0 ? '+' : ''}{fmt(net, 0)}
+                      </td>
+                      <td style={{ padding: '4px 6px', color: (c.net_credit_conservative ?? 0) >= 0 ? C.green : C.red }}>
+                        {c.net_credit_conservative != null ? `${c.net_credit_conservative >= 0 ? '+' : ''}${fmt(c.net_credit_conservative, 0)}` : '—'}
+                      </td>
+                      <td style={{ padding: '4px 6px' }}>{c.credit_per_day ?? '—'}</td>
+                      <td style={{ padding: '4px 6px' }}>{c.annualized != null ? fmt(c.annualized, 1) : '—'}</td>
+                      <td style={{ padding: '4px 6px' }}>{c.open_interest ?? '—'}</td>
+                      <td style={{ padding: '4px 6px', fontSize: 10 }}>
+                        {c.covers_earnings && <span style={{ color: C.orange }}>财报 </span>}
+                        {c.covers_dividend && <span style={{ color: C.orange }}>除息</span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )
+        )}
+
+        {/* 限价建议 + 登记 */}
+        {cand && (
+          <div style={{
+            marginBottom: 12, padding: 10, borderRadius: 8, border: '1px solid var(--border)',
+            background: 'var(--bg-secondary)', fontSize: 12,
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              已选: K${fmt(cand.strike)} {String(cand.expiry).slice(0, 10)} δ{cand.delta ?? '—'} · {cand.branch}
+            </div>
+            {cand.limit_hints && (
+              <div style={{ fontSize: 11, color: C.blue, marginBottom: 6 }}>
+                富途限价建议: 平仓买 {cand.limit_hints.close_limit} / 开仓卖 {cand.limit_hints.open_limit}
+                （净目标 {cand.limit_hints.net_credit_target >= 0 ? '+' : ''}{cand.limit_hints.net_credit_target}/股）
+              </div>
+            )}
+            {cand.preview && (
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                Roll 后预览: 新成本≈{cand.new_cost_basis_est != null ? `$${fmt(cand.new_cost_basis_est)}` : '—'}
+                {cand.if_called_total != null && ` · 若被 call 估 $${fmt(cand.if_called_total, 0)}`}
+                {cand.if_assigned_cost != null && ` · 若接货成本 $${fmt(cand.if_assigned_cost)}`}
+                {' · '}效率 {cand.credit_per_day ?? '—'}$/天
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, marginBottom: 10 }}>
           <label>买回价 <input type="number" style={inputStyle} value={buyback} onChange={e => setBuyback(e.target.value)} /></label>
           <label>新卖价 <input type="number" style={inputStyle} value={newPrice} onChange={e => setNewPrice(e.target.value)} /></label>
           <label>手续费/腿 <input type="number" style={inputStyle} value={fee} onChange={e => setFee(e.target.value)} /></label>
           {netCredit != null && (
-            <span>本次 Roll 净{parseFloat(netCredit) >= 0 ? '收' : '付'} <b style={{ color: parseFloat(netCredit) >= 0 ? '#4ade80' : '#f87171' }}>${netCredit}</b>/张</span>
+            <span>本次净{parseFloat(netCredit) >= 0 ? '收' : '付'} <b style={{ color: parseFloat(netCredit) >= 0 ? C.green : C.red }}>${netCredit}</b>
+              {qty !== 1 ? ` (${qty}张)` : '/张'}</span>
           )}
         </div>
+
+        {/* Roll 历史 */}
+        {(data.roll_history?.length ?? 0) > 0 && (
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
+            <b>历史 Roll:</b>{' '}
+            {data.roll_history!.map((h, i) => (
+              <span key={i} style={{ marginRight: 10 }}>
+                {h.date} K{h.close_strike}→{h.open_strike} {h.net_credit >= 0 ? '+' : ''}{fmt(h.net_credit, 0)}
+              </span>
+            ))}
+          </div>
+        )}
+
         <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
-          在富途完成两笔交易后,按实际成交价修改上方数值再点登记;将在同一轮内记两条腿(买回+卖出)
+          在富途按限价建议完成两笔后,按实际成交价改数字再登记;同一 cycle 记买回+卖出两腿
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button className="btn" onClick={onClose}>取消</button>
@@ -3539,23 +2641,23 @@ function EditTradeModal({ trade, onClose, onSaved }: {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               张数
-              <SelectNum value={form.qty} options={QTY_CONTRACT_OPTS} style={inputStyle}
-                onChange={v => setForm(f => ({ ...f, qty: v }))} />
+              <input type="number" value={form.qty} style={inputStyle}
+                onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
             </label>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               价格
-              <input type="number" step="any" value={form.price} style={inputStyle}
+              <input type="number" value={form.price} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
             </label>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               手续费
-              <SelectNum value={form.fee} options={FEE_OPTS} style={inputStyle}
-                onChange={v => setForm(f => ({ ...f, fee: v }))} />
+              <input type="number" value={form.fee} style={inputStyle}
+                onChange={e => setForm(f => ({ ...f, fee: e.target.value }))} />
             </label>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               合约乘数
-              <SelectNum value={form.contract_size} options={CONTRACT_SIZE_OPTS} style={inputStyle}
-                onChange={v => setForm(f => ({ ...f, contract_size: v }))} />
+              <input type="number" value={form.contract_size} style={inputStyle}
+                onChange={e => setForm(f => ({ ...f, contract_size: e.target.value }))} />
             </label>
           </div>
           <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
@@ -3585,6 +2687,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({
     floor_price: String(target.floor_price),
+    max_capital: String(target.max_capital ?? 0),
     delta_min: String(target.delta_min), delta_max: String(target.delta_max),
     dte_min: String(target.dte_min), dte_max: String(target.dte_max),
     min_annualized: String(target.min_annualized),
@@ -3602,6 +2705,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
     try {
       await updateWheelTarget(target.symbol, {
         floor_price: parseFloat(form.floor_price),
+        max_capital: parseFloat(form.max_capital) || 0,
         delta_min: parseFloat(form.delta_min), delta_max: parseFloat(form.delta_max),
         dte_min: parseInt(form.dte_min), dte_max: parseInt(form.dte_max),
         min_annualized: parseFloat(form.min_annualized),
@@ -3622,6 +2726,9 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
           <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 6 }}>{target.name}</span>
         </td>
         <td style={{ padding: '8px 10px' }}>${fmt(target.floor_price)}</td>
+        <td style={{ padding: '8px 10px' }}>
+          {(target.max_capital ?? 0) > 0 ? `$${fmt(target.max_capital)}` : <span style={{ color: 'var(--text-secondary)' }}>未设</span>}
+        </td>
         <td style={{ padding: '8px 10px' }}>{target.delta_min} ~ {target.delta_max}</td>
         <td style={{ padding: '8px 10px' }}>{target.dte_min} ~ {target.dte_max} 天</td>
         <td style={{ padding: '8px 10px' }}>{target.min_annualized}</td>
@@ -3644,30 +2751,28 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
       <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 11 }}>{err}</div>}</td>
       <td style={{ padding: '8px 10px' }}>
-        <input type="number" step="any" style={inputStyle} value={form.floor_price}
-          onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))} title="接货底线按个股填写" />
+        <input type="number" style={inputStyle} value={form.floor_price} onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))} />
       </td>
       <td style={{ padding: '8px 10px' }}>
-        <SelectNum value={form.delta_min} options={DELTA_OPTS} style={inputStyle}
-          onChange={v => setForm(f => ({ ...f, delta_min: v }))} />
+        <input type="number" style={{ ...inputStyle, width: 88 }} value={form.max_capital}
+          title="该标的最大占用资金(0=不限)"
+          onChange={e => setForm(f => ({ ...f, max_capital: e.target.value }))} />
+      </td>
+      <td style={{ padding: '8px 10px' }}>
+        <input type="number" step="0.05" style={inputStyle} value={form.delta_min} onChange={e => setForm(f => ({ ...f, delta_min: e.target.value }))} />
         {' ~ '}
-        <SelectNum value={form.delta_max} options={DELTA_OPTS} style={inputStyle}
-          onChange={v => setForm(f => ({ ...f, delta_max: v }))} />
+        <input type="number" step="0.05" style={inputStyle} value={form.delta_max} onChange={e => setForm(f => ({ ...f, delta_max: e.target.value }))} />
       </td>
       <td style={{ padding: '8px 10px' }}>
-        <SelectNum value={form.dte_min} options={DTE_OPTS} style={inputStyle}
-          onChange={v => setForm(f => ({ ...f, dte_min: v }))} />
+        <input type="number" style={inputStyle} value={form.dte_min} onChange={e => setForm(f => ({ ...f, dte_min: e.target.value }))} />
         {' ~ '}
-        <SelectNum value={form.dte_max} options={DTE_OPTS} style={inputStyle}
-          onChange={v => setForm(f => ({ ...f, dte_max: v }))} />
+        <input type="number" style={inputStyle} value={form.dte_max} onChange={e => setForm(f => ({ ...f, dte_max: e.target.value }))} />
       </td>
       <td style={{ padding: '8px 10px' }}>
-        <SelectNum value={form.min_annualized} options={ANN_OPTS} style={inputStyle}
-          onChange={v => setForm(f => ({ ...f, min_annualized: v }))} />
+        <input type="number" style={inputStyle} value={form.min_annualized} onChange={e => setForm(f => ({ ...f, min_annualized: e.target.value }))} />
       </td>
       <td style={{ padding: '8px 10px' }}>
-        <SelectNum value={form.min_open_interest} options={OI_OPTS} style={inputStyle}
-          onChange={v => setForm(f => ({ ...f, min_open_interest: v }))} />
+        <input type="number" style={inputStyle} value={form.min_open_interest} onChange={e => setForm(f => ({ ...f, min_open_interest: e.target.value }))} />
       </td>
       <td style={{ padding: '8px 10px' }}></td>
       <td style={{ padding: '8px 10px' }}>

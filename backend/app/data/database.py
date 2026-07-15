@@ -711,6 +711,40 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_trades_cycle ON wheel_trades(cycle_id, traded_at)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_wheel_trades_symbol ON wheel_trades(symbol, traded_at)")
 
+    # Wheel 扫描建议快照(归因/复盘)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_suggestion_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scanned_at TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # 事件封锁日(财报外的手动 block: FOMC/拆分等)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_event_blocks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT,
+            event_date TEXT NOT NULL,
+            label TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # 兼容旧库:wheel_targets 增补行业/标签;cycles 增补入场分
+    for ddl in [
+        "ALTER TABLE wheel_targets ADD COLUMN sector TEXT",
+        "ALTER TABLE wheel_targets ADD COLUMN tags TEXT",
+        "ALTER TABLE wheel_cycles ADD COLUMN entry_score REAL",
+        "ALTER TABLE wheel_cycles ADD COLUMN entry_meta TEXT",
+        "ALTER TABLE wheel_trades ADD COLUMN is_roll INTEGER DEFAULT 0",
+    ]:
+        try:
+            cursor.execute(ddl)
+        except Exception:
+            pass
+
     seed_demo_strategies(conn)
     conn.commit()
     conn.close()

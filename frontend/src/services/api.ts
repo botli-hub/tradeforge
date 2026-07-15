@@ -549,13 +549,6 @@ export interface WheelStats {
     closed_cycles: number; first_trade: string; active_days: number | null
   }[]
   capital?: WheelCapital
-  /** 近30日触线信号 → 同合约卖出登记转化 */
-  conversion?: {
-    signal_count_30d: number
-    converted_30d: number
-    rate_pct: number
-    avg_signal_to_trade_hours: number | null
-  }
 }
 
 export interface WheelSuggestion {
@@ -566,27 +559,27 @@ export interface WheelSuggestion {
   delta: number
   bid: number
   ask: number | null
+  premium_used?: number
+  premium_pricing?: string
   iv: number | null
   open_interest: number
   volume: number
   contract_size: number
   annualized: number
+  annualized_cash?: number
   annualized_margin?: number | null
   spread_pct?: number | null
   covers_earnings?: boolean
+  pop?: number
+  ev_pct?: number | null
+  robust_score?: number
+  buffer_atr?: number | null
+  limit_price_hint?: number
   otm_pct: number
   assigned_cost?: number
   if_called_total?: number
   score?: number
-  score_factors?: {
-    annualized: number
-    liquidity: number
-    spread_pct: number | null
-    earnings: number
-    trend: number
-    iv_bonus: number
-    delta_pref: number
-  }
+  score_factors?: Record<string, number | null>
 }
 
 export interface TrendProfile {
@@ -622,13 +615,37 @@ export interface WheelSuggestResponse {
   suggestions: WheelSuggestion[]
   message?: string
   volatility?: VolatilityProfile | null
+  term_structure?: {
+    shape?: string | null
+    term_spread?: number | null
+    near?: { expiry?: string; dte?: number; atm_iv?: number }
+    next?: { expiry?: string; dte?: number; atm_iv?: number }
+    hint?: string | null
+  } | null
+  skew?: {
+    put_skew?: number | null
+    call_skew?: number | null
+    warn?: string | null
+  } | null
   margin_ratio?: number
   earnings_date?: string | null
   days_to_earnings?: number | null
   earnings_warn?: boolean
+  earnings_filtered_count?: number
+  dividend_warn?: { date: string; days_to_ex: number; amount?: number } | null
   delta_preference?: string | null
   trend?: TrendProfile | null
   trend_warning?: string | null
+  headroom_ratio?: number | null
+  floor_suggest?: {
+    suggested_floor: number
+    current_floor?: number
+    rationale?: string
+  } | null
+  call_anchors?: {
+    anchors: { label: string; strike: number; note: string }[]
+    tip?: string
+  } | null
 }
 
 export interface WheelOpenPositionItem {
@@ -650,12 +667,15 @@ export interface WheelOpenPositionItem {
   deep_itm?: boolean
   early_assign_risk?: boolean
   action_hint?: string | null
+  action_priority?: number
   reasons?: string[]
   profit_pct: number | null
   spot: number
   itm: boolean
   profit_hit: boolean
   expiring: boolean
+  dividend_warn?: { date: string; days_to_ex: number } | null
+  decision_tree?: Record<string, unknown>
 }
 
 export async function checkWheelOpenPositions(host: string, port: number) {
@@ -664,21 +684,131 @@ export async function checkWheelOpenPositions(host: string, port: number) {
   )
 }
 
+export interface WheelRollPricing {
+  close_price: number
+  open_price: number
+  net_credit_per_share: number
+  net_credit_per_contract: number
+}
+
 export interface WheelRollCandidate {
   contract_code: string
   expiry: string
   dte: number
   strike: number
-  delta: number
+  delta: number | null
   bid: number
+  ask?: number
+  spread_pct?: number | null
+  open_interest?: number
   net_credit_per_contract: number
+  net_credit_conservative?: number
+  credit_per_day?: number
   annualized: number | null
+  branch?: string
+  band?: 'preferred' | 'wide' | 'fallback' | string
+  same_strike?: boolean
+  worse_direction?: boolean
+  rank_score?: number
+  pricing?: {
+    optimistic: WheelRollPricing
+    default: WheelRollPricing
+    conservative: WheelRollPricing
+  }
+  if_called_total?: number | null
+  if_assigned_cost?: number | null
+  new_cost_basis_est?: number | null
+  covers_earnings?: boolean
+  covers_dividend?: boolean
+  limit_hints?: {
+    close_limit: number
+    open_limit: number
+    net_credit_target: number
+    note?: string
+  }
+  preview?: Record<string, unknown>
+  draft_legs?: {
+    trade_type: string
+    contract_code?: string
+    strike?: number
+    expiry?: string
+    qty?: number
+    price?: number
+    is_roll?: boolean
+  }[]
+}
+
+export interface WheelRollCard {
+  key: string
+  title: string
+  available?: boolean
+  blurb?: string
+  summary?: string
+  candidate?: WheelRollCandidate | null
+  pros?: string[]
+  cons?: string[]
+  options?: {
+    close_now?: {
+      action: string
+      buyback_cost_per_contract?: number
+      locked_premium_est?: number | null
+      pros?: string[]
+      cons?: string[]
+      when?: string
+    }
+    let_expire?: {
+      action: string
+      buyback_cost_per_contract?: number
+      pros?: string[]
+      cons?: string[]
+      when?: string
+    }
+  }
+  recommended_sub?: string
 }
 
 export interface WheelRollOptions {
   cycle_id: string
   symbol: string
   side: 'PUT' | 'CALL'
+  spot_price?: number | null
+  qty?: number
+  allow_down_strike?: boolean
+  decision?: {
+    headline?: string
+    detail?: string
+    recommended_action?: string
+    scenario?: string
+    prefer_card?: string
+    profit_pct?: number | null
+    remaining_annualized?: number | null
+    itm?: boolean
+    deep_itm?: boolean
+  }
+  cards?: {
+    roll_out?: WheelRollCard
+    adjust_strike?: WheelRollCard
+    no_roll?: WheelRollCard
+  }
+  highlighted_card?: string
+  default_candidate?: WheelRollCandidate | null
+  strike_floor?: {
+    call_min_strike?: number | null
+    cost_basis?: number | null
+    share_cost?: number | null
+    put_max_strike?: number | null
+    rule?: string
+  }
+  delta_filter?: {
+    mode: string
+    preferred: [number, number]
+    target: [number, number]
+    hard_max: number
+    current_delta: number
+  }
+  liquidity?: { max_spread_pct: number; min_oi: number }
+  events?: { earnings_date?: string | null; dividend?: { date?: string; amount?: number } | null }
+  pricing_legend?: Record<string, string>
   current: {
     contract_code: string
     strike: number
@@ -686,11 +816,33 @@ export interface WheelRollOptions {
     dte: number | null
     open_price: number
     buyback_ask: number
+    buyback_bid?: number
     delta: number
     contract_size: number
+    cost_basis?: number | null
+    share_cost?: number | null
+    shares?: number
+    profit_pct?: number | null
+    remaining_annualized?: number | null
+    itm?: boolean
   }
   candidates: WheelRollCandidate[]
+  debit_candidates?: WheelRollCandidate[]
+  branches?: Record<string, WheelRollCandidate[]>
+  same_strike_highlights?: WheelRollCandidate[]
+  roll_history?: {
+    date: string
+    net_credit: number
+    close_strike?: number
+    open_strike?: number
+    open_expiry?: string
+  }[]
+  alternatives?: {
+    let_expire?: { buyback_cost_per_contract?: number; when?: string; pros?: string[] }
+    close_now?: { buyback_cost_per_contract?: number; locked_premium_est?: number | null; when?: string }
+  }
   warnings?: string[]
+  skipped_counts?: Record<string, number>
 }
 
 // ── 后端配置(存本地数据库,含敏感信息) ─────────────────────────────────────────
@@ -708,19 +860,18 @@ export interface BackendConfig {
     iv_percentile_threshold: number
     cooldown_trading_days: number
     auto_scan_minutes: number
-    /** true=每标的使用标的设置的 dte_min/max(±pad),减少宽窗口噪音 */
-    align_target_dte?: boolean
-    dte_pad_days?: number
-    /** TG 仅推强信号(EMA200 或 IVR≥阈值) */
-    push_min_iv_rank?: number
-    push_strong_only?: boolean
   }
   wheel_position: {
     profit_target_pct: number
     margin_ratio: number
     earnings_warn_days: number
     weekly_report: boolean
-    notify_mode?: 'realtime' | 'digest'
+    soft_profit_pct?: number
+    hard_roll_dte?: number
+    gamma_warn_dte?: number
+    hold_theta_min_profit_pct?: number
+    dividend_warn_days?: number
+    alert_push_minutes?: number
   }
   wheel_scan?: {
     max_spread_pct: number
@@ -734,8 +885,24 @@ export interface BackendConfig {
     chain_cache_ttl_sec: number
     symbol_interval_sec: number
     auto_push_minutes: number
-    /** TG 推送条数(默认3) */
-    telegram_top_n?: number
+    earnings_hard_filter?: boolean
+    premium_pricing?: 'mid' | 'bid'
+    pop_weight?: number
+    buffer_atr_min?: number
+    buffer_weight?: number
+    headroom_boost?: number
+    sort_mode?: 'score' | 'robust'
+    log_suggestions?: boolean
+  }
+  wheel_portfolio?: {
+    total_equity?: number
+    max_portfolio_pct?: number
+    max_symbol_pct?: number
+    high_corr_threshold?: number
+  }
+  wheel_profiles?: {
+    active?: string
+    presets?: Record<string, unknown>
   }
 }
 
@@ -751,10 +918,21 @@ export async function saveBackendConfig(body: Partial<BackendConfig>) {
   })
 }
 
-export async function getWheelRollOptions(cycleId: string, host: string, port: number) {
-  return request<WheelRollOptions>(
-    `/api/wheel/roll-options?cycle_id=${encodeURIComponent(cycleId)}&host=${encodeURIComponent(host)}&port=${port}`
-  )
+export async function getWheelRollOptions(
+  cycleId: string,
+  host: string,
+  port: number,
+  opts?: { allow_down_strike?: boolean; max_spread_pct?: number; qty?: number },
+) {
+  const qs = new URLSearchParams({
+    cycle_id: cycleId,
+    host,
+    port: String(port),
+  })
+  if (opts?.allow_down_strike) qs.set('allow_down_strike', 'true')
+  if (opts?.max_spread_pct != null) qs.set('max_spread_pct', String(opts.max_spread_pct))
+  if (opts?.qty != null) qs.set('qty', String(opts.qty))
+  return request<WheelRollOptions>(`/api/wheel/roll-options?${qs}`)
 }
 
 export async function getWheelTargets() {
@@ -879,6 +1057,109 @@ export async function getWheelPoolScan(host: string, port: number, refresh = fal
   )
 }
 
+/** 统一可交易机会流(触线+打分合流) */
+export type OppFilter = 'actionable' | 'all' | 'dual' | 'timing' | 'score' | 'watch' | 'blocked'
+
+export interface WheelOpportunity {
+  id: string
+  source: 'dual' | 'timing' | 'score' | string
+  grade: 'dual' | 'timing' | 'score' | 'watch' | 'blocked' | string
+  actionable: boolean
+  symbol: string
+  side: 'PUT' | 'CALL' | string
+  contract_code?: string | null
+  strike?: number | null
+  expiry?: string | null
+  dte?: number | null
+  delta?: number | null
+  bid?: number | null
+  premium_used?: number | null
+  spread_pct?: number | null
+  annualized?: number | null
+  score?: number | null
+  score_factors?: Record<string, number | null>
+  pop?: number | null
+  iv_rank?: number | null
+  trend?: string | null
+  covers_earnings?: boolean
+  exceeds_capital?: boolean
+  flags?: string[]
+  timing?: {
+    ema_type?: string | null
+    ema_value?: number | null
+    trigger_price?: number | null
+    strength?: 'STRONG' | 'READY' | 'WATCH' | string
+    times_triggered?: number
+    last_seen?: string
+    below_floor?: boolean
+  } | null
+  cycle_id?: string | null
+  contract_short?: string | null
+  group_size?: number
+  group_rank?: number
+  /** 最近事件时间(触线 last_seen)，后端已按此倒序 */
+  event_at?: string | null
+  context?: {
+    stage?: string
+    headroom?: number | null
+    max_capital?: number
+    committed?: number
+    cost_basis?: number | null
+    floor_price?: number | null
+  }
+}
+
+export interface WheelOpportunitiesResult {
+  built_at: string
+  headline: string
+  summary: {
+    actionable: number
+    actionable_put: number
+    actionable_call: number
+    dual: number
+    watch: number
+    blocked: number
+    total: number
+    idle_slots: number
+    min_score_threshold: number
+  }
+  idle_slots: { symbol: string; headroom?: number | null; stage?: string }[]
+  items: WheelOpportunity[]
+  actionable_items?: WheelOpportunity[]
+  pool?: {
+    scanned_at?: string | null
+    from_cache?: boolean
+    error?: string | null
+    targets_scanned?: number
+    total_found?: number
+  }
+  rules?: Record<string, unknown>
+  filter_applied?: { filter: string; side?: string | null; count: number }
+}
+
+export async function getWheelOpportunities(
+  host: string,
+  port: number,
+  opts?: {
+    refresh?: boolean
+    run_pool?: boolean
+    filter?: OppFilter
+    side?: 'PUT' | 'CALL'
+    hide_blocked?: boolean
+  },
+) {
+  const qs = new URLSearchParams({
+    host,
+    port: String(port),
+    refresh: String(!!opts?.refresh),
+    run_pool: String(opts?.run_pool !== false),
+    filter: opts?.filter || 'actionable',
+    hide_blocked: String(opts?.hide_blocked !== false),
+  })
+  if (opts?.side) qs.set('side', opts.side)
+  return request<WheelOpportunitiesResult>(`/api/wheel/opportunities?${qs}`)
+}
+
 export async function pushWheelPoolScan(host: string, port: number) {
   return request<WheelScanResult>(
     `/api/wheel/scan/push?host=${encodeURIComponent(host)}&port=${port}`,
@@ -983,6 +1264,165 @@ export async function getWheelTimingHistory(page = 1, pageSize = 20, symbol?: st
 
 export async function getWheelTimingSignals(limit = 20) {
   return request<LeapsSignal[]>(`/api/leaps/signals?levels=WHEEL_PUT,WHEEL_CALL&limit=${limit}`)
+}
+
+// ── Wheel 优化:组合/对账/准入/回测/Profile ──────────────────────────────────
+
+export async function getWheelPortfolio(equity?: number) {
+  const qs = equity && equity > 0 ? `?equity=${equity}` : ''
+  return request<{
+    equity: number
+    total_committed: number
+    utilization_pct: number
+    max_portfolio_pct: number
+    over_portfolio: boolean
+    idle_cash: number
+    idle_pct: number
+    per_symbol: {
+      symbol: string
+      committed: number
+      max_capital: number
+      headroom: number | null
+      headroom_ratio: number | null
+      pct_of_equity: number
+      over_symbol_cap: boolean
+      over_symbol_pct: boolean
+    }[]
+    violations: unknown[]
+    assignment_stress: number
+  }>(`/api/wheel/portfolio${qs}`)
+}
+
+export async function getWheelStress(equity?: number) {
+  const qs = equity && equity > 0 ? `?equity=${equity}` : ''
+  return request<{
+    scenarios: {
+      shock_pct: number
+      csp_itm_count: number
+      assign_capital_needed: number
+      total_capital_if_assigned: number
+      itm_positions: { symbol: string; strike: number; assign_cost: number }[]
+    }[]
+    equity_ref: number | null
+    note?: string
+  }>(`/api/wheel/portfolio/stress${qs}`)
+}
+
+export async function getWheelCorrelation() {
+  return request<{
+    symbols: string[]
+    pairs: { a: string; b: string; corr: number }[]
+    high_corr: { a: string; b: string; corr: number }[]
+  }>('/api/wheel/portfolio/correlation')
+}
+
+export async function getWheelAdmission(symbol?: string) {
+  const qs = symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''
+  return request<any>(`/api/wheel/admission${qs}`)
+}
+
+export async function getWheelFloorSuggest(symbol: string) {
+  return request<{
+    suggested_floor: number
+    current_floor?: number
+    spot?: number
+    rationale?: string
+    delta_vs_current?: number | null
+  }>(`/api/wheel/floor-suggest?symbol=${encodeURIComponent(symbol)}`)
+}
+
+export async function getWheelHealth() {
+  return request<{
+    active_cycles: number
+    closed_cycles: number
+    premium_net_total: number
+    realized_pnl_total: number
+    win_rate: number | null
+    avg_duration_days: number | null
+    assign_rate: number | null
+    called_away_rate: number | null
+    symbol_heat: { symbol: string; closed_cycles: number; realized_pnl: number }[]
+    tip?: string
+  }>('/api/wheel/attribution/health')
+}
+
+export async function getWheelReconcile(host: string, port: number, trdEnv = 'SIMULATE') {
+  return request<{
+    ok: boolean
+    error?: string
+    diffs: { type: string; severity: string; message: string; symbol?: string; cycle_id?: string }[]
+    drafts: Record<string, unknown>[]
+    summary: { diff_count: number; draft_count: number; warnings: number }
+    futu?: { option_count: number; stock_count: number; errors: string[] }
+  }>(`/api/wheel/reconcile?host=${encodeURIComponent(host)}&port=${port}&trd_env=${encodeURIComponent(trdEnv)}`)
+}
+
+export async function applyWheelReconcileDraft(body: Record<string, unknown>) {
+  return request('/api/wheel/reconcile/apply-draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function registerWheelRoll(body: {
+  cycle_id: string
+  buyback_price: number
+  sell_contract_code: string
+  sell_strike: number
+  sell_expiry: string
+  sell_price: number
+  qty?: number
+  fee_close?: number
+  fee_open?: number
+  contract_size?: number
+}) {
+  return request<WheelCycle>('/api/wheel/roll/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function runWheelBacktest(symbol: string, params?: Record<string, unknown>) {
+  return request<{
+    ok: boolean
+    error?: string
+    final_equity?: number
+    total_return_pct?: number
+    cagr_pct?: number
+    max_drawdown_pct?: number
+    assign_count?: number
+    trade_count?: number
+    note?: string
+  }>('/api/wheel/backtest', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, params }),
+  })
+}
+
+export async function getWheelProfiles() {
+  return request<{
+    active: string
+    presets: string[]
+    detail: Record<string, unknown>
+  }>('/api/wheel/profiles')
+}
+
+export async function activateWheelProfile(name: string) {
+  return request<{ ok: boolean; active: string }>('/api/wheel/profiles/activate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function pushWheelPositionAlerts(host: string, port: number) {
+  return request<{ sent: boolean; count: number }>(
+    `/api/wheel/alerts/push?host=${encodeURIComponent(host)}&port=${port}`,
+    { method: 'POST' },
+  )
 }
 
 export async function getLeapsSignals(symbol?: string, limit = 50) {
