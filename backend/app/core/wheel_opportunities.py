@@ -57,7 +57,11 @@ def _parse_contract(code: Optional[str]) -> Dict[str, Any]:
 
 
 def _fill_from_code(item: Dict[str, Any]) -> Dict[str, Any]:
-    """用合约码补全空的 strike/expiry/dte/side;有 bid+strike+dte 时补年化。"""
+    """用合约码补全空的 strike/expiry/dte/side;有 bid+strike+dte 时补年化。
+
+    注意: timing.trigger_price 是合约 K 线 last/high(触线点),不是实时 bid。
+    深 ITM 时 last 可接近内在价值(如 89),绝不能当作卖出参考权利金去算年化。
+    """
     parsed = _parse_contract(item.get("contract_code"))
     if item.get("strike") is None and parsed.get("strike") is not None:
         item["strike"] = parsed["strike"]
@@ -67,15 +71,25 @@ def _fill_from_code(item: Dict[str, Any]) -> Dict[str, Any]:
         item["dte"] = parsed["dte"]
     if not item.get("side") and parsed.get("side"):
         item["side"] = parsed["side"]
-    # 年化: 有 bid/premium 与 strike、dte
+    # 年化: 仅用真实 bid / premium_used
     prem = item.get("premium_used") or item.get("bid")
     strike = item.get("strike")
     dte = item.get("dte")
     if item.get("annualized") is None and prem and strike and dte and strike > 0 and dte > 0:
-        item["annualized"] = round(float(prem) / float(strike) * 365 / int(dte) * 100, 2)
+        try:
+            prem_f = float(prem)
+            strike_f = float(strike)
+            # 权利金 > 25% strike 多半是深 ITM last 误入,不算年化以免刷屏
+            if prem_f / strike_f <= 0.25:
+                item["annualized"] = round(prem_f / strike_f * 365 / int(dte) * 100, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
     # 展示用合约简码
     code = item.get("contract_code") or ""
     item["contract_short"] = _norm_code(code) if code else None
+    # 显式标记:有无真实买价(前端/备忘用)
+    bid = item.get("bid")
+    item["has_live_bid"] = bool(bid is not None and float(bid or 0) > 0)
     return item
 
 

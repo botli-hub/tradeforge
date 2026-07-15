@@ -7,6 +7,7 @@ import {
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
   getWheelPoolScan, pushWheelPoolScan, WheelScanResult, WheelScanOpportunity, getBackendConfig,
   getWheelOpportunities, type WheelOpportunitiesResult, type WheelOpportunity,
+  getWheelScanProgress, getWheelContractQuote, type WheelScanProgress,
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
   WheelScanStatus, WheelTimingHistoryPage, WheelTimingHistoryItem, WheelOpenPositionItem, WheelRollOptions,
@@ -15,8 +16,8 @@ import WheelOptimizePanel from '../components/WheelOptimizePanel'
 import {
   addPendingReg, annPerDelta, buildFutuOrderMemo, computeOpsMetrics, contractCodeWarning, copyText,
   dailyRentPer10k, dteBucket, DTE_BUCKET_META, estimateAnnualized, evaluateTradeability, explainOpenOpp,
-  getPortfolioBudget, getRiskTier, isOnboardDone, loadPendingQueue,
-  normalizeContractCode, removePendingReg, resolveTradeTier, savePendingQueue, scanFailureHint,
+  fmtRelativeTime, getPortfolioBudget, getRiskTier, isOnboardDone, loadPendingQueue,
+  normalizeContractCode, removePendingReg, resolveOppSellPrice, resolveTradeTier, savePendingQueue, scanFailureHint,
   setOnboardDone, setPortfolioBudget, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
   type DteBucket, type PendingRegItem, type RiskTier, type TradeTier,
 } from '../services/wheelProduct'
@@ -237,10 +238,9 @@ function enrichOpenRow(
 
   row.covers_earnings = !!(row.ranked?.covers_earnings || row.ranked?.earnings_warn || row.tags.includes('含财报'))
   row.dte_bucket = dteBucket(row.dte)
-  // 触线-only 常缺 bid:用 trigger_price 估权利金;缺年化则粗算
-  const prem = (row.bid != null && row.bid > 0) ? row.bid
-    : (row.trigger_price != null && row.trigger_price > 0) ? row.trigger_price
-      : null
+  // 年化/日租只用真实 bid；触线价不参与（深 ITM last 会严重失真）
+  const px = resolveOppSellPrice({ bid: row.bid, trigger_price: row.trigger_price })
+  const prem = px.sell
   if ((row.annualized == null || row.annualized <= 0) && prem != null) {
     const est = estimateAnnualized(prem, row.strike, row.dte)
     if (est != null) row.annualized = est
@@ -249,10 +249,6 @@ function enrichOpenRow(
   row.ann_per_delta = annPerDelta(row.annualized, row.delta)
   row.open_interest = row.ranked?.open_interest ?? row.open_interest ?? null
   row.capital = capitalForOpp(row.side, row.strike)
-  // 可交易性用真实 bid;仅有触价时仍可算展示指标但不算有买价
-  if (row.bid == null && prem != null) {
-    // 保留 trigger 仅供展示,gate 仍会因无买价进观察 — 符合预期
-  }
 
   // 建议张数(额度)
   const used = t ? targetCapital(t.active_cycles || []) : 0
@@ -401,14 +397,20 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
   if (o.trend === 'DOWN') tags.push('趋势弱')
   if (o.timing?.ema_type === 'EMA200') tags.push('EMA200')
 
-  const prem = (o.bid != null && o.bid > 0) ? o.bid
-    : (o.premium_used != null && o.premium_used > 0) ? o.premium_used
-      : (o.timing?.trigger_price != null && o.timing.trigger_price > 0) ? o.timing.trigger_price
-        : null
+  // 卖出参考：只用 bid / premium_used；触线价(trigger)是 K 线 last/high，深 ITM 会像 89 这种不能当卖价
+  const px = resolveOppSellPrice({
+    bid: o.bid,
+    premium_used: o.premium_used,
+    trigger_price: o.timing?.trigger_price,
+  })
+  const prem = px.sell
   let annualized = o.annualized ?? null
+  // 仅有真实权利金时才粗算年化；触线价不算
   if ((annualized == null || annualized <= 0) && prem != null) {
     annualized = estimateAnnualized(prem, o.strike, o.dte)
   }
+  // 深 ITM 启发式：权利金 > 0.25×strike 对 Wheel 卖 Put 通常不合理
+  const deepItmPrem = prem != null && o.strike != null && o.strike > 0 && prem / o.strike > 0.25
 
   const blocked = o.grade === 'blocked' || !!(o.flags && o.flags.length)
   // 后端 actionable 优先；否则 dual/强触线+有分 → 优先，仅可做 → 可排单
@@ -424,7 +426,15 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
     trade_tier = 'WATCH'
   }
 
-  const tradeable = !!o.actionable && o.grade !== 'blocked'
+  const kill: string[] = []
+  if (o.grade === 'blocked' || !o.actionable) {
+    kill.push(...(o.flags || ['未达可做门槛']))
+  }
+  if (px.kind === 'none' || px.kind === 'trigger') kill.push('无买价')
+  if (deepItmPrem) kill.push('权利金疑似深ITM')
+
+  // 无真实买价或深 ITM 不得进优先/可排单
+  let tradeable = !!o.actionable && o.grade !== 'blocked' && px.kind !== 'none' && px.kind !== 'trigger' && !deepItmPrem
   if (!tradeable) trade_tier = 'WATCH'
 
   const row: OppRow = {
@@ -436,7 +446,7 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
       : trade_tier === 'QUEUE' ? 'READY' : 'WATCH',
     trade_tier,
     tradeable,
-    kill_reasons: o.grade === 'blocked' || !o.actionable ? (o.flags || ['未达可做门槛']) : [],
+    kill_reasons: [...new Set(kill)],
     dte_bucket: dteBucket(o.dte),
     daily_rent: dailyRentPer10k(prem, o.strike, o.dte),
     ann_per_delta: annPerDelta(annualized, o.delta),
@@ -452,11 +462,16 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
     score: o.score,
     annualized,
     delta: o.delta,
-    bid: o.bid ?? o.premium_used,
+    // 只填真实 bid/premium；触线价走 trigger_price，避免备忘写成「参考价 89」
+    bid: px.kind === 'bid' || px.kind === 'premium' ? px.sell : null,
     spread_pct: o.spread_pct,
     tags,
     risk_hard: o.exceeds_capital ? ['超资金上限'] : [],
-    risk_soft: (o.flags || []).filter(f => f !== '超资金上限'),
+    risk_soft: [
+      ...(o.flags || []).filter(f => f !== '超资金上限'),
+      ...(deepItmPrem ? ['权利金疑似深ITM'] : []),
+      ...(px.kind === 'trigger' || px.kind === 'none' ? ['无实时买价'] : []),
+    ],
     risk_block: o.grade === 'blocked' || !!o.exceeds_capital,
     efficiency: 0,
     capital: o.context?.committed,
@@ -1189,6 +1204,8 @@ export default function WheelPage() {
   /** 后端统一机会流；有数据时 OPEN 行优先用它 */
   const [serverOpps, setServerOpps] = useState<WheelOpportunitiesResult | null>(null)
   const [serverOppsLoading, setServerOppsLoading] = useState(false)
+  /** 全池扫描细进度：标的/到期日/合约 n/m */
+  const [scanProgress, setScanProgress] = useState<WheelScanProgress | null>(null)
   const [targets, setTargets] = useState<WheelTarget[]>([])
   const [stats, setStats] = useState<WheelStats | null>(null)
   const [cycles, setCycles] = useState<WheelCycle[]>([])
@@ -1367,9 +1384,17 @@ export default function WheelPage() {
     setError(null)
     setPoolScanLoading(true)
     setServerOppsLoading(true)
+    setScanProgress({ running: true, phase: 'pool', message: '准备扫描…', target_i: 0, target_n: targets.length })
     if (push) setPoolPushing(true)
 
     const st = getAppSettings()
+
+    // 轮询细进度（标的 / 到期日 / 合约 n/m）
+    let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      getWheelScanProgress()
+        .then(p => setScanProgress(p))
+        .catch(() => { /* ignore */ })
+    }, 400)
 
     const unifiedPromise = (async () => {
       try {
@@ -1405,6 +1430,11 @@ export default function WheelPage() {
       } finally {
         setServerOppsLoading(false)
         setPoolScanLoading(false)
+        if (progressTimer) {
+          clearInterval(progressTimer)
+          progressTimer = null
+        }
+        getWheelScanProgress().then(p => setScanProgress(p)).catch(() => setScanProgress(null))
       }
     })()
 
@@ -1455,7 +1485,39 @@ export default function WheelPage() {
     setRowCursor(0)
   }, [tab, oppCatFilter, oppSideFilter, oppBucketFilter])
 
-  async function handleSuggest(symbol: string, side: 'put' | 'call', cycleId?: string) {
+  /** 用 OpenD 补某行实时 bid，并写回 serverOpps */
+  async function refreshOppBid(row: OppRow): Promise<number | null> {
+    if (!row.contract_code) return null
+    try {
+      const q = await getWheelContractQuote(
+        row.symbol,
+        row.contract_code,
+        settings.marketHost,
+        settings.marketPort,
+        row.side === 'CALL' ? 'CALL' : 'PUT',
+      )
+      const bid = q.bid != null && q.bid > 0 ? q.bid : null
+      if (bid != null) {
+        setServerOpps(prev => {
+          if (!prev?.items?.length) return prev
+          const items = prev.items.map(it => {
+            const sameCode = (it.contract_code || it.contract_short || '').toUpperCase().replace(/^US\./, '')
+              === row.contract_code!.toUpperCase().replace(/^US\./, '')
+            if (!sameCode && !(it.symbol === row.symbol && it.strike === row.strike && String(it.expiry || '').slice(0, 10) === String(row.expiry || '').slice(0, 10))) {
+              return it
+            }
+            return { ...it, bid, premium_used: it.premium_used ?? bid, has_live_bid: true }
+          })
+          return { ...prev, items }
+        })
+      }
+      return bid
+    } catch {
+      return null
+    }
+  }
+
+  async function handleSuggest(symbol: string, side: 'put' | 'call', cycleId?: string, forRow?: OppRow) {
     setSelectedSymbol(symbol)
     setSuggestLoading(true)
     setSuggest(null)
@@ -1463,8 +1525,34 @@ export default function WheelPage() {
     setError(null)
     flash(`正在拉 ${symbol} ${side === 'put' ? 'Put' : 'Call'} 期权链…`)
     try {
+      // 先补该合约实时 bid（若有合约码）
+      if (forRow?.contract_code) {
+        const bid = await refreshOppBid(forRow)
+        if (bid != null) flash(`${symbol} 买价已更新 ${bid}`, 'success')
+        else flash(`${symbol} 未取到实时买价，展示期权链建议`, 'info')
+      }
       const r = await getWheelSuggest(symbol, side, settings.marketHost, settings.marketPort, cycleId)
       setSuggest(r)
+      // 若建议链含同行合约，再写一次 bid
+      if (forRow?.contract_code && r.suggestions?.length) {
+        const norm = forRow.contract_code.toUpperCase().replace(/^US\./, '')
+        const hit = r.suggestions.find(s =>
+          (s.contract_code || '').toUpperCase().replace(/^US\./, '') === norm
+          || (forRow.strike != null && Math.abs((s.strike || 0) - forRow.strike) < 1e-6
+            && String(s.expiry || '').slice(0, 10) === String(forRow.expiry || '').slice(0, 10)))
+        if (hit?.bid != null && hit.bid > 0) {
+          setServerOpps(prev => {
+            if (!prev?.items?.length) return prev
+            return {
+              ...prev,
+              items: prev.items.map(it => {
+                const same = (it.contract_code || '').toUpperCase().replace(/^US\./, '') === norm
+                return same ? { ...it, bid: hit.bid, premium_used: hit.premium_used ?? hit.bid } : it
+              }),
+            }
+          })
+        }
+      }
       flash(`${symbol} 详情已加载`, 'success')
     } catch (e: any) {
       const msg = `获取${side === 'put' ? 'Put' : 'Call'}建议失败:` + e.message
@@ -1615,9 +1703,26 @@ export default function WheelPage() {
     symbol: string; side: 'PUT' | 'CALL'; action: 'SELL' | 'BUY'
     contract_code?: string; strike?: number | null; expiry?: string | null
     qty?: number; price?: number | null; note?: string
+    price_kind?: 'bid' | 'premium' | 'trigger' | 'none'
   }) {
     const ok = await copyText(buildFutuOrderMemo(p))
     flash(ok ? '已复制富途下单备忘' : '复制失败,请手动抄写', ok ? 'success' : 'error')
+  }
+
+  function oppMemoFields(row: OppRow): {
+    price: number | null
+    price_kind: 'bid' | 'premium' | 'trigger' | 'none'
+  } {
+    const px = resolveOppSellPrice({
+      bid: row.bid,
+      trigger_price: row.trigger_price,
+    })
+    // 备忘：有 bid 写卖价；仅有触线价则标明非买价（price 传 trigger 供对照）
+    if (px.kind === 'bid' || px.kind === 'premium') {
+      return { price: px.sell, price_kind: px.kind }
+    }
+    if (px.trigger != null) return { price: px.trigger, price_kind: 'trigger' }
+    return { price: null, price_kind: 'none' }
   }
 
   function enqueuePending(item: Omit<PendingRegItem, 'id' | 'created_at'>) {
@@ -1682,15 +1787,20 @@ export default function WheelPage() {
         portfolioAvailable: ops.available,
       })
       : 1
+    const { price, price_kind } = oppMemoFields(row)
     const noteParts = [
       row.categories.includes('ACTIONABLE') ? '可下单' : '',
       row.strength === 'STRONG' ? '强信号' : row.strength === 'READY' ? '可做' : '观察',
       row.ema_type ? `触${row.ema_type}` : '',
       row.score != null ? `评分${fmt(row.score, 1)}` : '',
-      row.annualized != null ? `年化${fmt(row.annualized, 1)}%` : '',
+      row.annualized != null && price_kind !== 'trigger' ? `年化${fmt(row.annualized, 1)}%` : '',
+      price_kind === 'trigger' ? `仅触线价${row.trigger_price}·无买价` : '',
+      price_kind === 'none' ? '无买价' : '',
+      row.seen_at ? `发现${fmtRelativeTime(row.seen_at)}` : '',
     ].filter(Boolean)
     const code = normalizeContractCode(row.contract_code, row.symbol) || row.contract_code || ''
-    const price = row.bid ?? row.trigger_price ?? null
+    // 登记默认价：仅填真实 bid；无买价留空让用户填成交价
+    const regPrice = price_kind === 'bid' || price_kind === 'premium' ? price : null
     enqueuePending({
       symbol: row.symbol,
       side: row.side || 'PUT',
@@ -1699,7 +1809,7 @@ export default function WheelPage() {
       strike: row.strike,
       expiry: row.expiry ? String(row.expiry).slice(0, 10) : undefined,
       qty: Math.max(1, qty),
-      price,
+      price: regPrice,
       note: noteParts.join(' · '),
       cycle_id: row.cycle_id || undefined,
       source: 'opp',
@@ -1711,7 +1821,7 @@ export default function WheelPage() {
         contract_code: code,
         strike: row.strike != null ? String(row.strike) : '',
         expiry: row.expiry ? String(row.expiry).slice(0, 10) : '',
-        price: price != null ? String(price) : '',
+        price: regPrice != null ? String(regPrice) : '',
         qty: String(Math.max(1, qty)),
         note: noteParts.join(' · '),
       },
@@ -1744,10 +1854,12 @@ export default function WheelPage() {
       } else if ((e.key === 'c' || e.key === 'C') && rows[rowCursor]?.kind === 'OPEN') {
         e.preventDefault()
         const r = rows[rowCursor]
+        const mf = resolveOppSellPrice({ bid: r.bid, trigger_price: r.trigger_price })
         copyOrderMemo({
           symbol: r.symbol, side: r.side || 'PUT', action: 'SELL',
           contract_code: r.contract_code, strike: r.strike, expiry: r.expiry,
-          price: r.bid ?? r.trigger_price,
+          price: mf.kind === 'bid' || mf.kind === 'premium' ? mf.sell : mf.trigger,
+          price_kind: mf.kind === 'bid' || mf.kind === 'premium' ? mf.kind : (mf.trigger != null ? 'trigger' : 'none'),
         })
       } else if (e.key === '?' && rows[rowCursor]?.kind === 'OPEN') {
         e.preventDefault()
@@ -1929,9 +2041,43 @@ export default function WheelPage() {
             <div className="scan-progress panel">
               <div className="scan-progress-row">
                 <span className="label">高分</span>
-                <div className="bar"><div className={`fill ${poolScanLoading ? 'pulse' : ''}`} style={{ width: poolScanLoading ? '40%' : poolScan ? '100%' : '0%' }} /></div>
-                <span>{poolScanLoading ? '扫描中' : poolScan ? '完成' : '—'}</span>
+                <div className="bar">
+                  <div
+                    className={`fill ${poolScanLoading || serverOppsLoading ? (scanProgress?.contract_n ? '' : 'pulse') : ''}`}
+                    style={{
+                      width: (() => {
+                        if (!(poolScanLoading || serverOppsLoading)) return poolScan || serverOpps ? '100%' : '0%'
+                        const ti = scanProgress?.target_i || 0
+                        const tn = scanProgress?.target_n || 0
+                        const ci = scanProgress?.contract_i || 0
+                        const cn = scanProgress?.contract_n || 0
+                        if (tn > 0) {
+                          const base = ((ti - 1) / tn) * 100
+                          const slice = cn > 0 ? (ci / cn) * (100 / tn) : 0
+                          return `${Math.min(99, Math.max(4, base + slice))}%`
+                        }
+                        return '40%'
+                      })(),
+                    }}
+                  />
+                </div>
+                <span>
+                  {poolScanLoading || serverOppsLoading
+                    ? (scanProgress?.target_n ? `${scanProgress.target_i || 0}/${scanProgress.target_n}` : '扫描中')
+                    : '完成'}
+                </span>
               </div>
+              {(poolScanLoading || serverOppsLoading) && (
+                <div className="scan-progress-detail">
+                  {scanProgress?.symbol ? (
+                    <>
+                      正在扫描：<b style={{ color: 'var(--text)' }}>{scanProgress.symbol}</b>
+                      {scanProgress.expiry ? <> · 到期日 <b style={{ color: 'var(--text)' }}>{String(scanProgress.expiry).slice(0, 10)}</b></> : null}
+                      {scanProgress.contract_n ? <> · 合约 <b style={{ color: 'var(--green)' }}>{scanProgress.contract_i || 0}</b>/{scanProgress.contract_n}</> : null}
+                    </>
+                  ) : (scanProgress?.message || '准备扫描…')}
+                </div>
+              )}
               <div className="scan-progress-row">
                 <span className="label">触线</span>
                 <div className="bar"><div className={`fill ${timingScanning ? 'pulse' : ''}`} style={{ width: timingScanning ? '40%' : scanStatus?.finished_at ? '100%' : '0%' }} /></div>
@@ -2005,11 +2151,14 @@ export default function WheelPage() {
                   </div>
                   <div className="opp-row-actions">
                     <button type="button" className="btn btn-secondary btn-sm"
-                      onClick={() => copyOrderMemo({
-                        symbol: r.symbol, side: r.side || 'PUT', action: 'SELL',
-                        contract_code: r.contract_code, strike: r.strike, expiry: r.expiry,
-                        price: r.bid ?? r.trigger_price,
-                      })}>备忘</button>
+                      onClick={() => {
+                        const mf = oppMemoFields(r)
+                        copyOrderMemo({
+                          symbol: r.symbol, side: r.side || 'PUT', action: 'SELL',
+                          contract_code: r.contract_code, strike: r.strike, expiry: r.expiry,
+                          price: mf.price, price_kind: mf.price_kind,
+                        })
+                      }}>备忘</button>
                     <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>登记</button>
                   </div>
                 </div>
@@ -2604,9 +2753,58 @@ export default function WheelPage() {
               <div className="scan-progress">
                 <div className="scan-progress-row">
                   <span className="label">高分</span>
-                  <div className="bar"><div className={`fill ${poolScanLoading ? 'pulse' : ''}`} style={{ width: poolScanLoading ? '45%' : '100%' }} /></div>
-                  <span>{poolScanLoading ? '…' : poolScan ? `${poolScan.opportunities.length}` : '—'}</span>
+                  <div className="bar">
+                    <div
+                      className={`fill ${poolScanLoading || serverOppsLoading ? (scanProgress?.contract_n ? '' : 'pulse') : ''}`}
+                      style={{
+                        width: (() => {
+                          if (!(poolScanLoading || serverOppsLoading)) return '100%'
+                          const ti = scanProgress?.target_i || 0
+                          const tn = scanProgress?.target_n || 0
+                          const ci = scanProgress?.contract_i || 0
+                          const cn = scanProgress?.contract_n || 0
+                          if (tn > 0) {
+                            const base = ((ti - 1) / tn) * 100
+                            const slice = cn > 0 ? (ci / cn) * (100 / tn) : 0
+                            return `${Math.min(99, Math.max(4, base + slice))}%`
+                          }
+                          return '40%'
+                        })(),
+                      }}
+                    />
+                  </div>
+                  <span>
+                    {poolScanLoading || serverOppsLoading
+                      ? (scanProgress?.target_n
+                        ? `${scanProgress.target_i || 0}/${scanProgress.target_n}`
+                        : '…')
+                      : (poolScan ? `${poolScan.opportunities.length}` : '—')}
+                  </span>
                 </div>
+                {(poolScanLoading || serverOppsLoading) && (
+                  <div className="scan-progress-detail">
+                    {scanProgress?.symbol ? (
+                      <>
+                        正在扫描：
+                        <b style={{ color: 'var(--text)' }}>{scanProgress.symbol}</b>
+                        {scanProgress.side ? ` ${scanProgress.side}` : ''}
+                        {scanProgress.expiry
+                          ? <> · 到期日 <b style={{ color: 'var(--text)' }}>{String(scanProgress.expiry).slice(0, 10)}</b></>
+                          : null}
+                        {scanProgress.contract_n != null && scanProgress.contract_n > 0 ? (
+                          <> · 合约 <b style={{ color: 'var(--green)' }}>{scanProgress.contract_i || 0}</b>/{scanProgress.contract_n}</>
+                        ) : null}
+                        {scanProgress.target_n ? (
+                          <span style={{ color: 'var(--text-tertiary)', marginLeft: 8 }}>
+                            标的 {scanProgress.target_i || 0}/{scanProgress.target_n}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      scanProgress?.message || '准备扫描…'
+                    )}
+                  </div>
+                )}
                 <div className="scan-progress-row">
                   <span className="label">触线</span>
                   <div className="bar"><div className={`fill ${timingScanning ? 'pulse' : ''}`} style={{ width: timingScanning ? '45%' : '100%' }} /></div>
@@ -2708,9 +2906,21 @@ export default function WheelPage() {
                           {row.kind === 'OPEN' ? (
                             <>
                               <span className="num">年化 <b style={{ color: 'var(--green)' }}>{expAnn != null ? `${fmt(expAnn, 1)}%` : '—'}</b></span>
+                              <span className="num">
+                                买价 {row.bid != null ? fmt(row.bid, 2) : <b style={{ color: 'var(--warning)' }}>无</b>}
+                              </span>
+                              {row.trigger_price != null && row.bid == null && (
+                                <span className="num" title="合约 K 线触线价(last/high)，不是实时 bid">
+                                  触价 {fmt(row.trigger_price, 2)}
+                                </span>
+                              )}
                               <span className="num">日租 {row.daily_rent != null ? fmt(row.daily_rent, 2) : '—'}</span>
-                              <span className="num">年化/Δ {row.ann_per_delta != null ? fmt(row.ann_per_delta, 1) : '—'}</span>
                               <span>{DTE_BUCKET_META[row.dte_bucket]?.label}</span>
+                              {row.seen_at && (
+                                <span title={String(row.seen_at).replace('T', ' ').slice(0, 19)}>
+                                  {fmtRelativeTime(row.seen_at)}
+                                </span>
+                              )}
                               <span className="mono">{row.contract_code || '—'}</span>
                               {row.kill_reasons.length > 0 && (
                                 <span style={{ color: 'var(--warning)' }}>杀:{row.kill_reasons.join(',')}</span>
@@ -2733,16 +2943,25 @@ export default function WheelPage() {
                             </button>
                             <button type="button" className="btn btn-secondary btn-sm"
                               disabled={suggestLoading}
-                              title="需 OpenD"
-                              onClick={() => handleSuggest(row.symbol, row.side === 'PUT' ? 'put' : 'call', row.cycle_id ?? undefined)}>
-                              {suggestLoading ? '详情…' : '详情'}
+                              title="拉期权链并补实时买价(OpenD)"
+                              onClick={() => handleSuggest(
+                                row.symbol,
+                                row.side === 'PUT' ? 'put' : 'call',
+                                row.cycle_id ?? undefined,
+                                row,
+                              )}>
+                              {suggestLoading ? '补价…' : (row.bid == null ? '详情·补价' : '详情')}
                             </button>
                             <button type="button" className="btn btn-secondary btn-sm"
-                              onClick={() => copyOrderMemo({
-                                symbol: row.symbol, side: row.side || 'PUT', action: 'SELL',
-                                contract_code: row.contract_code, strike: row.strike, expiry: row.expiry,
-                                price: row.bid ?? row.trigger_price,
-                              })}>备忘</button>
+                              onClick={() => {
+                                const mf = oppMemoFields(row)
+                                copyOrderMemo({
+                                  symbol: row.symbol, side: row.side || 'PUT', action: 'SELL',
+                                  contract_code: row.contract_code, strike: row.strike, expiry: row.expiry,
+                                  price: mf.price, price_kind: mf.price_kind,
+                                  note: row.seen_at ? `发现 ${fmtRelativeTime(row.seen_at)}` : undefined,
+                                })
+                              }}>备忘</button>
                             <button type="button" className="btn btn-primary btn-sm"
                               disabled={row.risk_block || !row.tradeable}
                               title={row.risk_block ? '风控阻断' : !row.tradeable ? row.kill_reasons.join(',') || '未过门槛' : '登记'}
@@ -2764,7 +2983,10 @@ export default function WheelPage() {
                           ))}
                         </ul>
                         <div style={{ marginTop: 6, fontSize: 11 }}>
-                          bid={row.bid ?? '无'} · 触价={row.trigger_price ?? '无'} · Δ={row.delta ?? '无'} · DTE={row.dte ?? '无'}
+                          买价(bid)={row.bid ?? '无'}
+                          {row.trigger_price != null && <> · 触线价={fmt(row.trigger_price, 4)}(合约K线，非卖价)</>}
+                          {' · '}Δ={row.delta ?? '无'} · DTE={row.dte ?? '无'}
+                          {row.seen_at && <> · 发现 {String(row.seen_at).replace('T', ' ').slice(0, 19)}（{fmtRelativeTime(row.seen_at)}）</>}
                         </div>
                       </div>
                     )}
@@ -3148,42 +3370,66 @@ export default function WheelPage() {
             <select
               value={addSymbol}
               onChange={e => setAddSymbol(e.target.value)}
-              style={{ ...inputStyle, width: 260 }}
+              style={{ ...inputStyle, width: 300 }}
             >
               <option value="">选择标的…</option>
               {(() => {
                 const existing = new Set(targets.map(t => t.symbol.toUpperCase()))
-                const avail = candidates.filter(c => !existing.has(c.symbol.toUpperCase()))
-                const us = avail.filter(c => c.market === 'US')
-                const hk = avail.filter(c => c.market === 'HK' || c.market === '港股')
-                const other = avail.filter(c => c.market !== 'US' && c.market !== 'HK' && c.market !== '港股')
+                const normMkt = (m?: string) => {
+                  const raw = (m || '').trim()
+                  const u = raw.toUpperCase()
+                  if (u === 'US' || raw === '美股') return 'US'
+                  if (u === 'HK' || raw === '港股') return 'HK'
+                  return u || 'OTHER'
+                }
+                const list = candidates.map(c => ({
+                  ...c,
+                  market: normMkt(c.market),
+                  in_wheel: c.in_wheel ?? existing.has(c.symbol.toUpperCase()),
+                }))
+                const us = list.filter(c => c.market === 'US')
+                const hk = list.filter(c => c.market === 'HK')
+                const other = list.filter(c => c.market !== 'US' && c.market !== 'HK')
+                const usAvail = us.filter(c => !c.in_wheel).length
+                const hkAvail = hk.filter(c => !c.in_wheel).length
+                const labelOf = (c: typeof list[0]) => {
+                  const bits = [c.symbol]
+                  if (c.name && c.name !== c.symbol) bits.push(c.name)
+                  if (c.in_wheel) bits.push('已添加')
+                  else if (c.enabled === false) bits.push('池中未启用')
+                  return bits.join(' · ')
+                }
+                if (list.length === 0) {
+                  return <option value="" disabled>{candidates.length === 0 ? '候选加载中或股票池为空' : '无候选'}</option>
+                }
                 return (
                   <>
-                    {us.length > 0 && (
-                      <optgroup label="美股">
-                        {us.map(c => (
-                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {hk.length > 0 && (
-                      <optgroup label="港股">
-                        {hk.map(c => (
-                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
-                        ))}
-                      </optgroup>
-                    )}
+                    <optgroup label={`美股（可加 ${usAvail}/${us.length}）`}>
+                      {us.length === 0 ? (
+                        <option value="" disabled>股票池暂无美股 — 请到「股票池」添加并启用</option>
+                      ) : us.map(c => (
+                        <option key={c.symbol} value={c.in_wheel ? '' : c.symbol} disabled={!!c.in_wheel}>
+                          {labelOf(c)}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label={`港股（可加 ${hkAvail}/${hk.length}）`}>
+                      {hk.length === 0 ? (
+                        <option value="" disabled>股票池暂无港股</option>
+                      ) : hk.map(c => (
+                        <option key={c.symbol} value={c.in_wheel ? '' : c.symbol} disabled={!!c.in_wheel}>
+                          {labelOf(c)}
+                        </option>
+                      ))}
+                    </optgroup>
                     {other.length > 0 && (
                       <optgroup label="其他">
                         {other.map(c => (
-                          <option key={c.symbol} value={c.symbol}>{c.symbol}{c.name ? ` · ${c.name}` : ''}</option>
+                          <option key={c.symbol} value={c.in_wheel ? '' : c.symbol} disabled={!!c.in_wheel}>
+                            {labelOf(c)}
+                          </option>
                         ))}
                       </optgroup>
-                    )}
-                    {avail.length === 0 && (
-                      <option value="" disabled>
-                        {candidates.length === 0 ? '候选加载中或为空' : '候选均已添加'}
-                      </option>
                     )}
                   </>
                 )
@@ -3196,7 +3442,7 @@ export default function WheelPage() {
               {adding ? '添加中...' : '添加'}
             </button>
             <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-              从股票池候选下拉选择（已添加的不重复显示）；底线价需按个股填写
+              美股/港股均来自股票池；已添加的灰显不可选；未启用的也可直接加入 Wheel
             </span>
           </div>
 

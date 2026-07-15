@@ -18,6 +18,21 @@ import {
 
 const C = { green: '#4ade80', orange: '#fb923c', red: '#f87171', blue: '#38bdf8', purple: '#a78bfa' }
 
+/** 策略档位：按钮直接中文 + 分档语义色 */
+const PROFILE_META: Record<string, { label: string; color: string; hint: string }> = {
+  conservative: { label: '稳健', color: C.blue, hint: '更严 delta/年化，少接货' },
+  balanced: { label: '均衡', color: C.green, hint: '默认盘中档' },
+  aggressive: { label: '激进', color: C.orange, hint: '更宽参数，追求权利金' },
+}
+
+function profileMeta(name: string) {
+  return PROFILE_META[name] || {
+    label: name,
+    color: C.purple,
+    hint: '',
+  }
+}
+
 function fmt(v: number | null | undefined, d = 1) {
   if (v == null || Number.isNaN(v)) return '--'
   return v.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: 0 })
@@ -105,7 +120,7 @@ export default function WheelOptimizePanel() {
   async function activate(name: string) {
     try {
       await activateWheelProfile(name)
-      setMsg(`已切换 Profile: ${name}`)
+      setMsg(`已切换为「${profileMeta(name).label}」`)
       const pr = await getWheelProfiles()
       setProfiles(pr)
     } catch (e: any) {
@@ -153,23 +168,58 @@ export default function WheelOptimizePanel() {
       </div>
       {err && <div className="alert alert-error" style={{ marginBottom: 12 }}>{err}</div>}
 
-      {/* Profile */}
+      {/* 策略档位 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>策略 Profile</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-            当前: <b style={{ color: C.blue }}>{profiles?.active || '--'}</b>
-          </span>
-          {(profiles?.presets || []).map((n: string) => (
-            <button key={n} className="btn" style={{
-              fontSize: 11, padding: '3px 10px',
-              borderColor: profiles?.active === n ? C.blue : undefined,
-              color: profiles?.active === n ? C.blue : undefined,
-            }} onClick={() => activate(n)}>{n}</button>
-          ))}
-          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-            conservative=稳健 / balanced=均衡 / aggressive=激进
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontWeight: 700, fontSize: 13 }}>策略档位</div>
+          {profiles?.active && (
+            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+              {profileMeta(profiles.active).hint}
+            </span>
+          )}
+        </div>
+        <div
+          role="group"
+          aria-label="策略档位"
+          style={{
+            display: 'inline-flex',
+            padding: 3,
+            borderRadius: 10,
+            background: 'var(--bg-primary, #0a0a0a)',
+            border: '1px solid var(--border)',
+            gap: 2,
+            flexWrap: 'wrap',
+          }}
+        >
+          {(profiles?.presets?.length
+            ? profiles.presets as string[]
+            : ['conservative', 'balanced', 'aggressive']
+          ).map((n: string) => {
+            const meta = profileMeta(n)
+            const active = profiles?.active === n
+            return (
+              <button
+                key={n}
+                type="button"
+                onClick={() => { if (!active) activate(n) }}
+                title={meta.hint}
+                style={{
+                  minWidth: 72,
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: 'none',
+                  cursor: active ? 'default' : 'pointer',
+                  fontSize: 13,
+                  fontWeight: active ? 700 : 500,
+                  background: active ? meta.color : 'transparent',
+                  color: active ? '#0a0a0a' : 'var(--text-secondary)',
+                  transition: 'background 0.15s, color 0.15s',
+                }}
+              >
+                {meta.label}
+              </button>
+            )
+          })}
         </div>
       </div>
 

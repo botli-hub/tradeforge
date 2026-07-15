@@ -65,10 +65,51 @@ def clear_cache():
 
 _LAST_RESULT: Optional[Dict[str, Any]] = None
 _SCAN_LOCK = threading.Lock()
+_PROGRESS_LOCK = threading.Lock()
+_SCAN_PROGRESS: Dict[str, Any] = {
+    "running": False,
+    "phase": "idle",  # idle | pool | done | error
+    "symbol": None,
+    "side": None,
+    "expiry": None,
+    "contract_i": 0,
+    "contract_n": 0,
+    "target_i": 0,
+    "target_n": 0,
+    "message": "",
+    "updated_at": None,
+}
 
 
 def get_last_result() -> Optional[Dict[str, Any]]:
     return _LAST_RESULT
+
+
+def get_scan_progress() -> Dict[str, Any]:
+    with _PROGRESS_LOCK:
+        return dict(_SCAN_PROGRESS)
+
+
+def update_scan_progress(**kwargs: Any) -> None:
+    """线程安全更新扫描进度(供 _suggest / run_scan 回调)。"""
+    with _PROGRESS_LOCK:
+        _SCAN_PROGRESS.update(kwargs)
+        _SCAN_PROGRESS["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _reset_progress(target_n: int = 0) -> None:
+    update_scan_progress(
+        running=True,
+        phase="pool",
+        symbol=None,
+        side=None,
+        expiry=None,
+        contract_i=0,
+        contract_n=0,
+        target_i=0,
+        target_n=target_n,
+        message="准备扫描…",
+    )
 
 
 def run_scan(host: str = "127.0.0.1", port: int = 11111,
@@ -94,6 +135,7 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
 
         usage = repo.get_capital_usage()["per_symbol"]
         targets = [t for t in repo.get_targets() if t.get("enabled")]
+        _reset_progress(len(targets))
 
         opportunities: List[Dict[str, Any]] = []
         skipped: List[Dict[str, str]] = []
@@ -103,6 +145,16 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
 
         for idx, t in enumerate(targets):
             symbol = t["symbol"]
+            update_scan_progress(
+                target_i=idx + 1,
+                target_n=len(targets),
+                symbol=symbol,
+                side=None,
+                expiry=None,
+                contract_i=0,
+                contract_n=0,
+                message=f"标的 {idx + 1}/{len(targets)} · {symbol}",
+            )
             u = usage.get(symbol, {})
             committed = (u.get("csp_collateral") or 0) + (u.get("holding_cost") or 0)
             headroom = (t["max_capital"] - committed) if (t.get("max_capital") or 0) > 0 else None
@@ -119,6 +171,11 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
                 skipped.append({"symbol": symbol, "reason": f"资金上限已用满(占用 {committed:.0f}/{t['max_capital']:.0f})"})
 
             for side, cycle_id in sides:
+                update_scan_progress(
+                    symbol=symbol,
+                    side=side,
+                    message=f"正在扫描 {symbol} {side} · 标的 {idx + 1}/{len(targets)}",
+                )
                 try:
                     res = _suggest(symbol, side, host, port, cycle_id)
                 except HTTPException as e:
@@ -191,9 +248,25 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
             except Exception as e:
                 logger.warning("log suggestions 失败: %s", e)
         _LAST_RESULT = result
+        update_scan_progress(
+            running=False,
+            phase="done",
+            message=f"完成 · 找到 {len(opportunities)} 条机会",
+            contract_i=0,
+            contract_n=0,
+        )
         return result
+    except Exception as e:
+        update_scan_progress(running=False, phase="error", message=f"扫描失败: {e}")
+        raise
     finally:
         _SCAN_LOCK.release()
+        # 若异常未写 done/error，标记 idle
+        with _PROGRESS_LOCK:
+            if _SCAN_PROGRESS.get("running"):
+                _SCAN_PROGRESS["running"] = False
+                if _SCAN_PROGRESS.get("phase") == "pool":
+                    _SCAN_PROGRESS["phase"] = "idle"
 
 
 # ── Telegram 推送 ─────────────────────────────────────────────────────────────

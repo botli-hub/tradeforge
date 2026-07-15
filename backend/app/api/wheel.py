@@ -1,6 +1,6 @@
 """Wheel 策略 REST API"""
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -49,14 +49,49 @@ def list_targets():
 
 @router.get("/targets/candidates")
 def target_candidates():
-    """股票池美股/港股(启用),排除已是 wheel 标的的"""
-    existing = {t["symbol"] for t in repo.get_targets()}
+    """股票池美股/港股候选(含未启用)。
+
+    返回全部 US/HK 池内标的,附带:
+      - enabled: 是否在股票池启用
+      - in_wheel: 是否已是 wheel 标的(前端下拉禁用,避免「美股消失」的错觉)
+    不再只返回 enabled=1 且未添加的,否则美股全进 wheel 后下拉只剩港股。
+    """
+    existing = {t["symbol"].upper() for t in repo.get_targets()}
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT symbol, name, market FROM stocks WHERE market IN ('US','HK') AND enabled = 1 ORDER BY market, symbol"
+            """
+            SELECT symbol, name, market, enabled
+            FROM stocks
+            WHERE upper(market) IN ('US', 'HK')
+               OR market IN ('美股', '港股')
+            ORDER BY
+              CASE upper(market)
+                WHEN 'US' THEN 0
+                WHEN '美股' THEN 0
+                WHEN 'HK' THEN 1
+                WHEN '港股' THEN 1
+                ELSE 2
+              END,
+              symbol
+            """
         ).fetchall()
-        return [dict(r) for r in rows if r["symbol"] not in existing]
+        out = []
+        for r in rows:
+            d = dict(r)
+            sym = (d.get("symbol") or "").upper()
+            d["symbol"] = d.get("symbol") or sym
+            m = (d.get("market") or "").upper()
+            if m in ("美股",) or d.get("market") == "美股":
+                d["market"] = "US"
+            elif m in ("港股",) or d.get("market") == "港股":
+                d["market"] = "HK"
+            else:
+                d["market"] = m if m in ("US", "HK") else d.get("market")
+            d["enabled"] = bool(d.get("enabled"))
+            d["in_wheel"] = sym in existing
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -389,14 +424,39 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     last_chain_contracts: List[Dict[str, Any]] = []
     chain_snapshots: List[Dict[str, Any]] = []
     filtered_earnings = 0
+    try:
+        from app.services.wheel_scanner import update_scan_progress as _prog
+    except Exception:
+        def _prog(**_kw):  # type: ignore
+            return None
+
     for exp, dte in in_range[:3]:  # 最多取 3 个到期日,控制请求量
+        exp_label = str(exp)[:10]
+        _prog(
+            symbol=symbol, side=side, expiry=exp_label,
+            contract_i=0, contract_n=0,
+            message=f"正在扫描 {symbol} · 到期 {exp_label} · 拉取期权链…",
+        )
         chain = _load_option_chain(symbol, exp, host, port)
         spot = chain["spot_price"]
         last_chain_contracts = chain["contracts"]
         chain_snapshots.append({"expiry": exp, "dte": dte, "contracts": chain["contracts"]})
-        for c in chain["contracts"]:
-            if c["option_type"] != side:
-                continue
+        # 本到期日该方向合约总数（筛选前）
+        side_contracts = [c for c in chain["contracts"] if c.get("option_type") == side]
+        total_side = len(side_contracts)
+        _prog(
+            symbol=symbol, side=side, expiry=exp_label,
+            contract_i=0, contract_n=total_side,
+            message=f"正在扫描 {symbol} · 到期 {exp_label} · 0/{total_side}",
+        )
+        for ci, c in enumerate(side_contracts, start=1):
+            # 进度步进：每张更新太密，每 5 张或最后一张刷一次
+            if ci == 1 or ci == total_side or ci % 5 == 0:
+                _prog(
+                    symbol=symbol, side=side, expiry=exp_label,
+                    contract_i=ci, contract_n=total_side,
+                    message=f"正在扫描 {symbol} · 到期 {exp_label} · {ci}/{total_side}",
+                )
             d = abs(c.get("delta") or 0)
             if d < delta_min or d > delta_max:
                 continue
@@ -1140,6 +1200,84 @@ def scan_all(host: str = Query("127.0.0.1"), port: int = Query(11111),
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"全池扫描失败(OpenD?): {e}")
+
+
+@router.get("/scan/progress")
+def scan_progress():
+    """全池扫描实时进度:当前标的/到期日/合约 n/m。"""
+    from app.services import wheel_scanner
+    return wheel_scanner.get_scan_progress()
+
+
+@router.get("/quote")
+def quote_contract(
+    symbol: str = Query(...),
+    contract_code: str = Query(...),
+    host: str = Query("127.0.0.1"),
+    port: int = Query(11111),
+    side: Optional[str] = Query(None, description="PUT|CALL,可省略由合约码推断"),
+):
+    """用 OpenD 补单合约实时 bid/ask(详情/备忘用)。"""
+    from app.services.wheel_scanner import cached_expirations, cached_chain
+    from app.core.leaps_monitor import _parse_futu_contract
+
+    sym = symbol.strip().upper()
+    code = contract_code.strip()
+    und, exp_raw, strike, opt = _parse_futu_contract(code)
+    side_u = (side or ("PUT" if opt == "P" else "CALL" if opt == "C" else "")).upper()
+    expiry = None
+    if exp_raw and len(exp_raw) == 6:
+        try:
+            expiry = datetime.strptime("20" + exp_raw, "%Y%m%d").date().isoformat()
+        except Exception:
+            expiry = None
+    if not expiry:
+        # 从链里按合约码反查
+        try:
+            exps = cached_expirations(sym, host, port)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"拉到期日失败: {e}")
+        for exp in exps[:12]:
+            try:
+                chain = cached_chain(sym, exp, host, port)
+            except Exception:
+                continue
+            for c in chain.get("contracts") or []:
+                if (c.get("option_symbol") or "").upper().replace("US.", "") == code.upper().replace("US.", ""):
+                    return {
+                        "symbol": sym,
+                        "contract_code": c.get("option_symbol") or code,
+                        "side": c.get("option_type"),
+                        "strike": c.get("strike"),
+                        "expiry": str(exp)[:10],
+                        "bid": c.get("bid"),
+                        "ask": c.get("ask"),
+                        "last": c.get("last_price") or c.get("last"),
+                        "delta": c.get("delta"),
+                        "spot_price": chain.get("spot_price"),
+                    }
+        raise HTTPException(status_code=404, detail="期权链中未找到该合约")
+    try:
+        chain = cached_chain(sym, expiry, host, port, force=True)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"拉期权链失败: {e}")
+    norm = code.upper().replace("US.", "")
+    for c in chain.get("contracts") or []:
+        cc = (c.get("option_symbol") or "").upper().replace("US.", "")
+        if cc == norm or (side_u and c.get("option_type") == side_u and abs((c.get("strike") or 0) - (strike or 0)) < 1e-6):
+            return {
+                "symbol": sym,
+                "contract_code": c.get("option_symbol") or code,
+                "side": c.get("option_type"),
+                "strike": c.get("strike"),
+                "expiry": expiry,
+                "bid": c.get("bid"),
+                "ask": c.get("ask"),
+                "last": c.get("last_price") or c.get("last"),
+                "delta": c.get("delta"),
+                "spot_price": chain.get("spot_price"),
+            }
+    raise HTTPException(status_code=404, detail="到期日链中未找到该合约")
 
 
 @router.post("/scan/push")

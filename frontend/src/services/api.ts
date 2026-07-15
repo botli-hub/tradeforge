@@ -425,6 +425,10 @@ export interface LeapsCandidate {
   symbol: string
   name: string
   market: string
+  /** 股票池是否启用 */
+  enabled?: boolean
+  /** 是否已是 Wheel 标的 */
+  in_wheel?: boolean
 }
 
 export async function getLeapsWatchlist() {
@@ -1068,6 +1072,55 @@ export async function getWheelPoolScan(host: string, port: number, refresh = fal
   return request<WheelScanResult>(
     `/api/wheel/scan?host=${encodeURIComponent(host)}&port=${port}&refresh=${refresh}&use_last=${useLast}`
   )
+}
+
+export interface WheelScanProgress {
+  running: boolean
+  phase: 'idle' | 'pool' | 'done' | 'error' | string
+  symbol?: string | null
+  side?: string | null
+  expiry?: string | null
+  contract_i?: number
+  contract_n?: number
+  target_i?: number
+  target_n?: number
+  message?: string
+  updated_at?: string | null
+}
+
+export async function getWheelScanProgress() {
+  return request<WheelScanProgress>('/api/wheel/scan/progress')
+}
+
+export interface WheelContractQuote {
+  symbol: string
+  contract_code: string
+  side?: string
+  strike?: number
+  expiry?: string
+  bid?: number | null
+  ask?: number | null
+  last?: number | null
+  delta?: number | null
+  spot_price?: number | null
+}
+
+/** OpenD 补单合约实时报价 */
+export async function getWheelContractQuote(
+  symbol: string,
+  contractCode: string,
+  host: string,
+  port: number,
+  side?: 'PUT' | 'CALL',
+) {
+  const qs = new URLSearchParams({
+    symbol,
+    contract_code: contractCode,
+    host,
+    port: String(port),
+  })
+  if (side) qs.set('side', side)
+  return request<WheelContractQuote>(`/api/wheel/quote?${qs}`)
 }
 
 /** 统一可交易机会流(触线+打分合流) */
