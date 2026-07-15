@@ -6,10 +6,12 @@ import {
   getWheelStats, getWheelSuggest, triggerWheelTimingScan, getWheelTimingSignals,
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
   getWheelPoolScan, pushWheelPoolScan, WheelScanResult, WheelScanOpportunity, getBackendConfig,
+  getWheelOpportunities, type WheelOpportunitiesResult, type WheelOpportunity,
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
   WheelScanStatus, WheelTimingHistoryPage, WheelTimingHistoryItem, WheelOpenPositionItem, WheelRollOptions,
 } from '../services/api'
+import WheelOptimizePanel from '../components/WheelOptimizePanel'
 import {
   addPendingReg, annPerDelta, buildFutuOrderMemo, computeOpsMetrics, contractCodeWarning, copyText,
   dailyRentPer10k, dteBucket, DTE_BUCKET_META, estimateAnnualized, evaluateTradeability, explainOpenOpp,
@@ -377,6 +379,104 @@ function emptyOpenMetrics() {
     ann_per_delta: null as number | null,
     covers_earnings: false,
   }
+}
+
+/** 后端 /opportunities → 前端 OppRow（开仓档） */
+function serverOppToRow(o: WheelOpportunity): OppRow {
+  const side = (o.side === 'CALL' ? 'CALL' : 'PUT') as 'PUT' | 'CALL'
+  const categories: OppCategory[] = []
+  if (o.source === 'dual' || o.grade === 'dual') {
+    categories.push('RANKED', 'EMA_TOUCH', 'ACTIONABLE')
+  } else if (o.source === 'score' || o.grade === 'score') {
+    categories.push('RANKED')
+  } else if (o.source === 'timing' || o.grade === 'timing') {
+    categories.push('EMA_TOUCH')
+  } else {
+    categories.push('RANKED')
+  }
+
+  const tags: string[] = [...(o.flags || [])]
+  if (o.covers_earnings) tags.push('含财报')
+  if (o.exceeds_capital) tags.push('超上限')
+  if (o.trend === 'DOWN') tags.push('趋势弱')
+  if (o.timing?.ema_type === 'EMA200') tags.push('EMA200')
+
+  const prem = (o.bid != null && o.bid > 0) ? o.bid
+    : (o.premium_used != null && o.premium_used > 0) ? o.premium_used
+      : (o.timing?.trigger_price != null && o.timing.trigger_price > 0) ? o.timing.trigger_price
+        : null
+  let annualized = o.annualized ?? null
+  if ((annualized == null || annualized <= 0) && prem != null) {
+    annualized = estimateAnnualized(prem, o.strike, o.dte)
+  }
+
+  const blocked = o.grade === 'blocked' || !!(o.flags && o.flags.length)
+  // 后端 actionable 优先；否则 dual/强触线+有分 → 优先，仅可做 → 可排单
+  let trade_tier: TradeTier = 'WATCH'
+  if (o.grade === 'blocked') trade_tier = 'WATCH'
+  else if (o.actionable && (o.grade === 'dual' || o.source === 'dual' || o.timing?.strength === 'STRONG')) {
+    trade_tier = 'PRIORITY'
+  } else if (o.actionable) {
+    trade_tier = 'QUEUE'
+  } else if (o.grade === 'watch') {
+    trade_tier = 'WATCH'
+  } else if (o.score != null || o.timing) {
+    trade_tier = 'WATCH'
+  }
+
+  const tradeable = !!o.actionable && o.grade !== 'blocked'
+  if (!tradeable) trade_tier = 'WATCH'
+
+  const row: OppRow = {
+    id: o.id || oppKey(o.contract_code, o.symbol, side, o.strike, o.expiry),
+    kind: 'OPEN',
+    categories,
+    strength: trade_tier === 'PRIORITY'
+      ? (o.timing?.strength === 'STRONG' ? 'STRONG' : 'READY')
+      : trade_tier === 'QUEUE' ? 'READY' : 'WATCH',
+    trade_tier,
+    tradeable,
+    kill_reasons: o.grade === 'blocked' || !o.actionable ? (o.flags || ['未达可做门槛']) : [],
+    dte_bucket: dteBucket(o.dte),
+    daily_rent: dailyRentPer10k(prem, o.strike, o.dte),
+    ann_per_delta: annPerDelta(annualized, o.delta),
+    covers_earnings: !!o.covers_earnings,
+    open_interest: null,
+    actionable: trade_tier === 'PRIORITY',
+    symbol: o.symbol,
+    side,
+    contract_code: o.contract_code || o.contract_short || undefined,
+    strike: o.strike,
+    expiry: o.expiry,
+    dte: o.dte,
+    score: o.score,
+    annualized,
+    delta: o.delta,
+    bid: o.bid ?? o.premium_used,
+    spread_pct: o.spread_pct,
+    tags,
+    risk_hard: o.exceeds_capital ? ['超资金上限'] : [],
+    risk_soft: (o.flags || []).filter(f => f !== '超资金上限'),
+    risk_block: o.grade === 'blocked' || !!o.exceeds_capital,
+    efficiency: 0,
+    capital: o.context?.committed,
+    cycle_id: o.cycle_id,
+    ranked: undefined,
+    ema_type: o.timing?.ema_type,
+    ema_value: o.timing?.ema_value,
+    trigger_price: o.timing?.trigger_price,
+    iv_rank: o.iv_rank,
+    times_triggered: o.timing?.times_triggered,
+    seen_at: o.event_at || o.timing?.last_seen || null,
+    headline: o.grade === 'dual' ? '双满足' : o.actionable ? '可做' : undefined,
+  }
+  if (row.daily_rent != null) {
+    row.efficiency = row.daily_rent * 10 + (row.ann_per_delta ?? 0) * 0.1
+  } else {
+    row.efficiency = (row.score ?? 0) + (row.annualized ?? 0)
+  }
+  void blocked
+  return row
 }
 
 function buildOppRows(
@@ -1083,9 +1183,12 @@ function TradeModal({
 export default function WheelPage() {
   const [settings, setSettings] = useState<AppSettings>(getAppSettings())
   const { toast } = useToast()
-  const [tab, setTab] = useState<'home' | 'board' | 'opps' | 'timing' | 'ledger' | 'targets'>('home')
+  const [tab, setTab] = useState<'home' | 'board' | 'opps' | 'timing' | 'ledger' | 'targets' | 'risk'>('home')
   const [cockpitOpen, setCockpitOpen] = useState(false)
   const [filterOpen, setFilterOpen] = useState(false)
+  /** 后端统一机会流；有数据时 OPEN 行优先用它 */
+  const [serverOpps, setServerOpps] = useState<WheelOpportunitiesResult | null>(null)
+  const [serverOppsLoading, setServerOppsLoading] = useState(false)
   const [targets, setTargets] = useState<WheelTarget[]>([])
   const [stats, setStats] = useState<WheelStats | null>(null)
   const [cycles, setCycles] = useState<WheelCycle[]>([])
@@ -1258,36 +1361,72 @@ export default function WheelPage() {
     }
   }
 
-  /** 机会扫描:并行刷新高分候选(全池) + EMA 触线 */
+  /** 机会扫描:优先后端 /opportunities 合流；并行触线；可选 TG 推送 */
   async function handleOpportunityScan(opts: { force?: boolean; push?: boolean } = {}) {
     const { force = false, push = false } = opts
     setError(null)
     setPoolScanLoading(true)
+    setServerOppsLoading(true)
     if (push) setPoolPushing(true)
 
     const st = getAppSettings()
-    const rankedPromise = (async () => {
+
+    const unifiedPromise = (async () => {
       try {
-        if (push) {
-          const r = await pushWheelPoolScan(st.marketHost, st.marketPort)
-          setPoolScan(r)
-          if (!r.telegram_sent) {
-            setError('高分候选已刷新,但 Telegram 未配置或发送失败(前往「设置」页检查)')
-          }
-        } else {
-          setPoolScan(await getWheelPoolScan(st.marketHost, st.marketPort, force))
+        const r = await getWheelOpportunities(st.marketHost, st.marketPort, {
+          refresh: force,
+          run_pool: true,
+          filter: 'all',
+          hide_blocked: false,
+        })
+        setServerOpps(r)
+        // 同步一份 pool 缓存供兼容/诊断
+        if (r.pool) {
+          setPoolScan(prev => ({
+            scanned_at: r.pool?.scanned_at || prev?.scanned_at || r.built_at,
+            targets_scanned: r.pool?.targets_scanned ?? prev?.targets_scanned ?? 0,
+            total_found: r.pool?.total_found ?? r.summary?.total ?? prev?.total_found ?? 0,
+            opportunities: prev?.opportunities || [],
+            skipped: prev?.skipped || [],
+            errors: prev?.errors || [],
+            telegram_sent: prev?.telegram_sent,
+          }))
         }
+        flash(r.headline || `机会已更新 · 可做 ${r.summary?.actionable ?? 0}`, 'success')
       } catch (e: any) {
-        setError((push ? '机会扫描推送失败:' : '高分候选扫描失败:') + e.message)
+        // 合流失败则回退本地全池
+        try {
+          setPoolScan(await getWheelPoolScan(st.marketHost, st.marketPort, force))
+          flash('统一机会失败，已回退全池扫描', 'error')
+        } catch (e2: any) {
+          setError('机会扫描失败:' + (e2.message || e.message))
+          flash('机会扫描失败', 'error')
+        }
       } finally {
+        setServerOppsLoading(false)
         setPoolScanLoading(false)
-        if (push) setPoolPushing(false)
       }
     })()
 
-    // 触线与高分并行;强制刷新时也重扫触线
+    const pushPromise = push
+      ? (async () => {
+        try {
+          const r = await pushWheelPoolScan(st.marketHost, st.marketPort)
+          if (!r.telegram_sent) {
+            setError('已扫描,但 Telegram 未配置或发送失败(前往「设置」页检查)')
+          } else {
+            flash('已推送 TG Top', 'success')
+          }
+        } catch (e: any) {
+          setError('TG 推送失败:' + e.message)
+        } finally {
+          setPoolPushing(false)
+        }
+      })()
+      : Promise.resolve()
+
     const timingPromise = runTimingScan()
-    await Promise.all([rankedPromise, timingPromise])
+    await Promise.all([unifiedPromise, pushPromise, timingPromise])
   }
 
   async function handleRoll(cycleId: string) {
@@ -1420,13 +1559,19 @@ export default function WheelPage() {
     })
   }, [trades, cycles, stats, targets])
 
-  const allOppRows = useMemo(
-    () => buildOppRows(
+  const allOppRows = useMemo(() => {
+    const local = buildOppRows(
       poolScan, timingSignals, timingHistory?.items, targets, openChecks, stats, profitTarget,
       ops.available,
-    ),
-    [poolScan, timingSignals, timingHistory, targets, openChecks, stats, profitTarget, ops.available],
-  )
+    )
+    const manage = local.filter(r => r.kind === 'MANAGE')
+    // 有后端合流结果时，开仓行以服务端为准（档位/可做更一致）
+    if (serverOpps?.items?.length) {
+      const open = sortOppRows(serverOpps.items.map(serverOppToRow))
+      return sortOppRows([...manage, ...open])
+    }
+    return local
+  }, [poolScan, timingSignals, timingHistory, targets, openChecks, stats, profitTarget, ops.available, serverOpps])
   const filteredOppRows = useMemo(() => {
     let rows = filterOppRows(allOppRows, oppCatFilter, oppSideFilter, {
       stateAware: oppStateAware,
@@ -1464,7 +1609,7 @@ export default function WheelPage() {
       }, {} as Record<string, number>),
     }
   }, [allOppRows])
-  const oppScanning = poolScanLoading || timingScanning || poolPushing
+  const oppScanning = poolScanLoading || serverOppsLoading || timingScanning || poolPushing
 
   async function copyOrderMemo(p: {
     symbol: string; side: 'PUT' | 'CALL'; action: 'SELL' | 'BUY'
@@ -1623,13 +1768,15 @@ export default function WheelPage() {
 
   const manageCount = allOppRows.filter(r => r.kind === 'MANAGE').length
   const priorityCount = oppCounts.priority
+  // 主路径：今日/机会/持仓；台账/标的日常配置；触线档案+风控为次级
   const pageTabs: { k: typeof tab; label: string }[] = [
     { k: 'home', label: '今日' },
     { k: 'opps', label: priorityCount ? `机会(${priorityCount})` : '机会' },
     { k: 'board', label: '持仓' },
-    { k: 'timing', label: '触线历史' },
     { k: 'ledger', label: '台账' },
     { k: 'targets', label: `标的(${targets.length})` },
+    { k: 'timing', label: '触线档案' },
+    { k: 'risk', label: '风控' },
   ]
 
   function showKilledOpps() {
@@ -2429,7 +2576,17 @@ export default function WheelPage() {
         <div className="tab-panel">
           <div className="panel">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-              <span className="panel-title" style={{ margin: 0, flex: 1 }}>机会</span>
+              <span className="panel-title" style={{ margin: 0, flex: 1 }}>
+                机会
+                {serverOpps?.headline && (
+                  <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-secondary)', marginLeft: 10 }}>
+                    {serverOpps.headline}
+                    {serverOpps.summary != null && (
+                      <> · 可做 {serverOpps.summary.actionable} · 双满足 {serverOpps.summary.dual}</>
+                    )}
+                  </span>
+                )}
+              </span>
               <button type="button" className="btn btn-primary btn-sm" disabled={oppScanning}
                 onClick={() => handleOpportunityScan()}>{oppScanning ? '扫描中…' : '扫描'}</button>
               <button type="button" className="btn btn-secondary btn-sm" disabled={oppScanning}
@@ -2668,12 +2825,26 @@ export default function WheelPage() {
         </div>
       )}
 
-      {/* ── 触线历史(EMA 触线持久化) ── */}
+      {/* ── 风控 / 组合优化（周级能力，非盘中主路径） ── */}
+      {tab === 'risk' && (
+        <div className="tab-panel">
+          <div className="banner info" style={{ marginBottom: 12 }}>
+            <span style={{ flex: 1 }}>
+              组合资金、压力测试、相关、准入、对账与回测 — 适合周复盘/调仓，不参与盘中开仓主路径。
+            </span>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => setTab('home')}>回今日</button>
+          </div>
+          <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
+            <WheelOptimizePanel />
+          </div>
+        </div>
+      )}
+
+      {/* ── 触线档案(EMA 触线持久化) ── */}
       {tab === 'timing' && (
         <div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-            EMA 触线机会的历史记录:按合约代码去重合并(同一合约再次触发只更新并累计次数),按最近发现时间倒序。
-            高分候选不在此落库,请到「机会扫描」Tab 查看。
+            EMA 触线落库档案：按合约去重合并，最近发现倒序。盘中开仓请用「机会」Tab。
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>

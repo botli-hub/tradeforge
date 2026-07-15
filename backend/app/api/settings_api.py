@@ -35,6 +35,8 @@ class BackendConfigIn(BaseModel):
     wheel_timing: Optional[Dict[str, Any]] = None
     wheel_position: Optional[Dict[str, Any]] = None
     wheel_scan: Optional[Dict[str, Any]] = None
+    wheel_portfolio: Optional[Dict[str, Any]] = None
+    wheel_profiles: Optional[Dict[str, Any]] = None
 
 
 @router.get("/backend")

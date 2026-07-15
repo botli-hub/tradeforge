@@ -429,6 +429,38 @@ function BackendConfigCard() {
       </div>
 
       <div className="editor-section">
+        <h4>组合风控（组合优化页用）</h4>
+        <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+          填写组合净值后，才可正确计算利用率/闲置资金/净值占比。单标的资金上限在
+          <b> Wheel → 标的设置</b> 的「资金上限 max_capital」中配置。
+        </p>
+        <div className="settings-row">
+          <label>组合净值(USD,0=未设)</label>
+          <input type="number" step="1000" value={cfg.wheel_portfolio?.total_equity ?? 0}
+            placeholder="例如 300000"
+            onChange={e => up('wheel_portfolio', 'total_equity', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>组合占用上限(0~1)</label>
+          <input type="number" step="0.05" min={0} max={1}
+            value={cfg.wheel_portfolio?.max_portfolio_pct ?? 0.8}
+            onChange={e => up('wheel_portfolio', 'max_portfolio_pct', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>单标的占净值上限(0~1)</label>
+          <input type="number" step="0.05" min={0} max={1}
+            value={cfg.wheel_portfolio?.max_symbol_pct ?? 0.25}
+            onChange={e => up('wheel_portfolio', 'max_symbol_pct', Number(e.target.value))} />
+        </div>
+        <div className="settings-row">
+          <label>高相关阈值</label>
+          <input type="number" step="0.05" min={0} max={1}
+            value={cfg.wheel_portfolio?.high_corr_threshold ?? 0.7}
+            onChange={e => up('wheel_portfolio', 'high_corr_threshold', Number(e.target.value))} />
+        </div>
+      </div>
+
+      <div className="editor-section">
         <h4>管理规则 · 持仓与通知</h4>
         <div className="settings-row">
           <label>平仓利润目标(%)</label>
