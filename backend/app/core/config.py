@@ -76,6 +76,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "hard_roll_dte": 21,
         "gamma_warn_dte": 7,
         "hold_theta_min_profit_pct": 40,
+        # OTM 高浮盈:DTE≤此值且剩余年化仍体面 → 优先吃 θ,不机械 50% 止盈
+        "hold_theta_max_dte": 14,
+        "hold_theta_min_remaining_ann": 12.0,
+        # OTM 安全垫过薄(%)时,达标更倾向落袋而非硬吃 θ
+        "thin_otm_buffer_pct": 1.5,
+        # 浮盈≥此值且 DTE>gamma → 倾向止盈,避免无限持有
+        "max_hold_profit_pct": 80.0,
         "dividend_warn_days": 14,
         # 平仓名义 < 此值(美元)且高浮盈 OTM → 倾向吃 θ,避免手续费吞收益
         "min_close_notional": 20.0,

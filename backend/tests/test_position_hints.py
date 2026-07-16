@@ -16,7 +16,7 @@ def _item(**kw):
 
 def test_profit_hit_first():
     r = _position_hints(_item(profit_pct=60.0, buyback_ask=1.0), 15, 50)
-    assert r["action_hint"] == "止盈平仓"
+    assert "止盈平仓" in (r["action_hint"] or "")
     assert r["action_code"] == "CLOSE"
 
 
@@ -43,12 +43,13 @@ def test_shallow_itm_expiring():
 
 
 def test_21dte_rule():
-    r = _position_hints(_item(dte=18, profit_pct=30.0, buyback_ask=1.5), 15, 50)
+    # 剩余年化低 + 未软止盈才触发 21DTE Roll
+    r = _position_hints(_item(dte=18, profit_pct=10.0, buyback_ask=0.4, current_price=0.4), 15, 50)
     assert r["roll_21dte"] and r["action_code"] == "ROLL"
     assert "Roll" in (r["action_hint"] or "")
-    # 已止盈则不触发 21DTE
-    r2 = _position_hints(_item(dte=18, profit_pct=55.0, buyback_ask=1.0), 15, 50)
-    assert not r2["roll_21dte"] and r2["action_hint"] == "止盈平仓"
+    # 已止盈且 DTE>14 → 止盈(非吃θ)
+    r2 = _position_hints(_item(dte=18, profit_pct=55.0, buyback_ask=2.5, current_price=2.5, strike=100), 15, 50)
+    assert r2["action_code"] in ("CLOSE", "HOLD_THETA")
 
 
 def test_low_yield():

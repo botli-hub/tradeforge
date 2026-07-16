@@ -687,8 +687,12 @@ export interface WheelOpenPositionItem {
   /** CLOSE|ROLL|ROLL_ADJUST|HOLD_THETA|REPLACE|PREPARE_ASSIGN|NONE */
   action_code?: WheelActionCode | null
   action_priority?: number
+  /** 次要提示(如吃θ时仍可止盈腾仓) */
+  secondary_hint?: string | null
   /** no_roll | roll_out | adjust_strike */
   prefer_card?: string | null
+  thin_otm?: boolean
+  otm_buffer_pct?: number | null
   reasons?: string[]
   profit_pct: number | null
   spot: number
@@ -1184,6 +1188,8 @@ export interface WheelOpportunity {
   contract_short?: string | null
   group_size?: number
   group_rank?: number
+  /** 同标的同方向最优一条 */
+  is_top_pick?: boolean
   /** 最近事件时间(触线 last_seen)，后端已按此倒序 */
   event_at?: string | null
   context?: {
@@ -1209,7 +1215,18 @@ export interface WheelOpportunitiesResult {
     total: number
     idle_slots: number
     min_score_threshold: number
+    portfolio_put_blocked?: boolean
   }
+  portfolio?: {
+    portfolio_put_blocked?: boolean
+    assignment_stress?: number
+    utilization_pct?: number | null
+    over_portfolio?: boolean
+    stress_block?: boolean
+    equity?: number | null
+  }
+  /** 每标的同方向主推 */
+  primary_picks?: WheelOpportunity[]
   idle_slots: { symbol: string; headroom?: number | null; stage?: string }[]
   items: WheelOpportunity[]
   actionable_items?: WheelOpportunity[]

@@ -86,8 +86,15 @@ def decide_roll_scenario(
     min_annualized: float,
     profit_target: float,
     hard_roll_dte: int = 21,
+    close_notional: float = 0.0,
+    pos_cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """返回 recommended_action + reason + priority 场景键。"""
+    """返回 recommended_action + reason + priority 场景键。
+
+    与 wheel_decision.eval_hold_for_theta 对齐,避免「持仓说吃θ、Roll 台说止盈」。
+    """
+    from app.core.wheel_decision import eval_hold_for_theta
+
     profit_hit = profit_pct is not None and profit_pct >= profit_target
     low_yield = bool(
         not itm and remaining_ann is not None and min_annualized > 0
@@ -95,21 +102,46 @@ def decide_roll_scenario(
     )
     near_dte = dte is not None and dte <= hard_roll_dte
     expiring = dte is not None and dte <= 7
+    hold_meta = eval_hold_for_theta(
+        itm=itm,
+        deep_itm=deep_itm,
+        profit_pct=profit_pct,
+        dte=dte,
+        remaining_ann=remaining_ann,
+        close_notional=close_notional,
+        min_annualized=min_annualized,
+        pos_cfg=pos_cfg,
+    )
+    hold_theta = hold_meta["hold_for_theta"]
+    residual_ok = hold_meta["residual_worth_keeping"]
 
-    if profit_hit and not expiring:
+    # 与持仓树一致:可吃 θ 时优先放任/持有,而非止盈
+    if hold_theta:
+        return {
+            "scenario": "hold_theta",
+            "recommended_action": "let_expire",
+            "headline": (
+                f"OTM 高浮盈,优先吃 θ(浮盈 {profit_pct}%"
+                + (f",剩余年化 {remaining_ann}%" if remaining_ann is not None else "")
+                + ")"
+            ),
+            "detail": (
+                "与持仓决策一致:剩余权利金仍体面或临期摩擦大,不必为 credit 硬 roll;"
+                "若需腾仓/换股再考虑买回。"
+            ),
+            "prefer_card": "no_roll",
+        }
+    if profit_hit:
+        detail = (
+            "结束 Call 义务、保留持股,不必为 credit 硬 roll"
+            if side == "CALL"
+            else "释放担保金再开新轮,不必为 credit 硬 roll"
+        )
         return {
             "scenario": "take_profit",
             "recommended_action": "close_now",
             "headline": f"建议止盈平仓(浮盈 {profit_pct}% ≥ 目标 {profit_target}%)",
-            "detail": "权利金大头已收,优先释放担保金再开新轮,不必为 credit 硬 roll",
-            "prefer_card": "no_roll",
-        }
-    if profit_hit and expiring and not itm:
-        return {
-            "scenario": "hold_theta",
-            "recommended_action": "let_expire",
-            "headline": f"临期高浮盈,可持有吃 theta(浮盈 {profit_pct}%)",
-            "detail": "DTE 很短且 OTM,手续费可能吃掉剩余权利金;除非需要资金周转",
+            "detail": detail,
             "prefer_card": "no_roll",
         }
     if deep_itm or (itm and (delta >= 0.5 or expiring)):
@@ -125,7 +157,8 @@ def decide_roll_scenario(
             "prefer_card": "adjust_strike",
             "prefer_branch": adj,
         }
-    if near_dte and not profit_hit:
+    # 临近到期:仅 ITM / 低效 / 剩余年化不体面时强推 roll
+    if near_dte and not profit_hit and (itm or low_yield or not residual_ok):
         return {
             "scenario": "roll_21dte",
             "recommended_action": "roll_out",
@@ -133,12 +166,22 @@ def decide_roll_scenario(
             "detail": "同 strike(或合规 strike)换到 30–45 DTE、目标 δ,尽量 for credit",
             "prefer_card": "roll_out",
         }
+    if near_dte and not profit_hit and residual_ok and not itm:
+        return {
+            "scenario": "hold_or_monitor",
+            "recommended_action": "hold",
+            "headline": f"DTE {dte} 偏短但 OTM 且剩余年化尚可,可继续持有",
+            "detail": "无需为 21DTE 机械 roll;临近 7DTE 或转 ITM 再处理",
+            "prefer_card": "no_roll",
+        }
     if low_yield:
         return {
             "scenario": "low_yield",
             "recommended_action": "close_or_roll",
-            "headline": f"剩余年化偏低({remaining_ann}%),担保金低效",
-            "detail": "优先平仓换仓;若 roll for credit 效率尚可,选 $/天 更高者",
+            "headline": f"剩余年化偏低({remaining_ann}%),仓位低效",
+            "detail": (
+                "优先平仓后再卖 CC" if side == "CALL" else "优先平仓换仓"
+            ) + ";若 roll for credit 效率尚可,选 $/天 更高者",
             "prefer_card": "no_roll",
         }
     return {
@@ -146,7 +189,7 @@ def decide_roll_scenario(
         "recommended_action": "hold",
         "headline": "仓位尚健康,可继续持有观察",
         "detail": "无需强行 roll;有更好 credit/效率机会时再换",
-        "prefer_card": "roll_out",
+        "prefer_card": "no_roll",
     }
 
 
@@ -405,6 +448,22 @@ def build_decision_cards(
     elif scenario.get("recommended_action") == "let_expire":
         rec_sub = "let_expire"
 
+    is_call = side == "CALL"
+    close_pros = (
+        ["结束 Call 义务、保留持股", "锁定已实现权利金", "便于再卖下一轮 CC"]
+        if is_call else
+        ["释放 CSP 现金担保", "锁定已实现权利金", "便于再开新 Put"]
+    )
+    expire_cons = (
+        ["若到期 ITM 可能被 call 走(交货)", "临期 gamma / 提前行权(除息)风险"]
+        if is_call else
+        ["若到期 ITM 可能被指派接货", "临期 gamma 风险"]
+    )
+    expire_when = (
+        "OTM + 临期 + 愿意继续持股吃 θ"
+        if is_call else
+        "OTM + 临期 + 不需要现金担保周转"
+    )
     no_roll = {
         "key": "no_roll",
         "title": "不 Roll",
@@ -414,16 +473,16 @@ def build_decision_cards(
                 "action": "close_now",
                 "buyback_cost_per_contract": close_cost,
                 "locked_premium_est": locked,
-                "pros": ["释放担保/结束义务", "锁定已实现权利金"],
+                "pros": close_pros,
                 "cons": ["放弃剩余 theta", "可能错过 roll credit"],
-                "when": "浮盈达标、剩余年化低、或需要资金时",
+                "when": "浮盈达标、剩余年化低、或需要调仓时",
             },
             "let_expire": {
                 "action": "let_expire",
                 "buyback_cost_per_contract": 0,
                 "pros": ["零手续费吃完剩余权利金(若保持 OTM)"],
-                "cons": ["ITM 则接货/交货", "临期 gamma 风险"],
-                "when": "OTM + 临期 + 不需要资金",
+                "cons": expire_cons,
+                "when": expire_when,
             },
         },
         "recommended_sub": rec_sub,

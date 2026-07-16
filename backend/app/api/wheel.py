@@ -1079,12 +1079,15 @@ def roll_options(
         spot_v and cur_strike and abs(spot_v - cur_strike) / spot_v > 0.03
     )))
 
+    close_notional = float(buyback_ask or 0) * float(size or 100)
     scenario = wr.decide_roll_scenario(
         side=side, dte=cur_dte, profit_pct=profit_pct, itm=itm, deep_itm=deep_itm,
         delta=cur_delta, remaining_ann=remaining_ann,
         min_annualized=float(target.get("min_annualized") or 0),
         profit_target=float(pos_cfg.get("profit_target_pct") or 50),
         hard_roll_dte=int(pos_cfg.get("hard_roll_dte") or 21),
+        close_notional=close_notional,
+        pos_cfg=pos_cfg,
     )
 
     decision = wr.build_decision_cards(

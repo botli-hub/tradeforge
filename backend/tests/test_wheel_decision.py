@@ -20,7 +20,7 @@ def _item(**kw):
 def test_profit_hit():
     r = decide_position(_item(profit_pct=60.0), 15, 50)
     assert r["action_code"] == "CLOSE"
-    assert r["action_hint"] == "止盈平仓"
+    assert "止盈平仓" in (r["action_hint"] or "")
     assert r["prefer_card"] == "no_roll"
 
 
@@ -39,6 +39,54 @@ def test_hold_for_theta():
     )
     assert r["action_code"] == "HOLD_THETA"
     assert r["decision_tree"]["hold_for_theta"]
+
+
+def test_hold_theta_otm_dte14_high_remaining():
+    """ARM CC 类:浮盈>50% 但 DTE14 OTM 且剩余年化仍高 → 吃 θ,不硬止盈"""
+    # rem_ann = 4.9/340*365/14*100 ≈ 37.6
+    r = decide_position(
+        _item(
+            side="CALL", strike=340.0, spot=300.0, dte=14, itm=False,
+            profit_pct=53.3, buyback_ask=4.9, current_price=4.9,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "HOLD_THETA"
+    assert "剩余年化" in (r["action_hint"] or "") or "theta" in (r["action_hint"] or "").lower()
+    assert r["decision_tree"]["residual_worth_keeping"]
+
+
+def test_profit_hit_still_closes_when_dte_long():
+    """DTE 仍长(如35)时,浮盈达标仍止盈,不无限拖"""
+    r = decide_position(
+        _item(dte=35, profit_pct=55.0, buyback_ask=1.5, current_price=1.5, strike=100.0),
+        15, 50,
+    )
+    assert r["action_code"] == "CLOSE"
+
+
+def test_healthy_otm_near_dte_no_force_roll():
+    """OTM + 剩余年化尚可 + DTE18 未止盈 → 不必机械 21DTE Roll"""
+    r = decide_position(
+        _item(dte=18, profit_pct=20.0, buyback_ask=2.0, current_price=2.0, strike=100.0, spot=110.0),
+        15, 50,
+    )
+    # rem ≈ 2/100*365/18*100 ≈ 40.5
+    assert r["action_code"] in ("NONE", "HOLD_THETA")
+    assert not (r.get("roll_21dte") and r["action_code"] == "ROLL")
+
+
+def test_max_hold_profit_caps_theta():
+    """浮盈极高(≥80%)且非极临期 → 止盈优先于吃 θ"""
+    r = decide_position(
+        _item(
+            side="CALL", strike=340.0, spot=300.0, dte=14, itm=False,
+            profit_pct=85.0, buyback_ask=1.5, current_price=1.5,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "CLOSE"
+    assert r["decision_tree"].get("profit_cap_close")
 
 
 def test_fee_trap_hold_theta():
@@ -108,7 +156,9 @@ def test_shallow_itm_put_observe():
 
 
 def test_21dte_roll_out():
-    r = decide_position(_item(dte=18, profit_pct=30.0, buyback_ask=1.5), 15, 50)
+    # 剩余年化偏低 + 未达软止盈 → 21DTE Roll(健康 OTM 不再机械 roll)
+    # rem = 0.4/100*365/18*100 ≈ 8.1 < 15; profit 10 < soft 30
+    r = decide_position(_item(dte=18, profit_pct=10.0, buyback_ask=0.4, current_price=0.4), 15, 50)
     assert r["roll_21dte"]
     assert r["action_code"] == "ROLL"
     assert r["prefer_card"] == "roll_out"

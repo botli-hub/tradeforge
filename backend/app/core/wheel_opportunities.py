@@ -154,6 +154,9 @@ def _red_flags(
     exceeds_capital: bool,
     below_floor: bool,
     earnings_hard: bool,
+    portfolio_stress: bool = False,
+    iv_rank: Optional[float] = None,
+    iv_low_threshold: float = 25.0,
 ) -> List[str]:
     flags = []
     if exceeds_capital:
@@ -164,6 +167,10 @@ def _red_flags(
         flags.append("趋势DOWN")
     if side == "PUT" and below_floor:
         flags.append("低于接货底线")
+    if side == "PUT" and portfolio_stress:
+        flags.append("组合压力高")
+    if side == "PUT" and iv_rank is not None and iv_rank < iv_low_threshold:
+        flags.append("IV低位")
     return flags
 
 
@@ -177,13 +184,13 @@ def _grade_actionable(
 ) -> Tuple[str, bool]:
     """返回 (grade, actionable)。grade: dual|timing|score|blocked|watch
 
-    「低于接货底线」仅展示标签,不单独把 READY 触线打成不可做
-    (现价跌破 floor 仍可能是好卖 Put 时机,由用户评估接货意愿)。
+    硬阻断:超资金 / 覆盖财报 / 组合压力高(新 Put)
+    「低于接货底线」「IV低位」仅软标签或软降档,不单独 hard block。
     """
-    hard = [f for f in flags if f in ("超资金上限", "覆盖财报")]
+    hard = [f for f in flags if f in ("超资金上限", "覆盖财报", "组合压力高")]
     soft_all = [f for f in flags if f not in hard]
     # 不参与降档的软标签(仍出现在 flags 里给前端角标)
-    soft_demote = [f for f in soft_all if f not in ("低于接货底线",)]
+    soft_demote = [f for f in soft_all if f not in ("低于接货底线", "IV低位")]
     if hard:
         return "blocked", False
     if source == "dual":
@@ -199,12 +206,45 @@ def _grade_actionable(
             # 趋势DOWN 等:仍展示为 watch,但保留触线
             return "watch", False
         return "watch", False
-    # score only
+    # score only: IV 过低时降观察(卖方权利金薄)
     if score is not None and score >= min_score and not soft_demote:
+        if "IV低位" in soft_all:
+            return "watch", False
         return "score", True
     if score is not None and score >= min_score:
         return "watch", False
     return "watch", False
+
+
+def _portfolio_put_stress(cfg: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    """是否应暂停新开 Put:利用率超限 或 行权压力过高。"""
+    from app.core.wheel_portfolio import portfolio_overview
+
+    pcfg = cfg.get("wheel_portfolio", {}) or {}
+    pos = cfg.get("wheel_position", {}) or {}
+    overview = portfolio_overview(
+        total_equity=float(pcfg["total_equity"]) if pcfg.get("total_equity") else None,
+        max_portfolio_pct=float(pcfg.get("max_portfolio_pct", 0.80)),
+        max_symbol_pct=float(pcfg.get("max_symbol_pct", 0.25)),
+    )
+    stress = float(overview.get("assignment_stress") or 0)
+    committed = float(overview.get("total_committed") or 0)
+    equity = overview.get("equity")
+    # 与前端 stressBlocksNewPuts 均衡档 1.5x 对齐;可用配置覆盖
+    ratio = float(pos.get("stress_put_block_ratio", 1.5) or 1.5)
+    base = max(committed, float(equity or 0) * 0.3) if equity else committed
+    stress_block = bool(stress > 0 and base > 0 and stress >= base * ratio)
+    over_pf = bool(overview.get("over_portfolio"))
+    blocked = stress_block or over_pf
+    meta = {
+        "portfolio_put_blocked": blocked,
+        "assignment_stress": stress,
+        "utilization_pct": overview.get("utilization_pct"),
+        "over_portfolio": over_pf,
+        "stress_block": stress_block,
+        "equity": equity,
+    }
+    return blocked, meta
 
 
 def build_opportunities(
@@ -226,6 +266,8 @@ def build_opportunities(
     timing_cfg = cfg.get("wheel_timing", {}) or {}
     min_iv = float(timing_cfg.get("push_min_iv_rank", 50) or 0)
     earnings_hard = bool(scan_cfg.get("earnings_hard_filter", True))
+    iv_low_thr = float(scan_cfg.get("iv_low_threshold", 25) or 25)
+    put_stress, portfolio_meta = _portfolio_put_stress(cfg)
     # 可做分数阈值:配置或全池中位数*0.6
     min_score_cfg = scan_cfg.get("opportunity_min_score")
     if min_score is not None:
@@ -313,6 +355,27 @@ def build_opportunities(
     def ensure_ctx(symbol: str) -> Dict[str, Any]:
         return _symbol_context(symbol)
 
+    def flags_for(
+        *,
+        side: str,
+        trend: Optional[str],
+        covers: bool,
+        exceeds: bool,
+        below: bool,
+        iv_rank: Optional[float] = None,
+    ) -> List[str]:
+        return _red_flags(
+            side=side,
+            trend=trend,
+            covers_earnings=covers,
+            exceeds_capital=exceeds,
+            below_floor=below,
+            earnings_hard=earnings_hard,
+            portfolio_stress=put_stress and side == "PUT",
+            iv_rank=iv_rank,
+            iv_low_threshold=iv_low_thr,
+        )
+
     # 1) timing history
     for h in timing_rows:
         symbol = h.get("symbol") or ""
@@ -328,9 +391,9 @@ def build_opportunities(
         covers = bool((pool_o or {}).get("covers_earnings"))
         exceeds = bool((pool_o or {}).get("exceeds_capital"))
         below = bool(h.get("below_floor"))
-        flags = _red_flags(
-            side=side, trend=trend, covers_earnings=covers,
-            exceeds_capital=exceeds, below_floor=below, earnings_hard=earnings_hard,
+        ivr = h.get("iv_rank") if h.get("iv_rank") is not None else (pool_o or {}).get("iv_rank")
+        flags = flags_for(
+            side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr,
         )
         score = (pool_o or {}).get("score")
         grade, actionable = _grade_actionable(
@@ -418,9 +481,9 @@ def build_opportunities(
         covers = bool((pool_o or {}).get("covers_earnings"))
         exceeds = bool((pool_o or {}).get("exceeds_capital"))
         below = bool(s.get("below_floor")) if "below_floor" in s else False
-        flags = _red_flags(
-            side=side, trend=trend, covers_earnings=covers,
-            exceeds_capital=exceeds, below_floor=below, earnings_hard=earnings_hard,
+        ivr = s.get("iv_rank") if s.get("iv_rank") is not None else (pool_o or {}).get("iv_rank")
+        flags = flags_for(
+            side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr,
         )
         score = (pool_o or {}).get("score")
         grade, actionable = _grade_actionable(
@@ -480,14 +543,14 @@ def build_opportunities(
             if m.get("source") == "timing":
                 m["source"] = "dual"
                 m["rank_boost"] = 1000
-                flags = m.get("flags") or []
                 # recompute flags with pool data
-                flags = _red_flags(
-                    side=side, trend=o.get("trend"),
-                    covers_earnings=bool(o.get("covers_earnings")),
-                    exceeds_capital=bool(o.get("exceeds_capital")),
-                    below_floor=bool((m.get("timing") or {}).get("below_floor")),
-                    earnings_hard=earnings_hard,
+                flags = flags_for(
+                    side=side,
+                    trend=o.get("trend"),
+                    covers=bool(o.get("covers_earnings")),
+                    exceeds=bool(o.get("exceeds_capital")),
+                    below=bool((m.get("timing") or {}).get("below_floor")),
+                    iv_rank=m.get("iv_rank") if m.get("iv_rank") is not None else o.get("iv_rank"),
                 )
                 m["flags"] = flags
                 m["trend"] = o.get("trend")
@@ -501,11 +564,13 @@ def build_opportunities(
                 m["actionable"] = actionable
             continue
 
-        flags = _red_flags(
-            side=side, trend=o.get("trend"),
-            covers_earnings=bool(o.get("covers_earnings")),
-            exceeds_capital=bool(o.get("exceeds_capital")),
-            below_floor=False, earnings_hard=earnings_hard,
+        flags = flags_for(
+            side=side,
+            trend=o.get("trend"),
+            covers=bool(o.get("covers_earnings")),
+            exceeds=bool(o.get("exceeds_capital")),
+            below=False,
+            iv_rank=o.get("iv_rank"),
         )
         score = o.get("score")
         grade, actionable = _grade_actionable(
@@ -590,12 +655,17 @@ def build_opportunities(
         k = f"{it.get('symbol')}|{it.get('side')}"
         by_sym_side.setdefault(k, []).append(it)
     capped: List[Dict[str, Any]] = []
+    primary_picks: List[Dict[str, Any]] = []
     for k, group in by_sym_side.items():
         group.sort(key=_group_rank_key)
         top = group[:max_per_sym_side]
         for i, it in enumerate(top):
             it["group_size"] = len(group)
             it["group_rank"] = i + 1
+            # 同标的同方向最优一条 = 主推(先可做,再质量)
+            it["is_top_pick"] = i == 0
+            if i == 0:
+                primary_picks.append(it)
         capped.extend(top)
     items = capped
     # 最终:可做优先 → 时间倒序 → 分
@@ -645,6 +715,8 @@ def build_opportunities(
         + (f", ★双满足 {len(dual)} 个" if dual else "")
         + (f", {len(idle_slots)} 个标的资金空档待填" if idle_slots else "")
     )
+    if put_stress:
+        headline = "⚠ 组合压力高,已暂停新开 Put · " + headline
     if actionable:
         top = actionable[0]
         why = []
@@ -656,9 +728,21 @@ def build_opportunities(
             why.append(f"分{top['score']}")
         headline += f"。优先看 {top['symbol']} {top['side']}" + (f"({' · '.join(why)})" if why else "")
 
+    # 主推列表:每 symbol|side 一条,可做优先
+    primary_sorted = sorted(
+        primary_picks,
+        key=lambda x: (
+            0 if x.get("actionable") else 1,
+            0 if x.get("source") == "dual" else 1,
+            -(float(x.get("annualized") or 0)),
+        ),
+    )
+
     return {
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "headline": headline,
+        "portfolio": portfolio_meta,
+        "primary_picks": primary_sorted[:12],
         "summary": {
             "actionable": len(actionable),
             "actionable_put": put_n,
@@ -667,6 +751,7 @@ def build_opportunities(
             "watch": len(watch),
             "blocked": len(blocked),
             "total": len(items),
+            "portfolio_put_blocked": put_stress,
             "idle_slots": len(idle_slots),
             "min_score_threshold": round(score_threshold, 2),
         },
@@ -675,9 +760,10 @@ def build_opportunities(
         "actionable_items": actionable,
         "pool": pool_meta,
         "rules": {
-            "actionable": "无硬红线(超资金/Put财报) 且 (双满足 | 触线READY/STRONG | 纯高分≥阈值)",
+            "actionable": "无硬红线(超资金/Put财报/组合压力) 且 (双满足 | 触线READY/STRONG | 纯高分≥阈值)",
             "dual": "触线历史/信号 与 全池扫描合约匹配",
             "min_score_threshold": score_threshold,
             "earnings_hard_filter": earnings_hard,
+            "portfolio_put_block": "利用率超限或行权压力≥committed×ratio 时停新 Put",
         },
     }

@@ -235,6 +235,8 @@ type OppRow = {
   action_priority?: number
   prefer_card?: string | null
   decision_why?: string[]
+  /** 同标的同方向主推 */
+  is_top_pick?: boolean
   signal?: LeapsSignal
   history?: WheelTimingHistoryItem
   check?: WheelOpenPositionItem
@@ -560,6 +562,7 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
     times_triggered: o.timing?.times_triggered,
     seen_at: o.event_at || o.timing?.last_seen || null,
     headline: o.grade === 'dual' ? '双满足' : o.actionable ? '可做' : undefined,
+    is_top_pick: !!o.is_top_pick,
   }
   if (row.daily_rent != null) {
     row.efficiency = row.daily_rent * 10 + (row.ann_per_delta ?? 0) * 0.1
@@ -727,7 +730,10 @@ function buildOppRows(
     if (code === 'CLOSE') {
       cat = 'CLOSE'; tag = '该平仓'; efficiency = 1000 + (item.profit_pct || 0)
     } else if (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') {
-      cat = 'ROLL'; tag = code === 'PREPARE_ASSIGN' ? '接货/交货' : '该Roll'
+      cat = 'ROLL'
+      tag = code === 'PREPARE_ASSIGN'
+        ? (item.side === 'CALL' ? '准备交货' : '准备接货')
+        : '该Roll'
       efficiency = 900 + (item.dte != null ? Math.max(0, 30 - item.dte) : 0)
     } else if (code === 'REPLACE') {
       cat = 'LOW_YIELD'; tag = '该换仓'; efficiency = 800 + (item.profit_pct || 0)
@@ -1596,12 +1602,22 @@ export default function WheelPage() {
     await Promise.all([unifiedPromise, pushPromise, timingPromise])
   }
 
-  async function handleRoll(cycleId: string) {
+  async function handleRoll(cycleId: string, preferCard?: string | null) {
     setRollLoading(true)
     setError(null)
     try {
       const st = getAppSettings()
-      setRollData(await getWheelRollOptions(cycleId, st.marketHost, st.marketPort))
+      const data = await getWheelRollOptions(cycleId, st.marketHost, st.marketPort)
+      // 决策树 prefer_card 优先于 API highlighted
+      if (preferCard) {
+        setRollData({
+          ...data,
+          highlighted_card: preferCard,
+          decision: { ...(data.decision || {}), prefer_card: preferCard },
+        })
+      } else {
+        setRollData(data)
+      }
     } catch (e: any) {
       setError('Roll 对比获取失败:' + e.message)
     } finally {
@@ -1769,10 +1785,14 @@ export default function WheelPage() {
 
   const profitHits = Object.values(openChecks).filter(i => i.profit_hit)
 
-  const putBlocked = stressBlocksNewPuts(
-    stats?.capital?.assignment_stress ?? 0,
-    stats?.capital?.total_committed ?? 0,
-    riskTier,
+  const putBlocked = !!(
+    serverOpps?.summary?.portfolio_put_blocked
+    || serverOpps?.portfolio?.portfolio_put_blocked
+    || stressBlocksNewPuts(
+      stats?.capital?.assignment_stress ?? 0,
+      stats?.capital?.total_committed ?? 0,
+      riskTier,
+    )
   )
   const ops = useMemo(() => {
     const idleCount = targets.filter(t => t.enabled && (t.idle_days ?? 0) >= 5).length
@@ -1885,7 +1905,11 @@ export default function WheelPage() {
   function openOppRegister(row: OppRow) {
     if (row.kind === 'MANAGE') {
       const code = (row.action_code || '').toUpperCase()
-      // 吃 θ:不强推平仓登记
+      // 吃 θ / 观察:打开分叉决策台(高亮放任到期),不直接登记平仓
+      if ((code === 'HOLD_THETA' || code === 'NONE') && row.check) {
+        setManageCompare(row.check)
+        return
+      }
       if (code === 'HOLD_THETA' || code === 'NONE') {
         flash(row.action_hint || '建议继续持有观察', 'info')
         return
@@ -1893,7 +1917,7 @@ export default function WheelPage() {
       if (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN'
         || row.categories.includes('ROLL')) {
         if (row.check) setManageCompare(row.check)
-        if (row.cycle_id) handleRoll(row.cycle_id)
+        if (row.cycle_id) handleRoll(row.cycle_id, row.prefer_card || row.check?.prefer_card)
         return
       }
       if (row.categories.includes('CLOSE') && row.check && code !== 'REPLACE') {
@@ -2292,6 +2316,90 @@ export default function WheelPage() {
               )}
             </div>
           )}
+
+          {/* 先管后开:决策摘要 */}
+          <div className="panel" style={{ borderColor: 'var(--green, #22c55e55)' }}>
+            <div className="panel-title" style={{ marginBottom: 8 }}>今日决策</div>
+            {putBlocked && (
+              <div className="banner error" style={{ marginBottom: 8 }}>
+                组合压力高:已暂停新开 Put
+                {serverOpps?.portfolio?.utilization_pct != null
+                  && ` · 利用率 ${fmt(serverOpps.portfolio.utilization_pct, 0)}%`}
+              </div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>① 先处理持仓</div>
+                {(() => {
+                  const m = allOppRows.filter(r => r.kind === 'MANAGE' && r.actionable !== false)
+                    .sort((a, b) => (a.action_priority ?? 9) - (b.action_priority ?? 9))[0]
+                  if (!m) return <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无紧急管理项</div>
+                  return (
+                    <div className="opp-row" style={{ margin: 0 }}>
+                      <div className="opp-row-main">
+                        <div className="opp-row-title">
+                          <Badge color="orange">{m.tags[0] || '该管'}</Badge>
+                          {m.symbol} {m.side}
+                        </div>
+                        <div className="opp-row-meta">
+                          <span>{m.action_hint || m.headline}</span>
+                        </div>
+                      </div>
+                      <div className="opp-row-actions">
+                        <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(m)}>
+                          {(m.action_code === 'ROLL' || m.action_code === 'ROLL_ADJUST' || m.action_code === 'PREPARE_ASSIGN') ? '看 Roll' : '处理'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>② 再考虑开仓(主推)</div>
+                {(() => {
+                  if (putBlocked) {
+                    return <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>压力解除前不推新 Put</div>
+                  }
+                  const openPick = (serverOpps?.primary_picks || [])
+                    .filter(p => p.actionable && !(putBlocked && p.side === 'PUT'))
+                    .map(serverOppToRow)[0]
+                    || allOppRows.find(r => r.kind === 'OPEN' && r.is_top_pick && r.tradeable)
+                    || allOppRows.find(r => r.kind === 'OPEN' && (r.trade_tier === 'PRIORITY' || r.trade_tier === 'QUEUE') && r.tradeable)
+                  if (!openPick) {
+                    return (
+                      <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                        暂无主推 · <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleOpportunityScan()}>扫机会</button>
+                      </div>
+                    )
+                  }
+                  const sk = signalKindLabel(resolveOppSignalKind(openPick))
+                  return (
+                    <div className="opp-row" style={{ margin: 0 }}>
+                      <div className="opp-row-main">
+                        <div className="opp-row-title">
+                          <Badge color="orange">主推</Badge>
+                          <Badge color={sk.color}>{sk.text}</Badge>
+                          {openPick.symbol} {openPick.side}
+                          {openPick.strike != null && <span style={{ opacity: 0.75 }}>${openPick.strike}</span>}
+                        </div>
+                        <div className="opp-row-meta">
+                          {openPick.annualized != null && <span>年化 {fmt(openPick.annualized, 1)}%</span>}
+                          {openPick.bid != null && <span>bid {fmt(openPick.bid, 2)}</span>}
+                          {openPick.dte != null && <span>DTE {openPick.dte}</span>}
+                        </div>
+                      </div>
+                      <div className="opp-row-actions">
+                        <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(openPick)}>登记</button>
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+            </div>
+            {serverOpps?.headline && (
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>{serverOpps.headline}</div>
+            )}
+          </div>
 
           {!!scanStatus?.report?.length && !timingScanning && (
             <div className="panel">
@@ -3224,6 +3332,9 @@ export default function WheelPage() {
                           {row.kind === 'OPEN' && (
                             <Badge color={sk.color} title={sk.title}>{sk.text}</Badge>
                           )}
+                          {row.is_top_pick && row.kind === 'OPEN' && (
+                            <Badge color="orange" title="同标的同方向当前最优一条">主推</Badge>
+                          )}
                           <span>{row.symbol}</span>
                           <span style={{ fontWeight: 500, color: row.side === 'PUT' ? 'var(--green)' : 'var(--purple)' }}>
                             {row.side === 'PUT' ? 'Put' : row.side === 'CALL' ? 'Call' : ''}
@@ -4018,92 +4129,149 @@ export default function WheelPage() {
         <RollModal data={rollData} onClose={() => setRollData(null)} onSaved={loadAll} />
       )}
 
-      {/* 该管三选一:放任到期 / 买回 / Roll */}
-      {manageCompare && (
+      {/* 该管三选一:放任到期 / 买回 / Roll — 文案与推荐按 PUT(CSP) vs CALL(CC) 分叉 */}
+      {manageCompare && (() => {
+        const mc = manageCompare
+        const isCall = mc.side === 'CALL'
+        const code = (mc.action_code || '').toUpperCase()
+        // 决策树主建议 → 高亮哪张卡
+        const prefer: 'expire' | 'close' | 'roll' =
+          code === 'HOLD_THETA' ? 'expire'
+            : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
+              : (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') ? 'roll'
+                : (mc.profit_hit && (mc.dte == null || mc.dte > 7) ? 'close'
+                  : (mc.dte != null && mc.dte <= 7 && !mc.itm ? 'expire' : 'close'))
+        const buy = fmt(mc.buyback_ask || mc.current_price)
+        const expireBody = isCall
+          ? (mc.itm
+            ? '到期若仍 ITM:正股可能被 call 走(交货)。只有当你愿意按 strike 卖出持股、且不急着用覆盖股时再放任。'
+            : 'OTM 到期作废,你留下持股并吃光剩余权利金。临期 OTM 且买回摩擦大时,往往优于付点差止盈。')
+          : (mc.itm
+            ? '到期若仍 ITM:可能被指派接货(按 strike 买进正股)。确认愿意接货且有资金,再放任;否则优先 Roll/平仓。'
+            : 'OTM 到期作废,现金担保释放。临期 OTM 且买回摩擦大时,可放任吃 θ。')
+        const closeBody = isCall
+          ? `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。结束 Call 义务、保留持股,便于再卖下一轮 CC 或调仓。`
+          : `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。释放 CSP 现金担保,便于再开新 Put 或换标的。`
+        const rollBody = isCall
+          ? '买回当前 Call + 卖更远到期(可同 strike 或 roll up)。适合仍想持有正股收租、但当前 DTE/ITM 风险不舒服。'
+          : '买回当前 Put + 卖更远到期(可同 strike 或 roll down)。适合仍想赚权利金、但临期/ITM 风险上升、尚未想接货。'
+        const cardStyle = (key: 'expire' | 'close' | 'roll', accent?: string) => ({
+          border: prefer === key
+            ? `2px solid ${accent || C.green}`
+            : '1px solid var(--border)',
+          borderRadius: 8,
+          padding: 12,
+          background: prefer === key ? `${accent || C.green}14` : undefined,
+        })
+        return (
         <div style={{
           position: 'fixed', inset: 0, background: '#0009', zIndex: 110,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }} onClick={() => setManageCompare(null)}>
-          <div className="card" style={{ width: 560, maxWidth: '96%', maxHeight: '85vh', overflow: 'auto', padding: 18 }}
+          <div className="card" style={{ width: 640, maxWidth: '96%', maxHeight: '85vh', overflow: 'auto', padding: 18 }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
               <h3 style={{ margin: 0, fontSize: 16 }}>
-                {manageCompare.symbol} {manageCompare.side} ${manageCompare.strike} 决策
+                {mc.symbol} {isCall ? 'Covered Call' : 'Cash-Secured Put'} ${mc.strike} 决策
               </h3>
               <button className="btn" style={{ fontSize: 12 }} onClick={() => setManageCompare(null)}>关闭</button>
             </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
-              合约 {manageCompare.contract_code} · DTE {manageCompare.dte ?? '--'}
-              · 浮盈 {manageCompare.profit_pct ?? '--'}% · 剩余年化 {manageCompare.remaining_annualized ?? '--'}%
-              · 买回约 ${fmt(manageCompare.buyback_ask || manageCompare.current_price)}
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+              合约 {mc.contract_code} · DTE {mc.dte ?? '--'}
+              · 浮盈 {mc.profit_pct ?? '--'}% · 剩余年化 {mc.remaining_annualized ?? '--'}%
+              · 买回约 ${buy}
+              {mc.itm ? ' · ITM' : ' · OTM'}
             </div>
+            {mc.action_hint && (
+              <div style={{
+                marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 13,
+                background: 'var(--green-dim, #22c55e18)', border: '1px solid var(--green, #22c55e55)',
+              }}>
+                <b>主建议:</b> {mc.action_hint}
+                {mc.reasons?.[0] ? ` · ${mc.reasons[0]}` : ''}
+                {(mc as any).secondary_hint && (
+                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>
+                    备选: {(mc as any).secondary_hint}
+                  </div>
+                )}
+              </div>
+            )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-              <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>① 放任到期</div>
+              <div style={cardStyle('expire')}>
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                  ① 放任到期{prefer === 'expire' ? ' · 推荐' : ''}
+                </div>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  保留全部剩余权利金;若到期仍 ITM 可能被行权接货/交货。适合深度 OTM 且买回摩擦大。
+                  {expireBody}
                 </div>
                 <button className="btn" style={{ fontSize: 12, width: '100%' }}
                   onClick={() => {
                     setTradeModal({
                       initial: {
-                        symbol: manageCompare.symbol,
+                        symbol: mc.symbol,
                         trade_type: 'EXPIRE',
-                        contract_code: manageCompare.contract_code,
-                        strike: String(manageCompare.strike),
-                        expiry: manageCompare.expiry?.slice(0, 10) || '',
-                        note: '放任到期',
+                        contract_code: mc.contract_code,
+                        strike: String(mc.strike),
+                        expiry: mc.expiry?.slice(0, 10) || '',
+                        note: isCall ? 'CC 放任到期' : 'CSP 放任到期',
                       },
-                      status: manageCompare.side === 'PUT' ? 'CSP_OPEN' : 'CC_OPEN',
-                      cycleId: manageCompare.cycle_id,
+                      status: isCall ? 'CC_OPEN' : 'CSP_OPEN',
+                      cycleId: mc.cycle_id,
                     })
                     setManageCompare(null)
                   }}>登记到期</button>
               </div>
-              <div style={{ border: `1px solid ${C.green}66`, borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: C.green }}>② 买回平仓</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  成本约 ${fmt(manageCompare.buyback_ask || manageCompare.current_price)}/股权利金;
-                  落袋浮盈 {manageCompare.profit_pct ?? '--'}%,腾出资金再开新轮。
-                  {manageCompare.remaining_annualized != null && manageCompare.remaining_annualized < 15
-                    && ' 剩余年化偏低,优先考虑平。'}
+              <div style={cardStyle('close', C.green)}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: C.green }}>
+                  ② 买回平仓{prefer === 'close' ? ' · 推荐' : ''}
                 </div>
-                <button className="btn btn-primary" style={{ fontSize: 12, width: '100%' }}
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
+                  {closeBody}
+                  {mc.remaining_annualized != null && mc.remaining_annualized < 15
+                    && ' 剩余年化偏低,更宜平仓换仓。'}
+                </div>
+                <button className={`btn ${prefer === 'close' ? 'btn-primary' : ''}`} style={{ fontSize: 12, width: '100%' }}
                   onClick={() => {
                     setTradeModal({
                       initial: {
-                        symbol: manageCompare.symbol,
-                        trade_type: manageCompare.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE',
-                        contract_code: manageCompare.contract_code,
-                        strike: String(manageCompare.strike),
-                        expiry: manageCompare.expiry?.slice(0, 10) || '',
-                        price: String(manageCompare.buyback_ask || manageCompare.current_price || ''),
+                        symbol: mc.symbol,
+                        trade_type: isCall ? 'BUY_CALL_CLOSE' : 'BUY_PUT_CLOSE',
+                        contract_code: mc.contract_code,
+                        strike: String(mc.strike),
+                        expiry: mc.expiry?.slice(0, 10) || '',
+                        price: String(mc.buyback_ask || mc.current_price || ''),
                         qty: '1',
-                        note: '决策台买回',
+                        note: isCall ? 'CC 买回平仓' : 'CSP 买回平仓',
                       },
-                      status: manageCompare.side === 'PUT' ? 'CSP_OPEN' : 'CC_OPEN',
-                      cycleId: manageCompare.cycle_id,
+                      status: isCall ? 'CC_OPEN' : 'CSP_OPEN',
+                      cycleId: mc.cycle_id,
                     })
                     setManageCompare(null)
                   }}>登记买回</button>
               </div>
-              <div style={{ border: `1px solid ${C.orange}66`, borderRadius: 8, padding: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: C.orange }}>③ Roll 展期</div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  买回当前 + 卖更远到期;看净 credit 与新预期年化。适合仍想保留敞口、剩余时间不够。
+              <div style={cardStyle('roll', C.orange)}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: C.orange }}>
+                  ③ Roll 展期{prefer === 'roll' ? ' · 推荐' : ''}
                 </div>
-                <button className="btn" style={{ fontSize: 12, width: '100%' }}
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
+                  {rollBody}
+                  {isCall && mc.itm && ' ITM CC 可考虑 roll up/out 降被 call 概率。'}
+                  {!isCall && mc.itm && ' ITM Put 可考虑 roll down/out 降接货概率。'}
+                </div>
+                <button className={`btn ${prefer === 'roll' ? 'btn-primary' : ''}`} style={{ fontSize: 12, width: '100%' }}
                   disabled={rollLoading}
                   onClick={() => {
-                    const id = manageCompare.cycle_id
+                    const id = mc.cycle_id
+                    const pref = mc.prefer_card
                     setManageCompare(null)
-                    handleRoll(id)
+                    if (id) handleRoll(id, pref)
                   }}>打开 Roll 对比</button>
               </div>
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
@@ -4114,9 +4282,14 @@ function RollModal({ data, onClose, onSaved }: {
   onClose: () => void
   onSaved: () => void
 }) {
-  const [selected, setSelected] = useState<string | null>(data.candidates[0]?.contract_code || null)
+  const prefer = data.highlighted_card || data.decision?.prefer_card || null
+  const defaultCode = data.default_candidate?.contract_code
+    || data.candidates[0]?.contract_code
+    || null
+  const [selected, setSelected] = useState<string | null>(defaultCode)
   const [buyback, setBuyback] = useState(String(data.current.buyback_ask || ''))
-  const [newPrice, setNewPrice] = useState(String(data.candidates[0]?.bid ?? ''))
+  const initCand = data.candidates.find(c => c.contract_code === defaultCode) || data.candidates[0]
+  const [newPrice, setNewPrice] = useState(String(initCand?.bid ?? ''))
   const [fee, setFee] = useState('0')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -4125,6 +4298,12 @@ function RollModal({ data, onClose, onSaved }: {
   const size = data.current.contract_size || 100
   const netCredit = cand && buyback && newPrice
     ? ((parseFloat(newPrice) - parseFloat(buyback)) * size).toFixed(0) : null
+
+  const preferLabel: Record<string, string> = {
+    roll_out: '优先 Roll out(换到期)',
+    adjust_strike: '优先调 strike(Roll 改行权价)',
+    no_roll: '优先不平/不 roll(止盈平仓或持有)',
+  }
 
   const inputStyle = {
     width: 90, padding: '4px 6px', background: 'var(--bg-secondary)',
@@ -4170,6 +4349,21 @@ function RollModal({ data, onClose, onSaved }: {
           当前 ${fmt(data.current.strike)} {data.current.expiry}(DTE {data.current.dte ?? '--'}) ·
           开仓 ${fmt(data.current.open_price)} · 买回约 ${fmt(data.current.buyback_ask)} · δ{data.current.delta}
         </div>
+        {(data.decision?.headline || prefer) && (
+          <div style={{
+            marginBottom: 10, padding: '8px 12px', borderRadius: 8,
+            background: 'var(--green-dim, #22c55e18)', border: '1px solid var(--green, #22c55e55)',
+            fontSize: 13,
+          }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
+              决策建议 · {prefer ? (preferLabel[prefer] || prefer) : '见详情'}
+            </div>
+            {data.decision?.headline && <div>{data.decision.headline}</div>}
+            {data.decision?.detail && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{data.decision.detail}</div>
+            )}
+          </div>
+        )}
         {err && <div className="alert alert-error" style={{ marginBottom: 10 }}>{err}</div>}
         {(data.warnings?.length ?? 0) > 0 && (
           <div style={{ marginBottom: 10, padding: '6px 10px', background: '#fb923c11', border: '1px solid #fb923c55', borderRadius: 6, fontSize: 12, color: '#fb923c' }}>
@@ -4180,6 +4374,7 @@ function RollModal({ data, onClose, onSaved }: {
         {data.candidates.length === 0 ? (
           <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '10px 0' }}>
             没有找到相近 delta 的下期合约(可先手动平仓,再用助手找新合约)
+            {prefer === 'no_roll' && ' · 当前决策更倾向止盈/持有,可不 roll'}
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 12 }}>
@@ -4192,7 +4387,10 @@ function RollModal({ data, onClose, onSaved }: {
             </thead>
             <tbody>
               {data.candidates.map(c => (
-                <tr key={c.contract_code} style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                <tr key={c.contract_code} style={{
+                  borderBottom: '1px solid var(--border)', cursor: 'pointer',
+                  background: selected === c.contract_code ? 'var(--green-dim)' : undefined,
+                }}
                   onClick={() => { setSelected(c.contract_code); setNewPrice(String(c.bid)) }}>
                   <td style={{ padding: '6px 8px' }}>
                     <input type="radio" checked={selected === c.contract_code} readOnly />
