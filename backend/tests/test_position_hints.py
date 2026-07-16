@@ -15,55 +15,73 @@ def _item(**kw):
 
 
 def test_profit_hit_first():
-    r = _position_hints(_item(profit_pct=60.0), 15, 50)
+    r = _position_hints(_item(profit_pct=60.0, buyback_ask=1.0), 15, 50)
     assert r["action_hint"] == "止盈平仓"
+    assert r["action_code"] == "CLOSE"
 
 
 def test_deep_itm_by_delta():
-    r = _position_hints(_item(itm=True, delta=0.62, spot=95, profit_pct=-30.0), 15, 50)
-    assert r["deep_itm"] and r["action_hint"] == "尽快 Roll(深度价内)"
+    r = _position_hints(_item(itm=True, delta=0.62, spot=95, profit_pct=-30.0, buyback_ask=5.0), 15, 50)
+    assert r["deep_itm"] and r["action_code"] == "ROLL_ADJUST"
+    assert "Roll" in (r["action_hint"] or "")
 
 
 def test_deep_itm_by_moneyness():
     # PUT strike 100, spot 95 → 价内 5.3% > 3%,即使 delta 缺失
-    r = _position_hints(_item(itm=True, delta=0, spot=95, profit_pct=-30.0), 15, 50)
+    r = _position_hints(_item(itm=True, delta=0, spot=95, profit_pct=-30.0, buyback_ask=5.0), 15, 50)
     assert r["deep_itm"]
 
 
 def test_shallow_itm_expiring():
-    r = _position_hints(_item(itm=True, delta=0.45, spot=99, dte=5, expiring=True, profit_pct=-10.0), 15, 50)
+    r = _position_hints(
+        _item(itm=True, delta=0.45, spot=99, dte=5, expiring=True, profit_pct=-10.0, buyback_ask=2.0),
+        15, 50,
+    )
     assert not r["deep_itm"]
-    assert r["action_hint"] == "临期 ITM:Roll 或准备接货/交货"
+    assert r["action_code"] == "PREPARE_ASSIGN"
+    assert "ITM" in (r["action_hint"] or "")
 
 
 def test_21dte_rule():
-    r = _position_hints(_item(dte=18, profit_pct=30.0), 15, 50)
-    assert r["roll_21dte"] and r["action_hint"] == "考虑 Roll(≤21DTE)"
+    r = _position_hints(_item(dte=18, profit_pct=30.0, buyback_ask=1.5), 15, 50)
+    assert r["roll_21dte"] and r["action_code"] == "ROLL"
+    assert "Roll" in (r["action_hint"] or "")
     # 已止盈则不触发 21DTE
-    r2 = _position_hints(_item(dte=18, profit_pct=55.0), 15, 50)
+    r2 = _position_hints(_item(dte=18, profit_pct=55.0, buyback_ask=1.0), 15, 50)
     assert not r2["roll_21dte"] and r2["action_hint"] == "止盈平仓"
 
 
 def test_low_yield():
     # 剩余年化 = 0.3/100×365/35×100 ≈ 3.13% < 15%
-    r = _position_hints(_item(current_price=0.3, profit_pct=40.0), 15, 50)
-    assert r["low_yield"] and r["action_hint"] == "平仓换仓(剩余年化低)"
+    # 浮盈 40% → 软止盈+换仓; 低浮盈 → 纯换仓
+    r = _position_hints(_item(current_price=0.3, buyback_ask=0.3, profit_pct=40.0), 15, 50)
+    assert r["low_yield"]
+    assert r["action_code"] == "REPLACE"
     assert abs(r["remaining_annualized"] - 3.13) < 0.01
+    r_pure = _position_hints(_item(current_price=0.3, buyback_ask=0.3, profit_pct=10.0), 15, 50)
+    assert r_pure["action_hint"] == "平仓换仓(剩余年化低)"
     # ITM 时剩余价值高是风险不是收益,不触发 low_yield
-    r2 = _position_hints(_item(current_price=0.3, itm=True, spot=99.5, delta=0.4, profit_pct=-5.0), 15, 50)
+    r2 = _position_hints(
+        _item(current_price=0.3, buyback_ask=0.3, itm=True, spot=99.5, delta=0.4, profit_pct=-5.0),
+        15, 50,
+    )
     assert not r2["low_yield"]
 
 
 def test_early_assign_cc():
-    r = _position_hints(_item(side="CALL", strike=100, spot=112, itm=True, delta=0.85, profit_pct=-50.0), 15, 50)
+    r = _position_hints(
+        _item(side="CALL", strike=100, spot=112, itm=True, delta=0.85, profit_pct=-50.0, buyback_ask=12.0),
+        15, 50,
+    )
     assert r["early_assign_risk"]
-    assert any("提前被行权" in x for x in r["reasons"])
+    assert any("提前" in x or "除息" in x for x in r["reasons"])
 
 
 def test_healthy_no_hint():
-    r = _position_hints(_item(dte=35, current_price=1.6, profit_pct=30.0), 15, 50)
+    r = _position_hints(_item(dte=35, current_price=1.6, buyback_ask=1.6, profit_pct=30.0), 15, 50)
     # 剩余年化 16.7% > 15%,OTM,未临期未止盈 → 无建议
-    assert r["action_hint"] is None and not r["reasons"]
+    assert r["action_code"] == "NONE"
+    assert r["action_hint"] is None
 
 
 def test_roll_pairing():

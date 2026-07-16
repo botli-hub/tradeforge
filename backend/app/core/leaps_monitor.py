@@ -66,6 +66,7 @@ class LeapsSignal:
     annualized: Optional[float] = None   # 年化收益率%(bid/strike×365/DTE)
     dte: Optional[int] = None
     below_floor: bool = False            # 标的现价低于接货底线(软警告)
+    ema_partial: bool = False            # K 线不足标准周期,EMA 为近似
 
 
 def _compute_ema(series: pd.Series, period: int) -> pd.Series:
@@ -110,18 +111,34 @@ class WheelTimingMonitor:
         self.strike_range_up = cfg.get("strike_range_up", 0.10)
         self.align_target_dte = bool(cfg.get("align_target_dte", True))
         self.dte_pad_days = int(cfg.get("dte_pad_days", 7) or 0)
+        self.max_expiries = int(cfg.get("max_expiries", 6) or 6)
+        self.prefer_core_dte = bool(cfg.get("prefer_core_dte", True))
+        # Wheel 触线放宽 EMA 根数(覆盖 LEAPS 默认 60/210)
+        if cfg.get("ema50_min_bars") is not None:
+            self.monitor.ema50_min = int(cfg["ema50_min_bars"])
+        if cfg.get("ema200_min_bars") is not None:
+            self.monitor.ema200_min = int(cfg["ema200_min_bars"])
+        self.monitor.allow_partial_ema = bool(cfg.get("allow_partial_ema", True))
         # Wheel 扫描的每标的合约数上限(0 = 不限制;默认 30 控噪音)
         mc = cfg.get("contract_max_per_symbol")
         if mc is not None:
             self.monitor.max_contracts = mc
 
     def _dte_window(self, target: Dict[str, Any]) -> Tuple[int, int]:
-        """标的级 DTE 窗口;align 时用标的设置 ± pad,否则用全局 wheel_timing。"""
+        """标的级 DTE 窗口(含 pad);align 时用标的设置 ± pad,否则用全局 wheel_timing。"""
         if self.align_target_dte:
             lo = int(target.get("dte_min") or self.dte_min)
             hi = int(target.get("dte_max") or self.dte_max)
             pad = self.dte_pad_days
             return max(1, lo - pad), hi + pad
+        return int(self.dte_min), int(self.dte_max)
+
+    def _core_dte_window(self, target: Dict[str, Any]) -> Tuple[int, int]:
+        """标的核心 DTE(无 pad),用于到期日优先选取。"""
+        if self.align_target_dte:
+            lo = int(target.get("dte_min") or self.dte_min)
+            hi = int(target.get("dte_max") or self.dte_max)
+            return max(1, lo), max(lo, hi)
         return int(self.dte_min), int(self.dte_max)
 
     def scan_all(self, symbol: Optional[str] = None, is_intraday: bool = True,
@@ -152,6 +169,7 @@ class WheelTimingMonitor:
                 cycles = wrepo.get_active_cycles(sym)
                 holding = [c for c in cycles if c["status"] == "HOLDING"]
                 dte_lo, dte_hi = self._dte_window(t)
+                core_lo, core_hi = self._core_dte_window(t)
 
                 # 卖 Put:启用标的一律扫描(状态机支持多轮并行,是否开仓由用户决定);
                 # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过)
@@ -160,7 +178,11 @@ class WheelTimingMonitor:
                     expiry=None, contract_i=0, contract_n=0,
                     message=f"触线 · {sym} PUT · 标的 {ti}/{n_targets}",
                 )
-                rep: Dict[str, Any] = {"symbol": sym, "side": "PUT", "dte": f"{dte_lo}-{dte_hi}"}
+                rep: Dict[str, Any] = {
+                    "symbol": sym, "side": "PUT",
+                    "dte": f"{dte_lo}-{dte_hi}",
+                    "core_dte": f"{core_lo}-{core_hi}",
+                }
                 signals.extend(self.monitor.scan_symbol(
                     sym, t["floor_price"], is_intraday=is_intraday,
                     option_type="PUT",
@@ -173,6 +195,9 @@ class WheelTimingMonitor:
                     strike_range_up=self.strike_range_up,
                     floor_hard=False,
                     progress_cb=_prog,
+                    max_expiries=self.max_expiries,
+                    core_dte_min=core_lo, core_dte_max=core_hi,
+                    prefer_core_dte=self.prefer_core_dte,
                 ))
                 if report is not None:
                     report.append(rep)
@@ -184,7 +209,11 @@ class WheelTimingMonitor:
                         expiry=None, contract_i=0, contract_n=0,
                         message=f"触线 · {sym} CALL · 标的 {ti}/{n_targets}",
                     )
-                    rep = {"symbol": sym, "side": "CALL", "dte": f"{dte_lo}-{dte_hi}"}
+                    rep = {
+                        "symbol": sym, "side": "CALL",
+                        "dte": f"{dte_lo}-{dte_hi}",
+                        "core_dte": f"{core_lo}-{core_hi}",
+                    }
                     signals.extend(self.monitor.scan_symbol(
                         sym, 0, is_intraday=is_intraday,
                         option_type="CALL",
@@ -197,6 +226,9 @@ class WheelTimingMonitor:
                         strike_range_down=self.strike_range_down,
                         strike_range_up=self.strike_range_up,
                         progress_cb=_prog,
+                        max_expiries=self.max_expiries,
+                        core_dte_min=core_lo, core_dte_max=core_hi,
+                        prefer_core_dte=self.prefer_core_dte,
                     ))
                     if report is not None:
                         report.append(rep)
@@ -293,6 +325,44 @@ def _annualized_yield(premium: float, strike: float, dte: int) -> float:
     return round(premium / strike * (365 / dte) * 100, 2)
 
 
+def select_expiries(
+    eligible: List[Tuple[str, int]],
+    max_n: int = 6,
+    core_dte_min: Optional[int] = None,
+    core_dte_max: Optional[int] = None,
+    prefer_core: bool = True,
+) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
+    """从 DTE 窗口内的到期日中选取最多 max_n 个。
+
+    优先核心带(core_dte_min~max,通常=标的 dte 无 pad),再按 DTE 近→远补齐。
+    返回 (selected, skipped)。
+    """
+    if not eligible:
+        return [], []
+    max_n = max(1, int(max_n or 6))
+    # 已按 dte 升序更稳
+    ordered = sorted(eligible, key=lambda x: x[1])
+    if not prefer_core or core_dte_min is None or core_dte_max is None:
+        selected = ordered[:max_n]
+        skipped = ordered[max_n:]
+        return selected, skipped
+    core = [e for e in ordered if core_dte_min <= e[1] <= core_dte_max]
+    outer = [e for e in ordered if e not in core]
+    selected: List[Tuple[str, int]] = []
+    for e in core:
+        if len(selected) >= max_n:
+            break
+        selected.append(e)
+    for e in outer:
+        if len(selected) >= max_n:
+            break
+        selected.append(e)
+    selected.sort(key=lambda x: x[1])
+    sel_set = set(selected)
+    skipped = [e for e in ordered if e not in sel_set]
+    return selected, skipped
+
+
 class LeapsMonitor:
     def __init__(self, config: Dict[str, Any]):
         self.cfg = config
@@ -302,6 +372,7 @@ class LeapsMonitor:
         self.iv_threshold = self.sig_cfg.get("iv_percentile_threshold", 70)
         self.ema50_min = self.sig_cfg.get("ema50_min_bars", 60)
         self.ema200_min = self.sig_cfg.get("ema200_min_bars", 210)
+        self.allow_partial_ema = bool(self.sig_cfg.get("allow_partial_ema", False))
         self.cooldown_days = self.sig_cfg.get("contract_cooldown_trading_days", 5)
         self.max_30d = self.sig_cfg.get("per_symbol_max_30d", 3)
         self.dte_min = self.sig_cfg.get("contract_dte_min", 180)
@@ -309,6 +380,8 @@ class LeapsMonitor:
         self.strike_range = self.sig_cfg.get("strike_range_pct", 0.20)
         self.intraday_use_last = self.sig_cfg.get("intraday_use_last_price", True)
         self.delta_range = config.get("suggestions", {}).get("delta_range", [0.20, 0.30])
+        # 默认仍取 3;Wheel 会传入 max_expiries
+        self.max_expiries = int(self.sig_cfg.get("max_expiries", 3) or 3)
 
     def scan_all(self, is_intraday: bool = False) -> List[LeapsSignal]:
         watchlist = repo.get_watchlist()
@@ -339,6 +412,10 @@ class LeapsMonitor:
         strike_range_up: Optional[float] = None,
         floor_hard: bool = True,
         progress_cb: Optional[Any] = None,
+        max_expiries: Optional[int] = None,
+        core_dte_min: Optional[int] = None,
+        core_dte_max: Optional[int] = None,
+        prefer_core_dte: bool = True,
     ) -> List[LeapsSignal]:
         """通用合约 EMA 触线扫描。默认参数 = 原 LEAPS Put 行为;
         Wheel 时机复用:option_type/dte/strike 可定制,level_map 定制信号级别名,
@@ -358,8 +435,13 @@ class LeapsMonitor:
         level_map = level_map or {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
         iv_thr = self.iv_threshold if iv_threshold is None else iv_threshold
         rep = report if report is not None else {}
-        rep.update(spot=None, contracts=0, in_cooldown=0, no_history=0,
-                   bars_insufficient=0, iv_filtered=0, not_touching=0, signals=0, note=None)
+        rep.update(
+            spot=None, contracts=0, in_cooldown=0, no_history=0,
+            bars_insufficient=0, iv_filtered=0, not_touching=0, signals=0,
+            ema_partial_hits=0, note=None,
+            expiries_scanned=[], expiries_skipped=[],
+            strike_lo=None, strike_hi=None,
+        )
         _p(
             symbol=symbol, side=option_type, expiry=None,
             contract_i=0, contract_n=0,
@@ -389,6 +471,7 @@ class LeapsMonitor:
 
         # 获取符合条件的合约列表(此步含 OpenD 限频,最慢;进度在内部按到期日回传)
         fetch_errors: List[str] = []
+        fetch_meta: Dict[str, Any] = {}
         contracts = self._fetch_eligible_contracts(
             symbol, underlying_price, option_type=option_type,
             dte_min=dte_min, dte_max=dte_max,
@@ -396,16 +479,33 @@ class LeapsMonitor:
             range_down=strike_range_down, range_up=strike_range_up,
             errors=fetch_errors,
             progress_cb=progress_cb,
+            max_expiries=max_expiries if max_expiries is not None else self.max_expiries,
+            core_dte_min=core_dte_min,
+            core_dte_max=core_dte_max,
+            prefer_core_dte=prefer_core_dte,
+            meta=fetch_meta,
         )
         rep["contracts"] = len(contracts)
+        rep["expiries_scanned"] = fetch_meta.get("expiries_scanned") or []
+        rep["expiries_skipped"] = fetch_meta.get("expiries_skipped") or []
+        rep["strike_lo"] = fetch_meta.get("strike_lo")
+        rep["strike_hi"] = fetch_meta.get("strike_hi")
         total_all = len(contracts)
         if not contracts:
             reason = ";".join(fetch_errors) if fetch_errors else "无符合条件的合约(DTE/strike 范围内)"
+            if rep["expiries_skipped"]:
+                reason += f";未扫到期 {','.join(rep['expiries_skipped'][:5])}"
             logger.info("%s: %s", symbol, reason)
             rep["note"] = reason
             _p(symbol=symbol, side=option_type, expiry=None, contract_i=0, contract_n=0,
                message=f"触线 · {symbol} {option_type} · {reason}")
             return signals
+        # 有跳过到期日时写进 note 方便诊断
+        if rep["expiries_skipped"] and not rep.get("note"):
+            rep["note"] = (
+                f"已扫 {','.join(rep['expiries_scanned'][:6]) or '—'}"
+                f";未扫 {','.join(rep['expiries_skipped'][:6])}"
+            )
 
         def _norm_exp(raw: Any) -> str:
             exp_label = str(raw or "")[:10]
@@ -494,32 +594,43 @@ class LeapsMonitor:
                     rep["iv_filtered"] += 1
                     continue
 
-                # S1: 价格触及 EMA200（二级强信号）
+                # S1: 价格触及 EMA200 / EMA50
+                # allow_partial_ema: 根数 ≥ min 但仍 < 标准周期时仍算 ewm,标记 ema_partial
                 signal_level = None
                 ema_type = None
                 ema_value = None
+                ema_partial = False
+                n_bars = len(closes)
 
-                if len(closes) >= self.ema200_min:
-                    ema200 = _compute_ema(closes, 200).iloc[-1]
-                    if trigger_price >= ema200:
-                        signal_level = level_map["EMA200"]
-                        ema_type = "EMA200"
-                        ema_value = float(ema200)
+                def _try_ema(period: int, min_bars: int, level_key: str) -> bool:
+                    nonlocal signal_level, ema_type, ema_value, ema_partial
+                    if n_bars < min_bars:
+                        return False
+                    # 标准:满 period 根; partial:满 min_bars 但不足 period
+                    partial = n_bars < period
+                    if partial and not self.allow_partial_ema:
+                        return False
+                    val = float(_compute_ema(closes, period).iloc[-1])
+                    if trigger_price >= val:
+                        signal_level = level_map[level_key]
+                        ema_type = level_key
+                        ema_value = val
+                        ema_partial = partial
+                        return True
+                    return False
 
-                # S1: 价格触及 EMA50（一级信号，仅在未触及 EMA200 时检查）
-                if signal_level is None and len(closes) >= self.ema50_min:
-                    ema50 = _compute_ema(closes, 50).iloc[-1]
-                    if trigger_price >= ema50:
-                        signal_level = level_map["EMA50"]
-                        ema_type = "EMA50"
-                        ema_value = float(ema50)
+                _try_ema(200, self.ema200_min, "EMA200")
+                if signal_level is None:
+                    _try_ema(50, self.ema50_min, "EMA50")
 
                 if signal_level is None:
-                    if len(closes) < self.ema50_min:
+                    if n_bars < self.ema50_min:
                         rep["bars_insufficient"] += 1
                     else:
                         rep["not_touching"] += 1
                     continue
+                if ema_partial:
+                    rep["ema_partial_hits"] = rep.get("ema_partial_hits", 0) + 1
 
                 # 获取 OTM put 建议
                 expiry_raw = contract.get("expiry") or exp_label
@@ -546,6 +657,7 @@ class LeapsMonitor:
                     trigger_price=float(trigger_price),
                     ema_type=ema_type,
                     ema_value=ema_value,
+                    ema_partial=ema_partial,
                     iv_rank=round(iv_rank, 1),
                     underlying_price=round(float(underlying_price), 2),
                     floor_price=floor_price,
@@ -624,12 +736,19 @@ class LeapsMonitor:
         range_down: Optional[float] = None, range_up: Optional[float] = None,
         errors: Optional[List[str]] = None,
         progress_cb: Optional[Any] = None,
+        max_expiries: Optional[int] = None,
+        core_dte_min: Optional[int] = None,
+        core_dte_max: Optional[int] = None,
+        prefer_core_dte: bool = True,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         import futu
         futu_symbol = _to_futu_symbol(symbol)
         contracts: List[Dict[str, Any]] = []
         errs = errors if errors is not None else []
+        meta = meta if meta is not None else {}
         eff_dte_min = self.dte_min if dte_min is None else dte_min
+        max_exp = int(max_expiries if max_expiries is not None else self.max_expiries or 3)
 
         def _p(**kw):
             if progress_cb:
@@ -677,13 +796,31 @@ class LeapsMonitor:
                 strike_lo = max(strike_lo, strike_min)
             if strike_max is not None:
                 strike_hi = min(strike_hi, strike_max)
+            meta["strike_lo"] = round(strike_lo, 2)
+            meta["strike_hi"] = round(strike_hi, 2)
+
+            # 优先核心 DTE 带,最多 max_exp 个(默认 6;旧写死 3 会漏周度期权舒适区)
+            exp_slice, exp_skipped = select_expiries(
+                eligible_expiries,
+                max_n=max_exp,
+                core_dte_min=core_dte_min,
+                core_dte_max=core_dte_max,
+                prefer_core=prefer_core_dte,
+            )
+            meta["expiries_scanned"] = [e[0] for e in exp_slice]
+            meta["expiries_skipped"] = [e[0] for e in exp_skipped]
+            if exp_skipped:
+                logger.info(
+                    "%s: 到期日选取 %d/%d, 跳过 %s",
+                    symbol, len(exp_slice), len(eligible_expiries),
+                    ",".join(e[0] for e in exp_skipped[:8]),
+                )
 
             futu_opt_type = futu.OptionType.CALL if option_type == "CALL" else futu.OptionType.PUT
             # (code, expiry) 以便组装时带回到期日
             all_codes: List[str] = []
             code_expiry: Dict[str, str] = {}
             chain_fail = 0
-            exp_slice = eligible_expiries[:3]  # 取最近 3 个符合条件的到期日
             n_exp = len(exp_slice)
             for ei, (exp_str, _) in enumerate(exp_slice, start=1):
                 _p(

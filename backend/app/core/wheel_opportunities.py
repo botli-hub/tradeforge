@@ -100,9 +100,17 @@ def _opp_key(symbol: str, side: str, strike: Any, expiry: Any, code: Optional[st
 
 
 def _strength_from_row(ema_type: Optional[str], iv_rank: Optional[float], min_iv: float) -> str:
-    if ema_type == "EMA200" and (iv_rank or 0) >= min_iv:
+    """机会流强度:触线本身即 READY;EMA200+高 IV → STRONG。
+
+    注意:TG 推送仍用 leaps_monitor.signal_strength(可 strong_only);
+    这里放宽是避免「历史有触线、机会页全进观察且被隐藏」。
+    """
+    iv = iv_rank or 0
+    if ema_type == "EMA200" and iv >= min_iv:
         return "STRONG"
-    if ema_type == "EMA200" or (iv_rank or 0) >= min_iv:
+    if ema_type in ("EMA200", "EMA50"):
+        return "READY"
+    if iv >= min_iv:
         return "READY"
     return "WATCH"
 
@@ -167,27 +175,32 @@ def _grade_actionable(
     flags: List[str],
     dual_overrides_trend: bool = True,
 ) -> Tuple[str, bool]:
-    """返回 (grade, actionable)。grade: dual|timing|score|blocked|watch"""
+    """返回 (grade, actionable)。grade: dual|timing|score|blocked|watch
+
+    「低于接货底线」仅展示标签,不单独把 READY 触线打成不可做
+    (现价跌破 floor 仍可能是好卖 Put 时机,由用户评估接货意愿)。
+    """
     hard = [f for f in flags if f in ("超资金上限", "覆盖财报")]
-    # 趋势DOWN / 低于底线: dual 可放宽为 watch 而非 blocked
-    soft = [f for f in flags if f not in hard]
+    soft_all = [f for f in flags if f not in hard]
+    # 不参与降档的软标签(仍出现在 flags 里给前端角标)
+    soft_demote = [f for f in soft_all if f not in ("低于接货底线",)]
     if hard:
         return "blocked", False
     if source == "dual":
-        if soft and not dual_overrides_trend:
+        if soft_demote and not dual_overrides_trend:
             return "watch", False
-        # dual 默认可做;仅超严 soft 时 watch
-        if "趋势DOWN" in soft and strength == "WATCH":
+        if "趋势DOWN" in soft_demote and strength == "WATCH":
             return "watch", False
         return "dual", True
     if source == "timing":
-        if strength in ("STRONG", "READY") and not soft:
+        if strength in ("STRONG", "READY") and not soft_demote:
             return "timing", True
-        if strength in ("STRONG", "READY") and soft:
+        if strength in ("STRONG", "READY") and soft_demote:
+            # 趋势DOWN 等:仍展示为 watch,但保留触线
             return "watch", False
         return "watch", False
     # score only
-    if score is not None and score >= min_score and not soft:
+    if score is not None and score >= min_score and not soft_demote:
         return "score", True
     if score is not None and score >= min_score:
         return "watch", False
@@ -553,7 +566,24 @@ def build_opportunities(
             -(x.get("annualized") or 0),
         )
 
-    # 同 symbol|side 最多 5 条,避免刷屏;组内先按时间倒序
+    # 同 symbol|side 最多 N 条(默认 10);按质量排序,避免「最新 5 条」挤掉真正好的 strike
+    max_per_sym_side = int(scan_cfg.get("opp_max_per_symbol_side", 10) or 10)
+    strength_ord = {"STRONG": 0, "READY": 1, "WATCH": 2}
+
+    def _group_rank_key(x: Dict[str, Any]):
+        dte = x.get("dte")
+        core = 0 if (dte is not None and 21 <= int(dte) <= 45) else 1
+        st = (x.get("timing") or {}).get("strength") or ""
+        return (
+            0 if x.get("actionable") else 1,
+            0 if x.get("source") == "dual" or x.get("grade") == "dual" else 1,
+            strength_ord.get(st, 3),
+            core,
+            -(float(x.get("annualized") or 0)),
+            -(float(x.get("score") or 0)),
+            str(x.get("event_at") or ""),
+        )
+
     by_sym_side: Dict[str, List[Dict]] = {}
     for it in items:
         it["event_at"] = _event_at(it) or None
@@ -561,8 +591,8 @@ def build_opportunities(
         by_sym_side.setdefault(k, []).append(it)
     capped: List[Dict[str, Any]] = []
     for k, group in by_sym_side.items():
-        group.sort(key=lambda x: str(x.get("event_at") or ""), reverse=True)
-        top = group[:5]
+        group.sort(key=_group_rank_key)
+        top = group[:max_per_sym_side]
         for i, it in enumerate(top):
             it["group_size"] = len(group)
             it["group_rank"] = i + 1

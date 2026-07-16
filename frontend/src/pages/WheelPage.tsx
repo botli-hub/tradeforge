@@ -230,6 +230,11 @@ type OppRow = {
   times_triggered?: number
   profit_pct?: number | null
   action_hint?: string | null
+  /** 后端决策码:一 cycle 一主建议 */
+  action_code?: string | null
+  action_priority?: number
+  prefer_card?: string | null
+  decision_why?: string[]
   signal?: LeapsSignal
   history?: WheelTimingHistoryItem
   check?: WheelOpenPositionItem
@@ -389,9 +394,14 @@ function enrichOpenRow(
 
 function sortOppRows(rows: OppRow[]): OppRow[] {
   return [...rows].sort((a, b) => {
-    // 管理类置顶按 efficiency
+    // 管理类置顶:决策树 priority 越小越急
     if (a.kind !== b.kind) return a.kind === 'MANAGE' ? -1 : 1
-    if (a.kind === 'MANAGE') return b.efficiency - a.efficiency
+    if (a.kind === 'MANAGE') {
+      const pa = a.action_priority ?? 9
+      const pb = b.action_priority ?? 9
+      if (pa !== pb) return pa - pb
+      return b.efficiency - a.efficiency
+    }
     // 开仓:档位优先 > 可排单 > 观察
     const tierOrder = { PRIORITY: 0, QUEUE: 1, WATCH: 2, MANAGE: 0 }
     const ta = tierOrder[a.trade_tier] ?? 3
@@ -459,30 +469,49 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
   // 深 ITM 启发式：权利金 > 0.25×strike 对 Wheel 卖 Put 通常不合理
   const deepItmPrem = prem != null && o.strike != null && o.strike > 0 && prem / o.strike > 0.25
 
-  const blocked = o.grade === 'blocked' || !!(o.flags && o.flags.length)
-  // 后端 actionable 优先；否则 dual/强触线+有分 → 优先，仅可做 → 可排单
+  // 后端 actionable 优先；dual/强触线 → 优先；可做 timing/score → 可排单
   let trade_tier: TradeTier = 'WATCH'
   if (o.grade === 'blocked') trade_tier = 'WATCH'
   else if (o.actionable && (o.grade === 'dual' || o.source === 'dual' || o.timing?.strength === 'STRONG')) {
     trade_tier = 'PRIORITY'
   } else if (o.actionable) {
     trade_tier = 'QUEUE'
-  } else if (o.grade === 'watch') {
-    trade_tier = 'WATCH'
-  } else if (o.score != null || o.timing) {
+  } else if (o.grade === 'watch' || o.timing || o.score != null) {
     trade_tier = 'WATCH'
   }
 
   const kill: string[] = []
-  if (o.grade === 'blocked' || !o.actionable) {
-    kill.push(...(o.flags || ['未达可做门槛']))
+  if (o.grade === 'blocked') {
+    kill.push(...(o.flags || ['硬风控阻断']))
   }
   if (px.kind === 'none' || px.kind === 'trigger') kill.push('无买价')
   if (deepItmPrem) kill.push('权利金疑似深ITM')
+  // 软标签不进 kill(低于接货底线等),避免整条被「隐藏不可交易」吃掉
+  if (!o.actionable && o.grade !== 'blocked' && kill.length === 0) {
+    // 可观察但未达可做:不记入 kill,仍可在「观察」展示
+  } else if (!o.actionable && o.grade === 'blocked') {
+    /* already in kill */
+  }
 
-  // 无真实买价或深 ITM 不得进优先/可排单
-  let tradeable = !!o.actionable && o.grade !== 'blocked' && px.kind !== 'none' && px.kind !== 'trigger' && !deepItmPrem
-  if (!tradeable) trade_tier = 'WATCH'
+  // 可交易:可做档必须有真实买价;观察档只要有买价也可备忘/展示(不算 killed)
+  const hasLiveBid = px.kind === 'bid' || px.kind === 'premium'
+  let tradeable = false
+  if (o.grade === 'blocked' || deepItmPrem) {
+    tradeable = false
+    trade_tier = 'WATCH'
+  } else if (o.actionable && hasLiveBid) {
+    tradeable = true
+  } else if (o.timing && hasLiveBid) {
+    // 触线+买价:至少可观察/复制备忘
+    tradeable = true
+    if (!o.actionable) trade_tier = 'WATCH'
+  } else if (!hasLiveBid) {
+    tradeable = false
+    trade_tier = 'WATCH'
+  }
+  if (!tradeable && kill.length === 0 && !hasLiveBid) {
+    kill.push('无买价')
+  }
 
   const row: OppRow = {
     id: o.id || oppKey(o.contract_code, o.symbol, side, o.strike, o.expiry),
@@ -537,7 +566,6 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
   } else {
     row.efficiency = (row.score ?? 0) + (row.annualized ?? 0)
   }
-  void blocked
   return row
 }
 
@@ -685,94 +713,77 @@ function buildOppRows(
     ann_per_delta: null as number | null,
     covers_earnings: false,
   }
+  // 一 cycle 仅一张管理卡:完全由后端 action_code 驱动
   for (const item of Object.values(openChecks)) {
-    if (item.profit_hit) {
-      manage.push({
-        id: `close-${item.cycle_id}`,
-        kind: 'MANAGE',
-        categories: ['CLOSE'],
-        strength: 'MANAGE',
-        ...manageBase,
-        dte_bucket: dteBucket(item.dte),
-        actionable: true,
-        symbol: item.symbol,
-        side: item.side as 'PUT' | 'CALL',
-        contract_code: item.contract_code,
-        strike: item.strike,
-        expiry: item.expiry,
-        dte: item.dte,
-        remaining_annualized: item.remaining_annualized,
-        profit_pct: item.profit_pct,
-        action_hint: item.action_hint || `浮盈≥${profitTarget}%可平仓`,
-        tags: ['该平仓'],
-        risk_hard: [],
-        risk_soft: item.deep_itm ? ['深度ITM'] : [],
-        risk_block: false,
-        efficiency: 1000 + (item.profit_pct || 0),
-        cycle_id: item.cycle_id,
-        check: item,
-        headline: `浮盈 ${item.profit_pct ?? '--'}% · 买回 $${fmt(item.buyback_ask || item.current_price)}`,
-        seen_at: null,
-      })
+    const code = (item.action_code || '').toUpperCase()
+    if (!code || code === 'NONE') {
+      // 无主建议时:若有浅 ITM 文案仍可展示弱提示,否则跳过
+      if (!item.action_hint) continue
     }
-    if ((item.action_hint || '').includes('Roll') || item.roll_21dte) {
-      manage.push({
-        id: `roll-${item.cycle_id}`,
-        kind: 'MANAGE',
-        categories: ['ROLL'],
-        strength: 'MANAGE',
-        ...manageBase,
-        dte_bucket: dteBucket(item.dte),
-        actionable: true,
-        symbol: item.symbol,
-        side: item.side as 'PUT' | 'CALL',
-        contract_code: item.contract_code,
-        strike: item.strike,
-        expiry: item.expiry,
-        dte: item.dte,
-        remaining_annualized: item.remaining_annualized,
-        profit_pct: item.profit_pct,
-        action_hint: item.action_hint || '考虑 Roll',
-        tags: ['该Roll'],
-        risk_hard: [],
-        risk_soft: item.itm ? ['ITM'] : [],
-        risk_block: false,
-        efficiency: 900 + (item.dte != null ? Math.max(0, 30 - item.dte) : 0),
-        cycle_id: item.cycle_id,
-        check: item,
-        headline: item.action_hint || `DTE ${item.dte ?? '--'} · 可对比展期净权利金`,
-        seen_at: null,
-      })
+    let cat: OppCategory = 'CLOSE'
+    let tag = '关注'
+    let actionable = true
+    let efficiency = 500
+    if (code === 'CLOSE') {
+      cat = 'CLOSE'; tag = '该平仓'; efficiency = 1000 + (item.profit_pct || 0)
+    } else if (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') {
+      cat = 'ROLL'; tag = code === 'PREPARE_ASSIGN' ? '接货/交货' : '该Roll'
+      efficiency = 900 + (item.dte != null ? Math.max(0, 30 - item.dte) : 0)
+    } else if (code === 'REPLACE') {
+      cat = 'LOW_YIELD'; tag = '该换仓'; efficiency = 800 + (item.profit_pct || 0)
+    } else if (code === 'HOLD_THETA') {
+      cat = 'CLOSE'; tag = '吃θ'; actionable = false; efficiency = 400
+    } else if (item.action_hint) {
+      // 兜底:根据 hint 归类
+      if ((item.action_hint || '').includes('Roll') || item.roll_21dte) {
+        cat = 'ROLL'; tag = '该Roll'; efficiency = 850
+      } else if (item.low_yield) {
+        cat = 'LOW_YIELD'; tag = '该换仓'; efficiency = 800
+      } else if (item.profit_hit) {
+        cat = 'CLOSE'; tag = '该平仓'; efficiency = 1000
+      } else {
+        actionable = false; tag = '观察'
+      }
     }
-    if (item.low_yield && !item.profit_hit) {
-      manage.push({
-        id: `lowy-${item.cycle_id}`,
-        kind: 'MANAGE',
-        categories: ['LOW_YIELD'],
-        strength: 'MANAGE',
-        ...manageBase,
-        dte_bucket: dteBucket(item.dte),
-        actionable: true,
-        symbol: item.symbol,
-        side: item.side as 'PUT' | 'CALL',
-        contract_code: item.contract_code,
-        strike: item.strike,
-        expiry: item.expiry,
-        dte: item.dte,
-        annualized: item.remaining_annualized,
-        remaining_annualized: item.remaining_annualized,
-        action_hint: item.action_hint || '剩余年化偏低,考虑换仓',
-        tags: ['该换仓'],
-        risk_hard: [],
-        risk_soft: [],
-        risk_block: false,
-        efficiency: 800,
-        cycle_id: item.cycle_id,
-        check: item,
-        headline: `剩余年化 ${item.remaining_annualized ?? '--'}%`,
-        seen_at: null,
-      })
-    }
+    const prio = item.action_priority ?? 9
+    manage.push({
+      id: `pos-${item.cycle_id}`,
+      kind: 'MANAGE',
+      categories: [cat],
+      strength: 'MANAGE',
+      ...manageBase,
+      dte_bucket: dteBucket(item.dte),
+      actionable,
+      symbol: item.symbol,
+      side: item.side as 'PUT' | 'CALL',
+      contract_code: item.contract_code,
+      strike: item.strike,
+      expiry: item.expiry,
+      dte: item.dte,
+      remaining_annualized: item.remaining_annualized,
+      annualized: item.remaining_annualized,
+      profit_pct: item.profit_pct,
+      action_hint: item.action_hint || `浮盈≥${profitTarget}%`,
+      action_code: code || 'NONE',
+      action_priority: prio,
+      prefer_card: item.prefer_card,
+      decision_why: item.reasons,
+      tags: [tag],
+      risk_hard: item.deep_itm ? ['深度ITM'] : [],
+      risk_soft: [
+        ...(item.itm && !item.deep_itm ? ['ITM'] : []),
+        ...(item.dividend_warn ? [`除息${item.dividend_warn.days_to_ex}d`] : []),
+      ],
+      risk_block: false,
+      efficiency: efficiency + Math.max(0, 10 - prio) * 10,
+      cycle_id: item.cycle_id,
+      check: item,
+      headline: item.action_hint
+        || (item.profit_pct != null
+          ? `浮盈 ${item.profit_pct}% · 买回 $${fmt(item.buyback_ask || item.current_price)}`
+          : undefined),
+      seen_at: null,
+    })
   }
   for (const t of targets.filter(x => x.enabled)) {
     for (const c of t.active_cycles || []) {
@@ -851,9 +862,10 @@ function filterOppRows(
 ): OppRow[] {
   const bySym = Object.fromEntries(opts.targets.map(t => [t.symbol, t]))
   return rows.filter(r => {
-    if (opts.hideBlocked && r.kind === 'OPEN' && r.risk_block && cat !== 'KILLED') return false
-    // 杀掉视图必须展示不可交易；其它档位才可隐藏
-    if (opts.hideUntradeable && r.kind === 'OPEN' && !r.tradeable && cat !== 'KILLED') return false
+    if (opts.hideBlocked && r.kind === 'OPEN' && r.risk_block && cat !== 'KILLED' && cat !== 'WATCH' && cat !== 'all') return false
+    // 杀掉视图必须展示不可交易；「观察/全部」保留触线观察项,不被「隐藏不可交易」误杀
+    if (opts.hideUntradeable && r.kind === 'OPEN' && !r.tradeable
+      && cat !== 'KILLED' && cat !== 'WATCH' && cat !== 'all') return false
     if (opts.selectedSymbol && r.symbol !== opts.selectedSymbol) return false
 
     // DTE 桶:杀掉视图看全部桶；其它默认核心+延伸
@@ -891,6 +903,32 @@ function tierLabel(t: TradeTier): { text: string; color: SemColor } {
   if (t === 'QUEUE') return { text: '可排单', color: 'blue' }
   if (t === 'MANAGE') return { text: '该管', color: 'orange' }
   return { text: '观察', color: 'purple' }
+}
+
+/** 机会来源类型:触线50 / 触线200 / 高分 / 双满足 */
+export type OppSignalKind = 'EMA50' | 'EMA200' | 'SCORE' | 'DUAL50' | 'DUAL200' | 'MANAGE' | 'OTHER'
+
+function resolveOppSignalKind(row: Pick<OppRow, 'kind' | 'categories' | 'ema_type'>): OppSignalKind {
+  if (row.kind === 'MANAGE') return 'MANAGE'
+  const ranked = row.categories.includes('RANKED')
+  const touch = row.categories.includes('EMA_TOUCH')
+  const e200 = row.ema_type === 'EMA200'
+  if (ranked && touch) return e200 ? 'DUAL200' : 'DUAL50'
+  if (touch) return e200 ? 'EMA200' : 'EMA50'
+  if (ranked) return 'SCORE'
+  return 'OTHER'
+}
+
+function signalKindLabel(k: OppSignalKind): { text: string; color: SemColor; title: string } {
+  switch (k) {
+    case 'EMA50': return { text: '触线50', color: 'blue', title: '合约价触及 EMA50' }
+    case 'EMA200': return { text: '触线200', color: 'purple', title: '合约价触及 EMA200(更强)' }
+    case 'SCORE': return { text: '高分', color: 'green', title: '全池规则打分入选(未触线)' }
+    case 'DUAL50': return { text: '双·50', color: 'green', title: '高分 ∩ 触线 EMA50' }
+    case 'DUAL200': return { text: '双·200', color: 'green', title: '高分 ∩ 触线 EMA200' }
+    case 'MANAGE': return { text: '持仓', color: 'orange', title: '在场管理项' }
+    default: return { text: '其它', color: 'purple', title: '未分类来源' }
+  }
 }
 
 function fmtMoney(v: number) {
@@ -1329,6 +1367,9 @@ export default function WheelPage() {
   const [oppHideUntradeable, setOppHideUntradeable] = useState(true)
   const [oppOnlySelected, setOppOnlySelected] = useState(false)
   const [killedDiag, setKilledDiag] = useState(false)
+  /** 机会列表分页(客户端,筛完后再切页) */
+  const [oppPage, setOppPage] = useState(1)
+  const [oppPageSize, setOppPageSize] = useState(15)
 
   // 添加标的表单
   const [addSymbol, setAddSymbol] = useState('')
@@ -1501,7 +1542,19 @@ export default function WheelPage() {
             telegram_sent: prev?.telegram_sent,
           }))
         }
-        flash(r.headline || `机会已更新 · 可做 ${r.summary?.actionable ?? 0}`, 'success')
+        // 无双满足时:可做触线多在「可排单」;都不可做则切「观察」— 避免默认「优先」空白
+        const act = r.summary?.actionable ?? 0
+        const watchN = r.summary?.watch ?? 0
+        const dualN = r.summary?.dual ?? 0
+        if (dualN === 0 && act > 0) {
+          setOppCatFilter('QUEUE')
+          flash(r.headline || `可做 ${act}(触线/高分) · 已切到可排单`, 'success')
+        } else if (act === 0 && watchN > 0) {
+          setOppCatFilter('WATCH')
+          flash(r.headline || `暂无优先 · ${watchN} 条在观察`, 'info')
+        } else {
+          flash(r.headline || `机会已更新 · 可做 ${act}`, 'success')
+        }
       } catch (e: any) {
         // 合流失败则回退本地全池
         try {
@@ -1756,6 +1809,20 @@ export default function WheelPage() {
     if (putBlocked) rows = rows.filter(r => !(r.kind === 'OPEN' && r.side === 'PUT'))
     return rows
   }, [allOppRows, oppCatFilter, oppSideFilter, oppStateAware, oppHideBlocked, targets, oppOnlySelected, selectedSymbol, putBlocked, oppBucketFilter, oppHideUntradeable])
+
+  // 筛选/扫描变化时回到第 1 页
+  useEffect(() => {
+    setOppPage(1)
+    setRowCursor(0)
+  }, [oppCatFilter, oppSideFilter, oppBucketFilter, oppStateAware, oppHideBlocked, oppHideUntradeable, oppOnlySelected, selectedSymbol, putBlocked, serverOpps?.built_at])
+
+  const oppPageCount = Math.max(1, Math.ceil(filteredOppRows.length / oppPageSize))
+  const oppPageSafe = Math.min(oppPage, oppPageCount)
+  const pagedOppRows = useMemo(() => {
+    const start = (oppPageSafe - 1) * oppPageSize
+    return filteredOppRows.slice(start, start + oppPageSize)
+  }, [filteredOppRows, oppPageSafe, oppPageSize])
+
   const oppCounts = useMemo(() => {
     const open = allOppRows.filter(r => r.kind === 'OPEN')
     const killed = open.filter(r => !r.tradeable)
@@ -1817,15 +1884,19 @@ export default function WheelPage() {
 
   function openOppRegister(row: OppRow) {
     if (row.kind === 'MANAGE') {
-      if (row.categories.includes('ROLL') && row.check) {
-        setManageCompare(row.check)
+      const code = (row.action_code || '').toUpperCase()
+      // 吃 θ:不强推平仓登记
+      if (code === 'HOLD_THETA' || code === 'NONE') {
+        flash(row.action_hint || '建议继续持有观察', 'info')
         return
       }
-      if (row.categories.includes('ROLL') && row.cycle_id) {
-        handleRoll(row.cycle_id)
+      if (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN'
+        || row.categories.includes('ROLL')) {
+        if (row.check) setManageCompare(row.check)
+        if (row.cycle_id) handleRoll(row.cycle_id)
         return
       }
-      if (row.categories.includes('CLOSE') && row.check) {
+      if (row.categories.includes('CLOSE') && row.check && code !== 'REPLACE') {
         setManageCompare(row.check)
         return
       }
@@ -1837,7 +1908,7 @@ export default function WheelPage() {
         handleSuggest(row.symbol, 'put')
         return
       }
-      if ((row.categories.includes('CLOSE') || row.categories.includes('LOW_YIELD')) && row.side) {
+      if ((row.categories.includes('CLOSE') || row.categories.includes('LOW_YIELD') || code === 'REPLACE' || code === 'CLOSE') && row.side) {
         const closeType = row.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE'
         setTradeModal({
           initial: {
@@ -1924,14 +1995,26 @@ export default function WheelPage() {
       if (e.key === '3') { setTab('board'); return }
       if (tab !== 'opps' && tab !== 'home') return
       const rows = tab === 'opps'
-        ? filteredOppRows
+        ? pagedOppRows
         : allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT'))
       if (e.key === 'j' || e.key === 'J') {
         e.preventDefault()
-        setRowCursor(c => Math.min(c + 1, Math.max(0, rows.length - 1)))
+        setRowCursor(c => {
+          if (tab === 'opps' && c >= rows.length - 1 && oppPageSafe < oppPageCount) {
+            setOppPage(p => p + 1)
+            return 0
+          }
+          return Math.min(c + 1, Math.max(0, rows.length - 1))
+        })
       } else if (e.key === 'k' || e.key === 'K') {
         e.preventDefault()
-        setRowCursor(c => Math.max(0, c - 1))
+        setRowCursor(c => {
+          if (tab === 'opps' && c <= 0 && oppPageSafe > 1) {
+            setOppPage(p => p - 1)
+            return oppPageSize - 1
+          }
+          return Math.max(0, c - 1)
+        })
       } else if (e.key === 'Enter' && rows[rowCursor]) {
         e.preventDefault()
         openOppRegister(rows[rowCursor])
@@ -1955,7 +2038,7 @@ export default function WheelPage() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [tab, filteredOppRows, allOppRows, rowCursor, putBlocked])
+  }, [tab, pagedOppRows, allOppRows, rowCursor, putBlocked, oppPageSafe, oppPageCount, oppPageSize])
 
   const inputStyle = {
     padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)',
@@ -2210,6 +2293,47 @@ export default function WheelPage() {
             </div>
           )}
 
+          {!!scanStatus?.report?.length && !timingScanning && (
+            <div className="panel">
+              <div className="panel-title" style={{ marginBottom: 8 }}>触线扫描诊断</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                触发 {scanStatus.signals_found ?? 0} 条
+                {scanStatus.finished_at ? ` · ${String(scanStatus.finished_at).slice(11, 19)}` : ''}
+              </div>
+              <div style={{ maxHeight: 220, overflow: 'auto', fontSize: 12 }}>
+                {(scanStatus.report || []).map((row, i) => {
+                  const skipped = row.expiries_skipped || []
+                  const scanned = row.expiries_scanned || []
+                  const issues: string[] = []
+                  if (row.bars_insufficient) issues.push(`K不足 ${row.bars_insufficient}`)
+                  if (row.no_history) issues.push(`无历史 ${row.no_history}`)
+                  if (row.not_touching) issues.push(`未触线 ${row.not_touching}`)
+                  if (row.in_cooldown) issues.push(`冷却 ${row.in_cooldown}`)
+                  if (row.ema_partial_hits) issues.push(`近似EMA ${row.ema_partial_hits}`)
+                  if (skipped.length) issues.push(`未扫到期 ${skipped.slice(0, 3).join(',')}${skipped.length > 3 ? '…' : ''}`)
+                  return (
+                    <div key={`${row.symbol}-${row.side}-${i}`} style={{
+                      display: 'flex', flexWrap: 'wrap', gap: '4px 12px',
+                      padding: '6px 0', borderBottom: '1px solid var(--border, #333)',
+                    }}>
+                      <strong>{row.symbol}</strong>
+                      <span>{row.side}</span>
+                      {row.spot != null && <span>现价 {row.spot}</span>}
+                      {row.contracts != null && <span>合约 {row.contracts}</span>}
+                      {row.signals != null && <span style={{ color: (row.signals || 0) > 0 ? 'var(--green, #3d8)' : undefined }}>信号 {row.signals}</span>}
+                      {scanned.length > 0 && <span title={scanned.join(', ')}>已扫 {scanned.length} 到期</span>}
+                      {row.strike_lo != null && row.strike_hi != null && (
+                        <span>K [{row.strike_lo}–{row.strike_hi}]</span>
+                      )}
+                      {issues.map((t, j) => <span key={j} style={{ color: 'var(--orange, #e90)' }}>{t}</span>)}
+                      {row.note && <span style={{ opacity: 0.85, width: '100%' }}>{row.note}</span>}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div className="panel-title" style={{ margin: 0 }}>必须处理</div>
@@ -2232,10 +2356,16 @@ export default function WheelPage() {
                     <div className="opp-row-meta">
                       <span>{r.headline || r.action_hint}</span>
                       {r.remaining_annualized != null && <span>剩余年化 {fmt(r.remaining_annualized, 1)}%</span>}
+                      {r.decision_why?.[0] && <span style={{ opacity: 0.85 }}>{r.decision_why[0]}</span>}
                     </div>
                   </div>
                   <div className="opp-row-actions">
-                    <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>处理</button>
+                    {r.actionable !== false && (
+                      <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>
+                        {(r.action_code === 'ROLL' || r.action_code === 'ROLL_ADJUST' || r.action_code === 'PREPARE_ASSIGN')
+                          ? '看 Roll' : '处理'}
+                      </button>
+                    )}
                   </div>
                 </div>
               ))
@@ -2258,10 +2388,13 @@ export default function WheelPage() {
                   onClick={() => { setTab('opps'); setOppCatFilter('QUEUE') }}>看可排单</button>
               </EmptyState>
             ) : (
-              allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).map((r, i) => (
+              allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).map((r, i) => {
+                const skHome = signalKindLabel(resolveOppSignalKind(r))
+                return (
                 <div key={r.id} className="opp-row" style={i === rowCursor && tab === 'home' ? { background: 'var(--green-dim)' } : undefined}>
                   <div className="opp-row-main">
                     <div className="opp-row-title">
+                      <Badge color={skHome.color} title={skHome.title}>{skHome.text}</Badge>
                       {r.symbol}
                       <span style={{ fontWeight: 500, color: r.side === 'PUT' ? 'var(--green)' : 'var(--purple)' }}>
                         {r.side === 'PUT' ? '卖Put' : '卖Call'}
@@ -2286,7 +2419,8 @@ export default function WheelPage() {
                     <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>登记</button>
                   </div>
                 </div>
-              ))
+                )
+              })
             )}
           </div>
 
@@ -2361,8 +2495,15 @@ export default function WheelPage() {
           {/* 今日行动 */}
           {(() => {
             const checks = Object.values(openChecks)
-            const closeSyms = new Set(checks.filter(i => i.profit_hit || i.action_hint === '平仓换仓(剩余年化低)').map(i => i.symbol))
-            const rollSyms = new Set(checks.filter(i => (i.action_hint || '').includes('Roll')).map(i => i.symbol))
+            const closeSyms = new Set(checks.filter(i => {
+              const c = (i.action_code || '').toUpperCase()
+              return c === 'CLOSE' || c === 'REPLACE' || i.profit_hit || (i.action_hint || '').includes('换仓')
+            }).map(i => i.symbol))
+            const rollSyms = new Set(checks.filter(i => {
+              const c = (i.action_code || '').toUpperCase()
+              return c === 'ROLL' || c === 'ROLL_ADJUST' || c === 'PREPARE_ASSIGN'
+                || (i.action_hint || '').includes('Roll')
+            }).map(i => i.symbol))
             const uncovSyms = new Set(targets.filter(t =>
               (t.active_cycles || []).some(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3)).map(t => t.symbol))
             const idleSyms = new Set(targets.filter(t => t.enabled && (t.idle_days ?? 0) >= 5).map(t => t.symbol))
@@ -2415,8 +2556,22 @@ export default function WheelPage() {
             if (actionFilter) {
               const checks = Object.values(openChecks)
               const match = (t: WheelTarget): boolean => {
-                if (actionFilter === 'close') return checks.some(i => i.symbol === t.symbol && (i.profit_hit || i.action_hint === '平仓换仓(剩余年化低)'))
-                if (actionFilter === 'roll') return checks.some(i => i.symbol === t.symbol && (i.action_hint || '').includes('Roll'))
+                if (actionFilter === 'close') {
+                  return checks.some(i => {
+                    if (i.symbol !== t.symbol) return false
+                    const c = (i.action_code || '').toUpperCase()
+                    return c === 'CLOSE' || c === 'REPLACE' || i.profit_hit
+                      || (i.action_hint || '').includes('换仓')
+                  })
+                }
+                if (actionFilter === 'roll') {
+                  return checks.some(i => {
+                    if (i.symbol !== t.symbol) return false
+                    const c = (i.action_code || '').toUpperCase()
+                    return c === 'ROLL' || c === 'ROLL_ADJUST' || c === 'PREPARE_ASSIGN'
+                      || (i.action_hint || '').includes('Roll')
+                  })
+                }
                 if (actionFilter === 'uncovered') return (t.active_cycles || []).some(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3)
                 if (actionFilter === 'idle') return (t.idle_days ?? 0) >= 5
                 return true
@@ -2964,6 +3119,24 @@ export default function WheelPage() {
               </div>
             )}
 
+            {!!scanStatus?.report?.length && !timingScanning && (
+              <div className="banner info" style={{ marginBottom: 10, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+                <div style={{ fontWeight: 600 }}>触线诊断 · 触发 {scanStatus.signals_found ?? 0}</div>
+                <div style={{ fontSize: 11, maxHeight: 140, overflow: 'auto' }}>
+                  {(scanStatus.report || []).filter(r => (r.signals || 0) === 0 || (r.expiries_skipped || []).length > 0 || r.note).slice(0, 12).map((row, i) => (
+                    <div key={i} style={{ marginBottom: 4 }}>
+                      <strong>{row.symbol}</strong> {row.side}
+                      {(row.expiries_skipped || []).length > 0 && (
+                        <span> · 未扫 {(row.expiries_skipped || []).slice(0, 4).join(',')}</span>
+                      )}
+                      {(row.bars_insufficient || 0) > 0 && <span> · K不足{row.bars_insufficient}</span>}
+                      {row.note && <span> · {row.note}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="chip-row" style={{ marginBottom: 10 }}>
               {([
                 ['PRIORITY', `优先 ${oppCounts.priority}`],
@@ -3032,8 +3205,10 @@ export default function WheelPage() {
                 }}>看全部</button>
               </EmptyState>
             ) : (
-              filteredOppRows.map((row, idx) => {
+              <>
+              {pagedOppRows.map((row, idx) => {
                 const tl = tierLabel(row.trade_tier)
+                const sk = signalKindLabel(resolveOppSignalKind(row))
                 const remAnn = row.remaining_annualized ?? row.check?.remaining_annualized ?? null
                 const expAnn = row.kind === 'OPEN' ? (row.annualized ?? null) : null
                 const cta = row.kind === 'MANAGE'
@@ -3046,6 +3221,9 @@ export default function WheelPage() {
                       <div className="opp-row-main">
                         <div className="opp-row-title">
                           <Badge color={tl.color}>{tl.text}</Badge>
+                          {row.kind === 'OPEN' && (
+                            <Badge color={sk.color} title={sk.title}>{sk.text}</Badge>
+                          )}
                           <span>{row.symbol}</span>
                           <span style={{ fontWeight: 500, color: row.side === 'PUT' ? 'var(--green)' : 'var(--purple)' }}>
                             {row.side === 'PUT' ? 'Put' : row.side === 'CALL' ? 'Call' : ''}
@@ -3143,7 +3321,58 @@ export default function WheelPage() {
                     )}
                   </div>
                 )
-              })
+              })}
+              {filteredOppRows.length > 0 && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  flexWrap: 'wrap', gap: 8, marginTop: 12, paddingTop: 10,
+                  borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)',
+                }}>
+                  <span>
+                    共 {filteredOppRows.length} 条
+                    {filteredOppRows.length > oppPageSize
+                      ? ` · 第 ${oppPageSafe}/${oppPageCount} 页`
+                      : ''}
+                    {filteredOppRows.length > oppPageSize && (
+                      <> · 本页 {(oppPageSafe - 1) * oppPageSize + 1}–{Math.min(oppPageSafe * oppPageSize, filteredOppRows.length)}</>
+                    )}
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      每页
+                      <select
+                        value={oppPageSize}
+                        onChange={e => { setOppPageSize(Number(e.target.value)); setOppPage(1); setRowCursor(0) }}
+                        style={{
+                          padding: '2px 6px', background: 'var(--bg-secondary)',
+                          border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 12,
+                        }}
+                      >
+                        {[10, 15, 20, 30, 50].map(n => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={oppPageSafe <= 1}
+                      onClick={() => { setOppPage(p => Math.max(1, p - 1)); setRowCursor(0) }}
+                    >
+                      上一页
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      disabled={oppPageSafe >= oppPageCount}
+                      onClick={() => { setOppPage(p => Math.min(oppPageCount, p + 1)); setRowCursor(0) }}
+                    >
+                      下一页
+                    </button>
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </div>
 

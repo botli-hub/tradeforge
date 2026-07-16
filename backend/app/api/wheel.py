@@ -694,7 +694,12 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         cur = q.get("last") or q.get("ask") or 0
         buyback = q.get("ask") or q.get("last") or 0
         open_price = c.get("open_price") or 0
-        profit_pct = round((open_price - cur) / open_price * 100, 1) if open_price and cur else None
+        # 浮盈用买回 ask(卖方真实平仓成本),无 ask 再退 last
+        close_for_pnl = buyback or cur
+        profit_pct = (
+            round((open_price - close_for_pnl) / open_price * 100, 1)
+            if open_price and close_for_pnl else None
+        )
         und = quotes.get(_to_futu_symbol(c["symbol"]), {})
         spot = und.get("last") or 0
         strike = c.get("open_strike") or 0
@@ -705,6 +710,18 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         if c["symbol"] not in min_ann_by_symbol:
             t = repo.get_target(c["symbol"])
             min_ann_by_symbol[c["symbol"]] = float((t or {}).get("min_annualized") or 0)
+        # 除息窗口先算,决策树需要 days_to_ex_div
+        days_to_ex_div = None
+        dividend_warn_payload = None
+        if c["open_option_type"] == "CALL":
+            try:
+                from app.core.dividends import dividend_warn
+                dw = dividend_warn(c["symbol"], int(cfg.get("dividend_warn_days", 14)))
+                if dw:
+                    dividend_warn_payload = dw
+                    days_to_ex_div = dw.get("days_to_ex")
+            except Exception:
+                pass
         item = {
             "cycle_id": c["id"], "symbol": c["symbol"], "side": c["open_option_type"],
             "contract_code": c["open_contract_code"], "strike": strike,
@@ -713,25 +730,23 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
             "delta": q.get("delta") or 0,
             "theta": q.get("theta") or 0,
+            "qty": c.get("open_qty") or 1,
+            "contract_size": c.get("contract_size") or 100,
+            "days_to_ex_div": days_to_ex_div,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
         }
         item.update(_position_hints(item, min_ann_by_symbol[c["symbol"]], profit_target, cfg))
-        # 除息风险(CC)
-        if item["side"] == "CALL":
-            try:
-                from app.core.dividends import dividend_warn
-                dw = dividend_warn(c["symbol"], int(cfg.get("dividend_warn_days", 14)))
-                if dw:
-                    item["dividend_warn"] = dw
-                    if item.get("itm") or (item.get("delta") or 0) > 0.6:
-                        item["reasons"] = list(item.get("reasons") or []) + [
-                            f"除息日 {dw['date']}(剩{dw['days_to_ex']}天),ITM/高Δ CC 留意提前行权"
-                        ]
-            except Exception:
-                pass
+        # 与决策树对齐:profit_hit 以树内结果为准
+        item["profit_hit"] = bool((item.get("decision_tree") or {}).get("profit_hit"))
+        if dividend_warn_payload:
+            item["dividend_warn"] = dividend_warn_payload
         items.append(item)
-    items.sort(key=lambda x: (x.get("action_priority") or 9, x.get("dte") if x.get("dte") is not None else 999))
+    items.sort(key=lambda x: (
+        x.get("action_priority") or 9,
+        x.get("dte") if x.get("dte") is not None else 999,
+        x.get("symbol") or "",
+    ))
     return {"items": items, "profit_target_pct": profit_target, "pos_cfg": cfg}
 
 

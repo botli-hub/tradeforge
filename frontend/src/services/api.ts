@@ -659,6 +659,11 @@ export interface WheelSuggestResponse {
   } | null
 }
 
+/** 持仓决策 action_code(与后端 wheel_decision 对齐) */
+export type WheelActionCode =
+  | 'CLOSE' | 'ROLL' | 'ROLL_ADJUST' | 'HOLD_THETA' | 'REPLACE'
+  | 'PREPARE_ASSIGN' | 'NONE' | string
+
 export interface WheelOpenPositionItem {
   cycle_id: string
   symbol: string
@@ -676,9 +681,14 @@ export interface WheelOpenPositionItem {
   low_yield?: boolean
   roll_21dte?: boolean
   deep_itm?: boolean
+  shallow_itm?: boolean
   early_assign_risk?: boolean
   action_hint?: string | null
+  /** CLOSE|ROLL|ROLL_ADJUST|HOLD_THETA|REPLACE|PREPARE_ASSIGN|NONE */
+  action_code?: WheelActionCode | null
   action_priority?: number
+  /** no_roll | roll_out | adjust_strike */
+  prefer_card?: string | null
   reasons?: string[]
   profit_pct: number | null
   spot: number
@@ -687,6 +697,7 @@ export interface WheelOpenPositionItem {
   expiring: boolean
   dividend_warn?: { date: string; days_to_ex: number } | null
   decision_tree?: Record<string, unknown>
+  moneyness_pct?: number
 }
 
 export async function checkWheelOpenPositions(host: string, port: number) {
@@ -879,6 +890,12 @@ export interface BackendConfig {
     strike_range_down?: number
     /** 相对现价上方幅度 0.10=10% → strike ≤ spot×1.1 */
     strike_range_up?: number
+    /** 每标的最多扫几个到期日(默认6;旧为3) */
+    max_expiries?: number
+    prefer_core_dte?: boolean
+    ema50_min_bars?: number
+    ema200_min_bars?: number
+    allow_partial_ema?: boolean
   }
   wheel_position: {
     profit_target_pct: number
@@ -1281,6 +1298,13 @@ export interface WheelScanReportRow {
   not_touching?: number
   signals?: number
   note?: string | null
+  dte?: string
+  core_dte?: string
+  expiries_scanned?: string[]
+  expiries_skipped?: string[]
+  strike_lo?: number | null
+  strike_hi?: number | null
+  ema_partial_hits?: number
 }
 
 export interface WheelScanStatus {

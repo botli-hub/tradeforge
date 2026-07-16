@@ -57,6 +57,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_scan_minutes": 30,
         # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
         "strike_range_down": 0.20, "strike_range_up": 0.10,
+        # 每标的最多扫几个到期日(旧逻辑写死 3,周期权密时会漏掉 21–45 舒适区)
+        "max_expiries": 6,
+        # 优先覆盖标的核心 DTE(无 pad),再补 pad 外的近月/远月
+        "prefer_core_dte": True,
+        # Wheel 触线 EMA 最少 K 线根数(LEAPS 默认 60/210 过严,短历史合约触不到)
+        "ema50_min_bars": 45,
+        "ema200_min_bars": 120,
+        # 根数 < 标准周期但仍 ≥ ema*_min 时仍算 EMA,信号带 ema_partial
+        "allow_partial_ema": True,
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
@@ -68,6 +77,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "gamma_warn_dte": 7,
         "hold_theta_min_profit_pct": 40,
         "dividend_warn_days": 14,
+        # 平仓名义 < 此值(美元)且高浮盈 OTM → 倾向吃 θ,避免手续费吞收益
+        "min_close_notional": 20.0,
+        "shallow_itm_pct": 1.5,
+        "deep_itm_moneyness_pct": 3.0,
         "alert_push_minutes": 0,  # 在场体检告警推送间隔,0=关
     },
     "wheel_scan": {
@@ -86,6 +99,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "min_iv_history_for_bonus": 30,
         "sort_mode": "score",  # score | robust
         "log_suggestions": True,
+        # 机会流同标的同方向最多条数(旧默认 5 会挤掉好 strike)
+        "opp_max_per_symbol_side": 10,
     },
     "wheel_portfolio": {
         "total_equity": 0,  # 0=用 max_capital 之和估算

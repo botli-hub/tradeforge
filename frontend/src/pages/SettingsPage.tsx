@@ -498,6 +498,32 @@ function BackendConfigCard({
                 onChange={e => up('wheel_timing', 'dte_pad_days', Number(e.target.value))} />
             </div>
             <div className="settings-row">
+              <label>每标的到期日数(默认6)</label>
+              <input type="number" min={1} max={12} value={cfg.wheel_timing.max_expiries ?? 6}
+                onChange={e => up('wheel_timing', 'max_expiries', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>优先核心 DTE 到期日</label>
+              <select value={cfg.wheel_timing.prefer_core_dte !== false ? '1' : '0'}
+                onChange={e => up('wheel_timing', 'prefer_core_dte', e.target.value === '1')}>
+                <option value="1">开启(先 21–45 再 pad)</option>
+                <option value="0">关闭(按近月截断)</option>
+              </select>
+            </div>
+            <div className="settings-row">
+              <label>EMA50 最少 K 线</label>
+              <input type="number" value={cfg.wheel_timing.ema50_min_bars ?? 45}
+                onChange={e => up('wheel_timing', 'ema50_min_bars', Number(e.target.value))} />
+            </div>
+            <div className="settings-row">
+              <label>允许不足周期近似 EMA</label>
+              <select value={cfg.wheel_timing.allow_partial_ema !== false ? '1' : '0'}
+                onChange={e => up('wheel_timing', 'allow_partial_ema', e.target.value === '1')}>
+                <option value="1">开启</option>
+                <option value="0">关闭</option>
+              </select>
+            </div>
+            <div className="settings-row">
               <label>每标的合约上限(0=不限)</label>
               <input type="number" value={cfg.wheel_timing.contract_max_per_symbol}
                 onChange={e => up('wheel_timing', 'contract_max_per_symbol', Number(e.target.value))} />
