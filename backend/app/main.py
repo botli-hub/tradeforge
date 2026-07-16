@@ -39,6 +39,8 @@ async def startup():
     # Wheel 全池扫描定时推送(wheel_scan.auto_push_minutes,0=关闭)
     from app.services.wheel_scanner import auto_push_loop
     threading.Thread(target=auto_push_loop, daemon=True).start()
+    # 在场合约高优先级行动 Telegram 告警
+    threading.Thread(target=_position_alert_loop, daemon=True).start()
     # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
     threading.Thread(target=_backfill_codes_once, daemon=True).start()
 
@@ -134,13 +136,6 @@ def _weekly_report_loop():
                 if stats.get("expiring_soon"):
                     lines.append("⚠ 临期: " + "、".join(
                         f"{e['symbol']} {e['open_option_type']} {e['dte']}天" for e in stats["expiring_soon"]))
-                conv = stats.get("conversion") or {}
-                if conv.get("signal_count_30d"):
-                    lines.append(
-                        f"触线转化(30d) {conv.get('converted_30d', 0)}/{conv['signal_count_30d']}"
-                        f"({conv.get('rate_pct', 0)}%)"
-                        + (f" · 均延迟 {conv['avg_signal_to_trade_hours']}h"
-                           if conv.get("avg_signal_to_trade_hours") is not None else ""))
                 notifier = TelegramNotifier.from_config(cfg)
                 if notifier.send("\n".join(lines)):
                     wrepo.set_kv("weekly_report_sent", week_key)
@@ -168,6 +163,38 @@ def _wheel_timing_loop():
             _run_wheel_scan()
         except Exception:
             pass  # OpenD 未启动等情况静默跳过
+
+
+def _position_alert_loop():
+    """按 wheel_position.alert_push_minutes 推送持仓行动;0=关闭。"""
+    import time
+    time.sleep(180)
+    while True:
+        try:
+            from app.api.leaps import _load_config
+            cfg = _load_config()
+            minutes = float((cfg.get("wheel_position") or {}).get("alert_push_minutes") or 0)
+        except Exception:
+            minutes = 0
+        if minutes <= 0:
+            time.sleep(300)
+            continue
+        time.sleep(minutes * 60)
+        try:
+            from app.api.wheel import check_open_positions_core
+            from app.core.wheel_decision import format_alert_line
+            from app.services.notifier import TelegramNotifier
+            futu = (_load_config().get("futu") or {})
+            data = check_open_positions_core(futu.get("host", "127.0.0.1"), futu.get("port", 11111))
+            urgent = [i for i in data.get("items") or [] if (i.get("action_priority") or 9) <= 3]
+            if not urgent:
+                continue
+            lines = ["🚨 Wheel 持仓行动提醒"] + [format_alert_line(i) for i in urgent[:15]]
+            notifier = TelegramNotifier.from_config(_load_config())
+            if notifier._enabled:
+                notifier.send("\n".join(lines))
+        except Exception:
+            pass
 
 
 def _startup_backfill_check(scheduler):

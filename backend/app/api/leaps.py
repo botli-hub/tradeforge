@@ -123,26 +123,30 @@ class WheelScanRequest(BaseModel):
     symbol: Optional[str] = None
 
 
-# 最近一次 wheel 扫描的状态(内存态,重启即清)
-_WHEEL_SCAN_STATE: Dict[str, Any] = {
-    "running": False, "started_at": None, "finished_at": None,
-    "signals_found": 0, "report": [], "error": None,
-    "telegram_configured": False, "telegram_sent": 0,
-}
+# 触线扫描状态/进度:独立模块 wheel_timing_progress(避免循环导入丢进度)
+from app.core import wheel_timing_progress as _timing_prog
+
+
+def update_wheel_scan_progress(**kwargs: Any) -> None:
+    """兼容旧调用名。"""
+    _timing_prog.update(**kwargs)
 
 
 @router.post("/wheel-scan")
 def trigger_wheel_scan(body: WheelScanRequest, background_tasks: BackgroundTasks):
     """扫描 Wheel 开仓时机(卖Put/持股卖Call),结果入信号库并推 Telegram"""
-    if _WHEEL_SCAN_STATE["running"]:
+    st = _timing_prog.get_state()
+    if st.get("running"):
         return {"status": "already_running"}
+    # 立刻置 running,避免前端首几次轮询仍见 idle
+    _timing_prog.reset_for_start(telegram_configured=False)
     background_tasks.add_task(_run_wheel_scan, body.symbol)
     return {"status": "started", "symbol": body.symbol}
 
 
 @router.get("/wheel-scan/status")
 def wheel_scan_status():
-    return _WHEEL_SCAN_STATE
+    return _timing_prog.get_state()
 
 
 @router.get("/wheel-timing/history")
@@ -160,9 +164,8 @@ def _run_wheel_scan(symbol: Optional[str] = None):
     timing_cfg = cfg.get("wheel_timing", {}) or {}
     min_iv = float(timing_cfg.get("push_min_iv_rank", 50) or 0)
     strong_only = bool(timing_cfg.get("push_strong_only", True))
-    _WHEEL_SCAN_STATE.update(running=True, started_at=datetime.now().isoformat(),
-                             finished_at=None, signals_found=0, report=[], error=None,
-                             telegram_configured=notifier._enabled, telegram_sent=0)
+    _timing_prog.reset_for_start(telegram_configured=bool(notifier._enabled))
+    _timing_prog.update(message="触线 · 初始化监控器…", phase="timing")
     report: list = []
     try:
         signals = monitor.scan_all(symbol=symbol, report=report)
@@ -178,7 +181,7 @@ def _run_wheel_scan(symbol: Optional[str] = None):
                     sent += 1
             except Exception as e:
                 logger.warning("wheel 信号推送失败: %s", e)
-        _WHEEL_SCAN_STATE.update(signals_found=len(signals), telegram_sent=sent)
+        _timing_prog.mark_done(signals_found=len(signals), telegram_sent=sent, report=report)
 
         # 在场合约体检推送。notify_mode:
         #   realtime(默认) — 每条提醒即时推(每合约每日一次冷却)
@@ -260,10 +263,18 @@ def _run_wheel_scan(symbol: Optional[str] = None):
             logger.info("在场合约体检跳过: %s", e)
     except Exception as e:
         logger.error("_run_wheel_scan 异常: %s", e)
-        _WHEEL_SCAN_STATE.update(error=str(e))
+        _timing_prog.mark_error(str(e))
+        _timing_prog.update(report=report)
     finally:
-        _WHEEL_SCAN_STATE.update(running=False, report=report,
-                                 finished_at=datetime.now().isoformat())
+        st = _timing_prog.get_state()
+        if st.get("running"):
+            # 异常路径未 mark_done/error 时兜底
+            _timing_prog.update(
+                running=False,
+                finished_at=datetime.now().isoformat(timespec="seconds"),
+                report=report,
+                phase=st.get("phase") if st.get("phase") in ("done", "error") else "idle",
+            )
 
 
 @router.get("/signals/{signal_id}/notify")

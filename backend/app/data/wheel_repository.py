@@ -255,8 +255,25 @@ def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
     if not trades:
         return None
     s = _new_state()
-    for t in trades:
-        _apply(s, t)
+    for i, t in enumerate(trades):
+        try:
+            _apply(s, t)
+        except WheelError as e:
+            # 常见踩坑:平仓/行权的成交时间早于开仓腿 → 重放时状态还是空仓
+            later_open = next(
+                (x for x in trades[i + 1:]
+                 if x.get("trade_type") in ("SELL_PUT", "SELL_CALL", "BUY_SHARES")),
+                None,
+            )
+            hint = ""
+            if later_open and str(t.get("traded_at") or "") < str(later_open.get("traded_at") or ""):
+                hint = (
+                    f"。本笔成交时间 {t.get('traded_at')} 早于后续开仓腿 "
+                    f"{later_open.get('trade_type')}@{later_open.get('traded_at')}；"
+                    f"状态机按时间顺序重放，请把本笔时间改到开仓之后，"
+                    f"或修正开仓腿的成交时间（勿把到期日当成成交日）"
+                )
+            raise WheelError(f"{e}{hint}") from e
     started_at = trades[0]["traded_at"]
     conn.execute(
         """UPDATE wheel_cycles SET status=?, shares=?, share_cost=?, total_premium=?,

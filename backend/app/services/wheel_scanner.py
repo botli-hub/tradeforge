@@ -65,10 +65,51 @@ def clear_cache():
 
 _LAST_RESULT: Optional[Dict[str, Any]] = None
 _SCAN_LOCK = threading.Lock()
+_PROGRESS_LOCK = threading.Lock()
+_SCAN_PROGRESS: Dict[str, Any] = {
+    "running": False,
+    "phase": "idle",  # idle | pool | done | error
+    "symbol": None,
+    "side": None,
+    "expiry": None,
+    "contract_i": 0,
+    "contract_n": 0,
+    "target_i": 0,
+    "target_n": 0,
+    "message": "",
+    "updated_at": None,
+}
 
 
 def get_last_result() -> Optional[Dict[str, Any]]:
     return _LAST_RESULT
+
+
+def get_scan_progress() -> Dict[str, Any]:
+    with _PROGRESS_LOCK:
+        return dict(_SCAN_PROGRESS)
+
+
+def update_scan_progress(**kwargs: Any) -> None:
+    """线程安全更新扫描进度(供 _suggest / run_scan 回调)。"""
+    with _PROGRESS_LOCK:
+        _SCAN_PROGRESS.update(kwargs)
+        _SCAN_PROGRESS["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _reset_progress(target_n: int = 0) -> None:
+    update_scan_progress(
+        running=True,
+        phase="pool",
+        symbol=None,
+        side=None,
+        expiry=None,
+        contract_i=0,
+        contract_n=0,
+        target_i=0,
+        target_n=target_n,
+        message="准备扫描…",
+    )
 
 
 def run_scan(host: str = "127.0.0.1", port: int = 11111,
@@ -94,6 +135,7 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
 
         usage = repo.get_capital_usage()["per_symbol"]
         targets = [t for t in repo.get_targets() if t.get("enabled")]
+        _reset_progress(len(targets))
 
         opportunities: List[Dict[str, Any]] = []
         skipped: List[Dict[str, str]] = []
@@ -103,6 +145,16 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
 
         for idx, t in enumerate(targets):
             symbol = t["symbol"]
+            update_scan_progress(
+                target_i=idx + 1,
+                target_n=len(targets),
+                symbol=symbol,
+                side=None,
+                expiry=None,
+                contract_i=0,
+                contract_n=0,
+                message=f"标的 {idx + 1}/{len(targets)} · {symbol}",
+            )
             u = usage.get(symbol, {})
             committed = (u.get("csp_collateral") or 0) + (u.get("holding_cost") or 0)
             headroom = (t["max_capital"] - committed) if (t.get("max_capital") or 0) > 0 else None
@@ -119,6 +171,11 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
                 skipped.append({"symbol": symbol, "reason": f"资金上限已用满(占用 {committed:.0f}/{t['max_capital']:.0f})"})
 
             for side, cycle_id in sides:
+                update_scan_progress(
+                    symbol=symbol,
+                    side=side,
+                    message=f"正在扫描 {symbol} {side} · 标的 {idx + 1}/{len(targets)}",
+                )
                 try:
                     res = _suggest(symbol, side, host, port, cycle_id)
                 except HTTPException as e:
@@ -130,6 +187,15 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
                 trend = (res.get("trend") or {}).get("trend")
                 for s in res.get("suggestions", [])[:top_per_symbol]:
                     collateral = (s.get("strike") or 0) * (s.get("contract_size") or 100)
+                    exceeds = bool(headroom is not None and side == "PUT" and collateral > headroom)
+                    # 有余量时保留 score;超资金上限的机会降权到排序末尾但仍展示
+                    adj_score = s.get("score") or 0
+                    if exceeds:
+                        adj_score *= 0.3
+                    elif headroom is not None and t.get("max_capital"):
+                        # 余量越大略加分(与 score 内 headroom_factor 叠加,扫描层再偏资金效率)
+                        hr = max(0.0, headroom / t["max_capital"])
+                        adj_score *= (1.0 + 0.1 * hr)
                     opportunities.append({
                         "symbol": symbol, "name": t.get("name"), "side": side,
                         "cycle_id": cycle_id,
@@ -137,14 +203,22 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
                         "trend": trend,
                         "iv_rank": (res.get("volatility") or {}).get("iv_rank"),
                         "earnings_warn": res.get("earnings_warn"),
-                        "exceeds_capital": bool(headroom is not None and side == "PUT"
-                                                and collateral > headroom),
+                        "exceeds_capital": exceeds,
+                        "headroom": headroom,
+                        "score_adjusted": round(adj_score, 2),
                         **s,
+                        "score": round(adj_score, 2),
                     })
             if idx < len(targets) - 1 and interval > 0:
                 time.sleep(interval)  # 限频缓冲(缓存命中时基本不产生请求)
 
-        opportunities.sort(key=lambda x: x.get("score") or 0, reverse=True)
+        sort_mode = scan_cfg.get("sort_mode", "score")
+        if sort_mode == "robust":
+            opportunities.sort(
+                key=lambda x: x.get("robust_score") or x.get("score") or 0, reverse=True
+            )
+        else:
+            opportunities.sort(key=lambda x: x.get("score") or 0, reverse=True)
         result = {
             "scanned_at": datetime.now().isoformat(timespec="seconds"),
             "targets_scanned": len(targets),
@@ -152,44 +226,54 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
             "total_found": len(opportunities),
             "skipped": skipped,
             "errors": errors,
+            "sort_mode": sort_mode,
         }
+        # 落库供归因
+        if scan_cfg.get("log_suggestions", True):
+            try:
+                from app.core.wheel_attribution import log_suggestion_snapshot
+                slim = {
+                    "scanned_at": result["scanned_at"],
+                    "opportunities": [
+                        {
+                            "symbol": o.get("symbol"), "side": o.get("side"),
+                            "strike": o.get("strike"), "expiry": o.get("expiry"),
+                            "score": o.get("score"), "annualized": o.get("annualized"),
+                            "pop": o.get("pop"), "delta": o.get("delta"),
+                        }
+                        for o in result["opportunities"][:20]
+                    ],
+                }
+                log_suggestion_snapshot(slim)
+            except Exception as e:
+                logger.warning("log suggestions 失败: %s", e)
         _LAST_RESULT = result
+        update_scan_progress(
+            running=False,
+            phase="done",
+            message=f"完成 · 找到 {len(opportunities)} 条机会",
+            contract_i=0,
+            contract_n=0,
+        )
         return result
+    except Exception as e:
+        update_scan_progress(running=False, phase="error", message=f"扫描失败: {e}")
+        raise
     finally:
         _SCAN_LOCK.release()
+        # 若异常未写 done/error，标记 idle
+        with _PROGRESS_LOCK:
+            if _SCAN_PROGRESS.get("running"):
+                _SCAN_PROGRESS["running"] = False
+                if _SCAN_PROGRESS.get("phase") == "pool":
+                    _SCAN_PROGRESS["phase"] = "idle"
 
 
 # ── Telegram 推送 ─────────────────────────────────────────────────────────────
 
-def _opp_efficiency(o: Dict[str, Any]) -> float:
-    """资金效率:年化×流动性近似 / 占用(万美元) × 风险折扣"""
-    ann = float(o.get("annualized") or 0)
-    factors = o.get("score_factors") or {}
-    liq = float(factors.get("liquidity") or 1)
-    strike = float(o.get("strike") or 0)
-    size = float(o.get("contract_size") or 100)
-    cap = max(strike * size, 1)
-    mult = 1.0
-    if o.get("exceeds_capital"):
-        mult *= 0.2
-    if o.get("trend") == "DOWN":
-        mult *= 0.7
-    if o.get("covers_earnings"):
-        mult *= 0.85
-    ivr = o.get("iv_rank")
-    if ivr is not None and ivr >= 70:
-        mult *= 1.15
-    elif ivr is not None and ivr >= 50:
-        mult *= 1.08
-    return (ann * liq / (cap / 10000.0)) * mult
-
-
-def format_scan_report(result: Dict[str, Any], limit: int = 3) -> str:
-    lines = [f"🎯 Wheel 可下单 Top{limit}(按资金效率 · {result['scanned_at'][:16]})"]
-    opps = list(result.get("opportunities") or [])
-    # 过滤明显不可做
-    opps = [o for o in opps if not o.get("exceeds_capital")]
-    opps.sort(key=_opp_efficiency, reverse=True)
+def format_scan_report(result: Dict[str, Any], limit: int = 8) -> str:
+    lines = [f"🎯 Wheel 全池扫描 Top 机会({result['scanned_at'][:16]})"]
+    opps = result.get("opportunities", [])
     if not opps:
         lines.append("没有满足条件的机会")
     for o in opps[:limit]:
@@ -199,16 +283,13 @@ def format_scan_report(result: Dict[str, Any], limit: int = 3) -> str:
             tags.append("⚠趋势弱")
         if o.get("covers_earnings"):
             tags.append("⚠财报")
-        if (o.get("iv_rank") or 0) >= 70:
-            tags.append("IV高")
+        if o.get("exceeds_capital"):
+            tags.append("⚠超资金上限")
         tag_s = (" " + " ".join(tags)) if tags else ""
-        eff = _opp_efficiency(o)
-        cap = (o.get("strike") or 0) * (o.get("contract_size") or 100)
         lines.append(
             f"{icon} {o['symbol']} {'卖Put' if o['side'] == 'PUT' else '卖Call'} "
-            f"{str(o.get('expiry') or '')[:10]} {o['strike']:g} · Δ{o['delta']:.2f} · {o['dte']}天\n"
-            f"   权利金 {o['bid']:g} · 年化 {o['annualized']:.1f}% · 评分 {o.get('score', 0):.1f}"
-            f" · 占用 ${cap:.0f} · 效率 {eff:.1f}{tag_s}"
+            f"{o['expiry'][:10]} {o['strike']:g} · Δ{o['delta']:.2f} · {o['dte']}天\n"
+            f"   权利金 {o['bid']:g} · 年化 {o['annualized']:.1f}% · 评分 {o.get('score', 0):.1f}{tag_s}"
         )
     errs = result.get("errors") or []
     if errs:
@@ -219,16 +300,13 @@ def format_scan_report(result: Dict[str, Any], limit: int = 3) -> str:
 def push_scan(host: str = "127.0.0.1", port: int = 11111,
               force_refresh: bool = False) -> Dict[str, Any]:
     from app.api.leaps import _load_config
-    from app.core.wheel_score import get_scan_cfg
     from app.services.notifier import TelegramNotifier
 
     result = run_scan(host, port, force_refresh=force_refresh)
-    cfg = _load_config()
-    top_n = int(get_scan_cfg(cfg).get("telegram_top_n", 3) or 3)
-    notifier = TelegramNotifier.from_config(cfg)
+    notifier = TelegramNotifier.from_config(_load_config())
     sent = False
     if notifier._enabled:
-        sent = notifier.send(format_scan_report(result, limit=top_n))
+        sent = notifier.send(format_scan_report(result))
     result["telegram_sent"] = sent
     return result
 

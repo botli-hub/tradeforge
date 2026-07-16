@@ -141,13 +141,25 @@ export function buildFutuOrderMemo(p: {
   strike?: number | null
   expiry?: string | null
   qty?: number
+  /** 卖出参考：优先真实 bid，勿把触线 last 当卖价 */
   price?: number | null
+  /** bid=实时买价；trigger=仅有触线价(非卖价)；none=无 */
+  price_kind?: 'bid' | 'premium' | 'trigger' | 'none'
   note?: string
 }): string {
   const code = normalizeContractCode(p.contract_code, p.symbol) || p.contract_code || '(无代码)'
   const dir = p.action === 'SELL'
     ? (p.side === 'PUT' ? '卖出 Put(开仓)' : '卖出 Call(开仓)')
     : (p.side === 'PUT' ? '买入 Put(平仓)' : '买入 Call(平仓)')
+  const kind = p.price_kind || (p.price != null ? 'bid' : 'none')
+  let priceLine = '参考卖价: (无实时买价，限价自定)'
+  if (p.price != null && kind === 'bid') {
+    priceLine = `参考卖价(bid): ${p.price}`
+  } else if (p.price != null && kind === 'premium') {
+    priceLine = `参考权利金: ${p.price}`
+  } else if (p.price != null && kind === 'trigger') {
+    priceLine = `触线价: ${p.price} (非买价，勿直接当卖出限价)`
+  }
   const lines = [
     '【TradeForge 下单备忘】',
     `标的: ${p.symbol}`,
@@ -156,11 +168,42 @@ export function buildFutuOrderMemo(p: {
     p.strike != null ? `Strike: ${p.strike}` : '',
     p.expiry ? `到期: ${String(p.expiry).slice(0, 10)}` : '',
     `数量: ${p.qty ?? 1} 张`,
-    p.price != null ? `参考价: ${p.price}` : '参考价: (市价/限价自定)',
+    priceLine,
     p.note ? `备注: ${p.note}` : '',
     '—— 在富途成交后回到 TradeForge「待登记」一键登记',
   ].filter(Boolean)
   return lines.join('\n')
+}
+
+/** 开仓机会：真实可卖参考价 vs 触线价分离 */
+export function resolveOppSellPrice(p: {
+  bid?: number | null
+  premium_used?: number | null
+  trigger_price?: number | null
+}): { sell: number | null; kind: 'bid' | 'premium' | 'trigger' | 'none'; trigger: number | null } {
+  const bid = p.bid != null && p.bid > 0 ? p.bid : null
+  const prem = p.premium_used != null && p.premium_used > 0 ? p.premium_used : null
+  const trigger = p.trigger_price != null && p.trigger_price > 0 ? p.trigger_price : null
+  if (bid != null) return { sell: bid, kind: 'bid', trigger }
+  if (prem != null) return { sell: prem, kind: 'premium', trigger }
+  // 触线价仅作旁注，不算卖出参考
+  return { sell: null, kind: trigger != null ? 'trigger' : 'none', trigger }
+}
+
+/** 相对时间：机会出现/最近发现 */
+export function fmtRelativeTime(iso?: string | null, now = Date.now()): string {
+  if (!iso) return ''
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return String(iso).replace('T', ' ').slice(0, 16)
+  const mins = Math.floor((now - t) / 60000)
+  if (mins < 0) return String(iso).replace('T', ' ').slice(5, 16)
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins}分钟前`
+  const h = Math.floor(mins / 60)
+  if (h < 24) return `${h}小时前`
+  const d = Math.floor(h / 24)
+  if (d < 7) return `${d}天前`
+  return String(iso).replace('T', ' ').slice(5, 16)
 }
 
 export async function copyText(text: string): Promise<boolean> {
