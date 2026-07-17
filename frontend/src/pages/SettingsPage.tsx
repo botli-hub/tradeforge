@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   AppSettings,
+  BackendConfig,
   connectTrading,
   disconnectTrading,
   getAppSettings,
