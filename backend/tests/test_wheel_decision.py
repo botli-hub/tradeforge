@@ -195,7 +195,7 @@ def test_underwater_strike_above_floor_close():
     )
     assert r["strike_above_floor"]
     assert r["action_code"] == "CLOSE"
-    assert "底线" in (r["action_hint"] or "")
+    assert "愿接" in (r["action_hint"] or "")
     assert r["decision_confidence"] >= 80
 
 
@@ -332,7 +332,7 @@ def test_would_open_no_strike_above_floor():
     )
     assert r["would_open_today"] == "no"
     assert r["strike_above_floor"]
-    assert any("底线" in x for x in r["would_open_reasons"])
+    assert any("愿接" in x or "floor" in x.lower() for x in r["would_open_reasons"])
 
 
 def test_would_open_no_trend_down_underwater():
@@ -374,6 +374,15 @@ def test_would_open_unknown_no_floor():
         15, 50,
     )
     assert r["would_open_today"] == "unknown"
+
+
+def test_floor_stance_no_heavy_penalty_for_floor_above_spot():
+    """准入:floor>现价不重罚,打近价愿接标签"""
+    from app.core.wheel_admission import floor_stance
+    fs = floor_stance(110.0, 100.0)
+    assert fs["stance"] == "tight"
+    assert fs["aggressiveness"] == "激进"
+    assert any("近价" in t for t in fs["tags"])
 
 
 if __name__ == "__main__":

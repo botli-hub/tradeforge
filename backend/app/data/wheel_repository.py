@@ -119,6 +119,44 @@ def delete_target(symbol: str) -> bool:
         conn.close()
 
 
+def log_floor_change(
+    symbol: str,
+    old_floor: Optional[float],
+    new_floor: float,
+    source: str = "manual",
+) -> None:
+    """记录愿接价变更(复盘何时放宽/收紧)。"""
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO wheel_floor_log (symbol, old_floor, new_floor, source, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (symbol, old_floor, new_floor, source or "manual", _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_floor_log(symbol: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    conn = get_db()
+    try:
+        if symbol:
+            rows = conn.execute(
+                """SELECT * FROM wheel_floor_log WHERE symbol = ?
+                   ORDER BY id DESC LIMIT ?""",
+                (symbol.strip().upper(), limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM wheel_floor_log ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 # ── 状态机(纯函数)────────────────────────────────────────────────────────────
 
 def _new_state() -> Dict[str, Any]:

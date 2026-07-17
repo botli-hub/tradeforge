@@ -147,10 +147,12 @@ def eval_would_open_today(
     if side == "PUT":
         if floor_price is None or floor_price <= 0:
             missing_key = True
-            reasons.append("未设置接货底线,无法完整校验开仓纪律")
+            reasons.append("未设置愿接最高价(floor),无法完整校验开仓纪律")
         elif strike_above_floor or strike > floor_price:
             hard_no = True
-            reasons.append(f"strike {strike:g} > 接货底线 {floor_price:g},纪律不会新开此 Put")
+            reasons.append(
+                f"strike {strike:g} > 愿接最高价 {floor_price:g},超过愿接价不宜等接货/不会新开"
+            )
         if trend == "DOWN":
             hard_no = True
             reasons.append("趋势 DOWN,按纪律不新开 Put")
@@ -238,17 +240,20 @@ def build_assign_checklist(
         if floor_price is not None and floor_price > 0:
             floor_ok = not strike_above_floor and strike <= floor_price
             if not floor_ok:
-                notes.append(f"strike {strike:g} 高于接货底线 {floor_price:g},被指派不符合预设愿接价")
+                notes.append(
+                    f"strike {strike:g} 高于愿接最高价 {floor_price:g},被指派不符合预设愿接价"
+                )
         else:
-            notes.append("未设接货底线,请自行确认愿接价")
+            notes.append("未设愿接最高价(floor),请自行确认愿接价")
         notes.append("CSP 现金担保通常已覆盖行权名义:指派多为担保变正股,一般不必再掏同等现金")
-        next_step = "接货后可按成本基础/现价扫描 Covered Call,继续轮动"
+        next_step = "接货后可按成本基础/现价扫描 Covered Call(Call 用成本底线,不用 floor)"
         collateral_covers = True
     else:
         floor_ok = None
         collateral_covers = None  # CC 不占 CSP 担保
         next_step = "被 call 后轮子可结束,或现金到位后重开 CSP"
         notes.append("被 call 走 = 按 strike 卖出持股,请确认愿意在此价交货")
+        notes.append("Covered Call 用持股成本底线约束 strike,与 CSP 愿接价 floor 无关")
         cb = cost_basis if cost_basis is not None else share_cost
         if cb is not None and strike:
             pnl_ps = float(strike) - float(cb)
@@ -596,13 +601,13 @@ def decide_position(
         prefer_card = "no_roll"
         hint = "平仓换仓(剩余年化低)"
     elif underwater and not itm and strike_above_floor:
-        # 浮亏且 strike > 接货底线:死拿等于接受不愿接的货
+        # 浮亏且 strike > 愿接最高价:死拿等于接受不愿接的货
         code, priority = ACTION_CLOSE, 3
         prefer_card = "no_roll"
-        hint = f"浮亏且 strike>${floor_price:g}>底线:优先止损/Roll,不宜等接货"
-        secondary_hint = "若仍想卖权:Roll down 到 floor 以下再开"
+        hint = f"超过愿接价(strike>${floor_price:g}):不宜等接货,优先止损/Roll"
+        secondary_hint = "若仍想卖权:Roll down 到愿接价 floor 以下再开"
         reasons.append(
-            f"接货底线 {floor_price:g},当前 strike {strike:g} 更高,被指派不符合预设风控"
+            f"愿接最高价 {floor_price:g},当前 strike {strike:g} 更高,被指派不符合预设愿接"
         )
     elif underwater and not itm:
         # 浮亏但仍 OTM 且 strike 在底线内:持有=赌到期作废;绝非「健康收租」
@@ -621,7 +626,7 @@ def decide_position(
             # 保持 NONE 不强制 CLOSE(strike>floor 已单独 CLOSE);升权+强调纪律否决
             priority = 4
             secondary_hint = (
-                "纪律否决新开此腿:优先止损买回或 Roll,勿用沉没成本自我安慰"
+                "超过愿接价或纪律否决新开:不宜等接货,优先止损买回或 Roll,勿用沉没成本自我安慰"
             )
             reasons.append("以当前纪律不会新开此腿 — 继续持有=主动偏离策略")
         elif would_open == "caution":

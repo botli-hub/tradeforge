@@ -17,7 +17,7 @@ def suggest_floor(
     current_floor: Optional[float] = None,
     iv_rank: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """返回建议接货底线及分项。"""
+    """返回市场结构参考愿接价(非「正确floor」;不自动写库)。"""
     from app.core.volatility import compute_ema
     from app.core.wheel_score import compute_atr
 
@@ -76,9 +76,12 @@ def suggest_floor(
             "atr_k": k,
         },
         "rationale": (
-            f"综合 EMA200 / 近60日低点 / spot−{k}×ATR;"
-            + ("IV高位加大缓冲" if (iv_rank or 0) >= 70 else "标准缓冲")
+            f"市场结构参考(非强制):EMA200 / 近60日低点 / spot−{k}×ATR;"
+            + ("IV高位加大缓冲;" if (iv_rank or 0) >= 70 else "标准缓冲;")
+            + "最终愿接价须你确认;Put strike必须≤floor;Call用成本底线"
         ),
+        "definition": "floor=CSP愿接最高价(Put行权价上限),不是止损线",
+        "is_reference_only": True,
     }
 
 

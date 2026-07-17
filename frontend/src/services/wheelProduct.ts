@@ -240,7 +240,7 @@ export const STRATEGY_TEMPLATES: Record<RiskTier, {
 }> = {
   conservative: {
     label: '保守',
-    desc: '更虚值、更严年化、更早止盈;行权压力 1.2x 停新 Put',
+    desc: '愿接约 0.85×现价(更深 OTM Put)、更严年化;行权压力 1.2x 停新 Put。floor=愿接最高价非止损',
     floor_pct_of_spot: 0.85,
     delta_min: 0.10, delta_max: 0.22,
     dte_min: 25, dte_max: 45,
@@ -250,7 +250,7 @@ export const STRATEGY_TEMPLATES: Record<RiskTier, {
   },
   balanced: {
     label: '均衡',
-    desc: '默认 Wheel 舒适区',
+    desc: '愿接约 0.90×现价;默认 Wheel 舒适区。Put strike≤floor;Call 看成本底线',
     floor_pct_of_spot: 0.90,
     delta_min: 0.15, delta_max: 0.30,
     dte_min: 21, dte_max: 45,
@@ -260,7 +260,7 @@ export const STRATEGY_TEMPLATES: Record<RiskTier, {
   },
   aggressive: {
     label: '积极',
-    desc: '更高权利金、更宽 delta;压力 2.0x 才停 Put',
+    desc: '愿接约 0.95×现价(近价 Put 权利金更高);压力 2.0x 才停 Put。近价愿接≠错误',
     floor_pct_of_spot: 0.95,
     delta_min: 0.18, delta_max: 0.35,
     dte_min: 14, dte_max: 40,

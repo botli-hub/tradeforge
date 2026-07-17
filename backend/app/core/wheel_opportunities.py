@@ -166,7 +166,7 @@ def _red_flags(
     if side == "PUT" and trend == "DOWN":
         flags.append("趋势DOWN")
     if side == "PUT" and below_floor:
-        flags.append("低于接货底线")
+        flags.append("已入愿接区·指派风险升")
     if side == "PUT" and portfolio_stress:
         flags.append("组合压力高")
     if side == "PUT" and iv_rank is not None and iv_rank < iv_low_threshold:
@@ -185,12 +185,14 @@ def _grade_actionable(
     """返回 (grade, actionable)。grade: dual|timing|score|blocked|watch
 
     硬阻断:超资金 / 覆盖财报 / 组合压力高(新 Put)
-    「低于接货底线」「IV低位」仅软标签或软降档,不单独 hard block。
+    「已入愿接区」「IV低位」仅软标签或软降档,不单独 hard block。
     """
     hard = [f for f in flags if f in ("超资金上限", "覆盖财报", "组合压力高")]
     soft_all = [f for f in flags if f not in hard]
     # 不参与降档的软标签(仍出现在 flags 里给前端角标)
-    soft_demote = [f for f in soft_all if f not in ("低于接货底线", "IV低位")]
+    soft_demote = [f for f in soft_all if f not in (
+        "已入愿接区·指派风险升", "低于接货底线", "IV低位",
+    )]
     if hard:
         return "blocked", False
     if source == "dual":

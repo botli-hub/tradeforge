@@ -277,7 +277,9 @@ def format_wheel_signal(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
         lines.append("  ".join(detail))
     lines.append(f"IV分位 {sig.iv_rank}  标的现价 {sig.underlying_price}")
     if getattr(sig, "below_floor", False):
-        lines.append(f"⚠ 现价低于接货底线 {sig.floor_price},接货风险自行评估")
+        lines.append(
+            f"ℹ 现价已进入愿接区(≤${sig.floor_price})·指派概率升,自行评估是否仍卖Put"
+        )
     return "\n".join(lines)
 
 
@@ -461,7 +463,10 @@ class LeapsMonitor:
             rep["note"] = f"现价 {underlying_price:.2f} ≤ 底线 {floor_price}"
             return signals
         if below_floor:
-            rep["note"] = f"⚠ 现价 {underlying_price:.2f} ≤ 底线 {floor_price}(软警告,继续扫描)"
+            rep["note"] = (
+                f"ℹ 现价 {underlying_price:.2f} ≤ 愿接价 {floor_price}"
+                f"(已入愿接区·指派风险升,继续扫描)"
+            )
 
         # 30 天推送上限
         if respect_30d_cap and repo.count_symbol_signals_30d(symbol) >= self.max_30d:

@@ -364,13 +364,17 @@ function enrichOpenRow(
 
   if (row.ranked?.exceeds_capital || row.tags.includes('超上限')) hard.push('超资金上限')
   if (row.side === 'PUT' && t && row.strike != null && t.floor_price > 0 && row.strike > t.floor_price) {
-    soft.push('行权价高于底线')
+    soft.push('超过愿接价')
   }
-  if (row.side === 'PUT' && row.signal && (row.signal as any).below_floor) soft.push('现价低于底线')
+  if (row.side === 'PUT' && row.signal && (row.signal as any).below_floor) soft.push('已入愿接区·指派风险升')
+  if (row.side === 'PUT' && t && row.strike != null && t.floor_price > 0 && row.strike <= t.floor_price) {
+    const cushion = t.floor_price - row.strike
+    if (cushion >= 0) soft.push(`愿接余量$${cushion.toFixed(cushion < 1 ? 2 : 0)}`)
+  }
   if (row.side === 'CALL' && t) {
     const holding = (t.active_cycles || []).find(c => c.status === 'HOLDING' || c.status === 'CC_OPEN')
     const cb = holding?.cost_basis
-    if (cb != null && row.strike != null && row.strike < cb * 1.02) soft.push('Call接近成本')
+    if (cb != null && row.strike != null && row.strike < cb * 1.02) soft.push('Call接近成本底线(非floor)')
   }
   if (row.covers_earnings) soft.push('含财报')
   if (row.ranked?.trend === 'DOWN' || row.tags.includes('趋势弱')) soft.push('趋势弱')
@@ -521,7 +525,7 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
   }
   if (px.kind === 'none' || px.kind === 'trigger') kill.push('无买价')
   if (deepItmPrem) kill.push('权利金疑似深ITM')
-  // 软标签不进 kill(低于接货底线等),避免整条被「隐藏不可交易」吃掉
+  // 软标签不进 kill(已入愿接区等),避免整条被「隐藏不可交易」吃掉
   if (!o.actionable && o.grade !== 'blocked' && kill.length === 0) {
     // 可观察但未达可做:不记入 kill,仍可在「观察」展示
   } else if (!o.actionable && o.grade === 'blocked') {
@@ -1788,7 +1792,7 @@ export default function WheelPage() {
     const symbol = addSymbol.trim().toUpperCase()
     const floor = parseFloat(addFloor)
     if (!symbol) { setError('请选择或输入标的代码'); return }
-    if (isNaN(floor) || floor <= 0) { setError('请填写有效的接货底线价'); return }
+    if (isNaN(floor) || floor <= 0) { setError('请填写有效的愿接最高价(floor)'); return }
     setAdding(true)
     setError(null)
     try {
@@ -2174,7 +2178,7 @@ export default function WheelPage() {
         <div className="panel" style={{ borderColor: 'rgba(56,189,248,0.35)' }}>
           <div className="panel-title">👋 3 步上手</div>
           <ol style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            <li>标的里添加代码并设接货底线</li>
+            <li>标的里添加代码并设愿接最高价(Put 行权价上限,不是止损)</li>
             <li>机会扫描 → 优先 → 备忘 → 富途成交</li>
             <li>今日「待登记」填成交价，驱动状态机</li>
           </ol>
@@ -2515,7 +2519,7 @@ export default function WheelPage() {
                         <span style={{ color: C.orange }}>
                           {r.side === 'PUT' ? '接货' : '交货'}名义 $
                           {fmt(r.check.assign_checklist.assign_notional, 0)}
-                          {r.check.assign_checklist.floor_ok === false ? ' · floor未过' : ''}
+                          {r.check.assign_checklist.floor_ok === false ? ' · 超过愿接价' : ''}
                         </span>
                       )}
                       {r.decision_why?.[0] && <span style={{ opacity: 0.85 }}>{r.decision_why[0]}</span>}
@@ -2841,8 +2845,9 @@ export default function WheelPage() {
                         )}
                         {!editParams && (
                           <>
-                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                              底线 <b style={{ color: 'var(--text)' }}>${fmt(sel.floor_price)}</b>
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
+                              title="愿接最高价:被指派时最多愿付的股价;Put strike必须≤此价;Call用成本底线">
+                              愿接 <b style={{ color: 'var(--text)' }}>${fmt(sel.floor_price)}</b>
                               {' · '}Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
                               {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
                               {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
@@ -2877,8 +2882,9 @@ export default function WheelPage() {
                     </div>
                     {editParams && (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
-                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                          底线$
+                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}
+                          title="真被指派时最多愿付的股价;此后卖Put的strike不得超过此价">
+                          愿接价$
                           <input type="number" step="any" value={editParams.floor_price} style={{
                             display: 'block', width: 90, padding: '4px 6px', marginTop: 2,
                             background: 'var(--bg-secondary)', border: '1px solid var(--border)',
@@ -2918,6 +2924,7 @@ export default function WheelPage() {
                                 dte_min: parseInt(editParams.dte_min),
                                 dte_max: parseInt(editParams.dte_max),
                                 min_annualized: parseFloat(editParams.min_annualized),
+                                floor_change_source: 'manual',
                               })
                               setEditParams(null)
                               await loadAll()
@@ -2973,7 +2980,9 @@ export default function WheelPage() {
                                 资金紧
                               </Badge>
                             )}
-                            {check?.strike_above_floor && <Badge color="red" title="行权价高于接货底线">{'strike>底线'}</Badge>}
+                            {check?.strike_above_floor && (
+                              <Badge color="red" title="行权价高于愿接最高价,不宜等接货">{'超过愿接价'}</Badge>
+                            )}
                             {check?.profit_pct != null && check.profit_pct < 0 && !check.profit_hit && (
                               <Badge color="orange" title="买回价高于开仓权利金">浮亏</Badge>
                             )}
@@ -3667,7 +3676,10 @@ export default function WheelPage() {
                   <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{item.expiry || '--'}{item.dte != null ? `(${item.dte}天)` : ''}</td>
                   <td style={{ padding: '7px 10px' }}>
                     ${fmt(item.trigger_price)}
-                    {!!item.below_floor && <span title="信号触发时标的现价低于接货底线" style={{ color: '#f87171', fontSize: 10, marginLeft: 4 }}>低于底线</span>}
+                    {!!item.below_floor && (
+                      <span title="现价已进入愿接区,指派概率升(不是禁止信号)"
+                        style={{ color: '#fb923c', fontSize: 10, marginLeft: 4 }}>愿接区·风险升</span>
+                    )}
                   </td>
                   <td style={{ padding: '7px 10px' }}>{item.delta != null ? item.delta.toFixed(2) : '--'}</td>
                   <td style={{ padding: '7px 10px', color: '#4ade80', fontWeight: 600 }}>{item.annualized != null ? fmt(item.annualized, 1) : '--'}</td>
@@ -4007,7 +4019,8 @@ export default function WheelPage() {
               })()}
             </select>
             <input type="number" step="any" value={addFloor} onChange={e => setAddFloor(e.target.value)}
-              placeholder="接货底线价" style={{ ...inputStyle, width: 110 }} title="标的接货意愿底线，按个股填写" />
+              placeholder="愿接最高价" style={{ ...inputStyle, width: 110 }}
+              title="被指派时最多愿付的股价(Put strike上限),不是止损线" />
             <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }}
               disabled={adding || !addSymbol} onClick={handleAddTarget}>
               {adding ? '添加中...' : '添加'}
@@ -4020,7 +4033,7 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '底线价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '愿接价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}>{h}</th>
                 ))}
               </tr>
@@ -4274,8 +4287,8 @@ export default function WheelPage() {
               · 浮盈 {mc.profit_pct ?? '--'}% · 剩余年化 {mc.remaining_annualized ?? '--'}%
               · 买回约 ${buy}
               {mc.itm ? ' · ITM' : ' · OTM'}
-              {mc.floor_price != null && mc.floor_price > 0 && ` · 底线 $${mc.floor_price}`}
-              {mc.strike_above_floor && ' · strike>底线'}
+              {mc.floor_price != null && mc.floor_price > 0 && ` · 愿接 $${mc.floor_price}`}
+              {mc.strike_above_floor && ' · 超过愿接价'}
               {mc.capital_tight && (
                 <span style={{ color: C.orange }}>
                   {' · 资金紧'}
@@ -4359,6 +4372,20 @@ export default function WheelPage() {
                   <div style={{ fontWeight: 600, marginBottom: 6, color: C.orange }}>
                     {isPut ? '接货清单(签合同前确认)' : '交货清单(被 call 前确认)'}
                   </div>
+                  <div style={{ marginBottom: 8, padding: '6px 8px', borderRadius: 6, background: 'var(--bg-secondary)', lineHeight: 1.5 }}>
+                    <b>先答三问:</b>
+                    <div>① 愿按 strike ${mc.strike} {isPut ? '接货' : '交货'}吗?</div>
+                    <div>② {isPut
+                      ? (cl.floor_ok === false
+                        ? <span style={{ color: C.red }}>愿接价未通过(strike &gt; floor)</span>
+                        : cl.floor_ok === true
+                          ? <span style={{ color: C.green }}>在愿接价内(floor OK)</span>
+                          : '愿接价未设置,请自行确认')
+                      : 'Call 看成本底线,与 CSP floor 无关'}</div>
+                    <div>③ 接后/交后集中度与下一步可接受吗?
+                      {cl.post_holding_pct != null ? ` (约净值 ${cl.post_holding_pct}%)` : ''}
+                    </div>
+                  </div>
                   <ul style={{ margin: '0 0 6px', paddingLeft: 18, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
                     <li>
                       {isPut ? '接货名义' : '交货名义'}{' '}
@@ -4369,7 +4396,7 @@ export default function WheelPage() {
                     </li>
                     {isPut && cl.floor_ok != null && (
                       <li style={{ color: cl.floor_ok ? C.green : C.red }}>
-                        接货底线: {cl.floor_ok ? 'OK' : '未通过'}
+                        愿接最高价: {cl.floor_ok ? 'OK' : '未通过·不宜等接货'}
                         {cl.floor_price != null && ` (floor $${cl.floor_price}, strike $${cl.strike ?? mc.strike})`}
                       </li>
                     )}
@@ -4380,7 +4407,7 @@ export default function WheelPage() {
                       <li style={{ color: C.red }}>可能超过该标的 max_capital 上限</li>
                     )}
                     {cl.next_step_hint && <li>下一步: {cl.next_step_hint}</li>}
-                    {(cl.notes || []).slice(0, 2).map((n, i) => (
+                    {(cl.notes || []).slice(0, 3).map((n, i) => (
                       <li key={i}>{n}</li>
                     ))}
                   </ul>
@@ -4856,6 +4883,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
         dte_min: parseInt(form.dte_min), dte_max: parseInt(form.dte_max),
         min_annualized: parseFloat(form.min_annualized),
         min_open_interest: parseInt(form.min_open_interest),
+        floor_change_source: 'manual',
       })
       setEditing(false)
       onSaved()
@@ -4871,7 +4899,9 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
           <span style={{ fontWeight: 600 }}>{target.symbol}</span>
           <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 6 }}>{target.name}</span>
         </td>
-        <td style={{ padding: '8px 10px' }}>${fmt(target.floor_price)}</td>
+        <td style={{ padding: '8px 10px' }} title="愿接最高价(Put strike上限)">
+          ${fmt(target.floor_price)}
+        </td>
         <td style={{ padding: '8px 10px' }}>{target.delta_min} ~ {target.delta_max}</td>
         <td style={{ padding: '8px 10px' }}>{target.dte_min} ~ {target.dte_max} 天</td>
         <td style={{ padding: '8px 10px' }}>{target.min_annualized}</td>
@@ -4895,7 +4925,8 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
       <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 11 }}>{err}</div>}</td>
       <td style={{ padding: '8px 10px' }}>
         <input type="number" step="any" style={inputStyle} value={form.floor_price}
-          onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))} title="接货底线按个股填写" />
+          onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
+          title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
       </td>
       <td style={{ padding: '8px 10px' }}>
         <SelectNum value={form.delta_min} options={DELTA_OPTS} style={inputStyle}

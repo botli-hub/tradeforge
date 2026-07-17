@@ -721,6 +721,21 @@ def init_db():
         )
     """)
 
+    # 愿接价 floor 变更日志(复盘何时放宽/收紧)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_floor_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL,
+            old_floor REAL,
+            new_floor REAL NOT NULL,
+            source TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wheel_floor_log_sym ON wheel_floor_log(symbol, created_at DESC)"
+    )
+
     # 事件封锁日(财报外的手动 block: FOMC/拆分等)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS wheel_event_blocks (

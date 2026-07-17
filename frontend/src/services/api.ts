@@ -1040,7 +1040,10 @@ export async function addWheelTarget(body: Partial<WheelTarget> & { symbol: stri
   })
 }
 
-export async function updateWheelTarget(symbol: string, body: Partial<WheelTarget>) {
+export async function updateWheelTarget(
+  symbol: string,
+  body: Partial<WheelTarget> & { floor_change_source?: 'manual' | 'smart' | string },
+) {
   return request<WheelTarget>(`/api/wheel/targets/${encodeURIComponent(symbol)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -1496,7 +1499,24 @@ export async function getWheelFloorSuggest(symbol: string) {
     spot?: number
     rationale?: string
     delta_vs_current?: number | null
+    definition?: string
+    is_reference_only?: boolean
   }>(`/api/wheel/floor-suggest?symbol=${encodeURIComponent(symbol)}`)
+}
+
+export async function getWheelFloorLog(symbol?: string, limit = 30) {
+  const qs = new URLSearchParams({ limit: String(limit) })
+  if (symbol) qs.set('symbol', symbol)
+  return request<{
+    items: {
+      id: number
+      symbol: string
+      old_floor: number | null
+      new_floor: number
+      source: string | null
+      created_at: string
+    }[]
+  }>(`/api/wheel/floor-log?${qs}`)
 }
 
 export async function getWheelHealth() {

@@ -117,7 +117,7 @@ def add_target(body: TargetIn):
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol 不能为空")
     if body.floor_price <= 0:
-        raise HTTPException(status_code=400, detail="接货底线价必须大于 0")
+        raise HTTPException(status_code=400, detail="愿接最高价(floor)必须大于 0")
     name, market = body.name, body.market
     if not name or not market:
         conn = get_db()
@@ -136,6 +136,10 @@ def add_target(body: TargetIn):
         "min_open_interest": body.min_open_interest,
         "enabled": 1 if body.enabled else 0,
     })
+    try:
+        repo.log_floor_change(symbol, None, float(body.floor_price), source="manual")
+    except Exception as e:
+        logger.warning("floor log on add failed: %s", e)
     # 自动订阅历史日K:HV/EMA/IV rank 等档案数据依赖本地K线积累
     try:
         from app.data.history_repository import upsert_subscription
@@ -156,16 +160,37 @@ class TargetUpdate(BaseModel):
     min_annualized: Optional[float] = None
     min_open_interest: Optional[int] = None
     enabled: Optional[bool] = None
+    # floor 变更来源:manual|smart — 写入 floor 变更日志
+    floor_change_source: Optional[str] = None
 
 
 @router.put("/targets/{symbol}")
 def update_target(symbol: str, body: TargetUpdate):
     data = body.model_dump()
+    floor_src = data.pop("floor_change_source", None)
     if data.get("enabled") is not None:
         data["enabled"] = 1 if data["enabled"] else 0
-    if not repo.update_target(symbol, **data):
+    old = repo.get_target(symbol)
+    if old is None:
+        raise HTTPException(status_code=404, detail=f"{symbol} 不是 wheel 标的")
+    old_floor = old.get("floor_price")
+    if not repo.update_target(symbol, **{k: v for k, v in data.items() if k != "floor_change_source"}):
         raise HTTPException(status_code=404, detail=f"{symbol} 不是 wheel 标的或无可更新字段")
-    return repo.get_target(symbol)
+    new = repo.get_target(symbol)
+    if new and data.get("floor_price") is not None:
+        try:
+            nf = float(new.get("floor_price") or 0)
+            of = float(old_floor) if old_floor is not None else None
+            if of is None or abs(nf - of) > 1e-9:
+                repo.log_floor_change(
+                    symbol.strip().upper(),
+                    of,
+                    nf,
+                    source=(floor_src or "manual"),
+                )
+        except Exception as e:
+            logger.warning("floor log failed: %s", e)
+    return new
 
 
 @router.delete("/targets/{symbol}")
@@ -1278,7 +1303,10 @@ def roll_options(
             "cost_basis": cost_basis,
             "share_cost": share_cost,
             "put_max_strike": put_strike_cap,
-            "rule": "CALL strike ≥ max(cost_basis, share_cost); PUT strike ≤ floor_price",
+            "rule": (
+                "CALL strike ≥ max(cost_basis, share_cost)(成本底线,与floor无关); "
+                "PUT strike ≤ floor_price(愿接最高价)"
+            ),
         },
         "delta_filter": {
             "mode": delta_mode,
@@ -1569,6 +1597,12 @@ def floor_suggest_api(symbol: str = Query(...), spot: Optional[float] = Query(No
         (t or {}).get("floor_price"),
         vol.get("iv_rank"),
     )
+
+
+@router.get("/floor-log")
+def floor_log_api(symbol: Optional[str] = Query(None), limit: int = Query(30, ge=1, le=200)):
+    """愿接价变更历史。"""
+    return {"items": repo.get_floor_log(symbol, limit=limit)}
 
 
 @router.get("/attribution/health")

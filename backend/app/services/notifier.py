@@ -30,7 +30,11 @@ def format_leaps_signal(signal: Any) -> str:
         f"触发：价格 {signal.trigger_price:.1f} 上穿 {signal.ema_type}（{signal.ema_value:.1f}）",
         f"IV Rank：{signal.iv_rank:.0f} / 100（52周）",
         f"标的：{signal.symbol} ${signal.underlying_price}"
-        + (f"（接货底线 ${signal.floor_price} ✓）" if signal.underlying_price > signal.floor_price else f"（接货底线 ${signal.floor_price} ✗）"),
+        + (
+            f"（愿接价 ${signal.floor_price} · 现价在上方）"
+            if signal.underlying_price > signal.floor_price
+            else f"（愿接价 ${signal.floor_price} · 已入愿接区·指派风险升）"
+        ),
     ]
 
     if signal.suggestions:
@@ -66,7 +70,7 @@ def format_leaps_signal_from_dict(signal: Dict[str, Any]) -> str:
         f"{level_icon} [{level_label}] {contract_label}",
         f"触发：价格 {signal.get('trigger_price', 0):.1f} 上穿 {signal.get('ema_type', '')}（{signal.get('ema_value', 0):.1f}）",
         f"IV Rank：{signal.get('iv_rank', 0):.0f} / 100（52周）",
-        f"标的：{symbol} ${signal.get('underlying_price', 0)}（接货底线 ${signal.get('floor_price', 0)}）",
+        f"标的：{symbol} ${signal.get('underlying_price', 0)}（愿接最高价 ${signal.get('floor_price', 0)}）",
     ]
 
     suggestions = signal.get("suggestions") or []

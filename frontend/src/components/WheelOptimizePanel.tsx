@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
   getAppSettings,
   getWheelPortfolio,
@@ -13,6 +13,7 @@ import {
   activateWheelProfile,
   pushWheelPositionAlerts,
   getWheelFloorSuggest,
+  getWheelFloorLog,
   updateWheelTarget,
 } from '../services/api'
 
@@ -45,6 +46,8 @@ export default function WheelOptimizePanel() {
   const [stress, setStress] = useState<any>(null)
   const [corr, setCorr] = useState<any>(null)
   const [admission, setAdmission] = useState<any>(null)
+  const [admissionExpand, setAdmissionExpand] = useState<string | null>(null)
+  const [floorLog, setFloorLog] = useState<any[]>([])
   const [health, setHealth] = useState<any>(null)
   const [reconcile, setReconcile] = useState<any>(null)
   const [profiles, setProfiles] = useState<any>(null)
@@ -57,13 +60,14 @@ export default function WheelOptimizePanel() {
     setLoading(true)
     setErr(null)
     try {
-      const [p, s, c, a, h, pr] = await Promise.all([
+      const [p, s, c, a, h, pr, fl] = await Promise.all([
         getWheelPortfolio().catch(() => null),
         getWheelStress().catch(() => null),
         getWheelCorrelation().catch(() => null),
         getWheelAdmission().catch(() => null),
         getWheelHealth().catch(() => null),
         getWheelProfiles().catch(() => null),
+        getWheelFloorLog(undefined, 20).catch(() => ({ items: [] })),
       ])
       setPortfolio(p)
       setStress(s)
@@ -71,6 +75,7 @@ export default function WheelOptimizePanel() {
       setAdmission(a)
       setHealth(h)
       setProfiles(pr)
+      setFloorLog(fl?.items || [])
     } catch (e: any) {
       setErr(e.message)
     } finally {
@@ -131,11 +136,24 @@ export default function WheelOptimizePanel() {
   async function applyFloor(symbol: string) {
     try {
       const f = await getWheelFloorSuggest(symbol)
-      if (f.suggested_floor) {
-        await updateWheelTarget(symbol, { floor_price: f.suggested_floor })
-        setMsg(`${symbol} floor 已更新为 ${f.suggested_floor}`)
-        load()
+      if (!f.suggested_floor) {
+        setMsg(`${symbol}: 无市场结构参考愿接价`)
+        return
       }
+      const cur = f.current_floor != null ? `当前 $${f.current_floor}` : '当前未设'
+      const ok = window.confirm(
+        `${symbol} 市场结构参考愿接价 $${f.suggested_floor}\n`
+        + `${cur}${f.spot != null ? ` · 现价 $${f.spot}` : ''}\n\n`
+        + `${f.rationale || '仅供参考,非「正确floor」'}\n\n`
+        + `确认写入愿接最高价? (Put strike 必须 ≤ 此价)`,
+      )
+      if (!ok) return
+      await updateWheelTarget(symbol, {
+        floor_price: f.suggested_floor,
+        floor_change_source: 'smart',
+      })
+      setMsg(`${symbol} 愿接价已更新为 $${f.suggested_floor}(参考应用)`)
+      load()
     } catch (e: any) {
       setMsg(e.message)
     }
@@ -358,32 +376,109 @@ export default function WheelOptimizePanel() {
       {/* 准入评分 */}
       <div style={card}>
         <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>标的准入评分</div>
-        <div style={{ maxHeight: 220, overflow: 'auto' }}>
+        {admission?.floor_glossary && (
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.45 }}>
+            {admission.floor_glossary}
+          </div>
+        )}
+        <div style={{ maxHeight: 280, overflow: 'auto' }}>
           <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
-                <th>标的</th><th>分</th><th>建议</th><th>标签</th><th>操作</th>
+                <th>标的</th><th>分</th><th>建议</th><th>激进度</th><th>标签</th><th>操作</th>
               </tr>
             </thead>
             <tbody>
               {(admission?.items || []).map((r: any) => (
-                <tr key={r.symbol} style={{ borderTop: '1px solid var(--border)' }}>
-                  <td style={{ padding: '4px 0' }}>{r.symbol}</td>
-                  <td style={{
-                    fontWeight: 700,
-                    color: r.score >= 70 ? C.green : r.score < 35 ? C.red : C.orange,
-                  }}>{r.score}</td>
-                  <td>{r.action}</td>
-                  <td style={{ color: 'var(--text-secondary)' }}>{(r.tags || []).join(' · ')}</td>
-                  <td>
-                    <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }}
-                      onClick={() => applyFloor(r.symbol)}>应用智能floor</button>
-                  </td>
-                </tr>
+                <Fragment key={r.symbol}>
+                  <tr style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '4px 0' }}>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ fontSize: 11, padding: '0 4px', fontWeight: 600 }}
+                        title="展开分项"
+                        onClick={() => setAdmissionExpand(e => e === r.symbol ? null : r.symbol)}
+                      >
+                        {admissionExpand === r.symbol ? '▾' : '▸'} {r.symbol}
+                      </button>
+                    </td>
+                    <td style={{
+                      fontWeight: 700,
+                      color: r.score >= 70 ? C.green : r.score < 35 ? C.red : C.orange,
+                    }}>{r.score}</td>
+                    <td>{r.action}</td>
+                    <td style={{
+                      color: r.aggressiveness === '激进' ? C.orange
+                        : r.aggressiveness === '保守' || r.aggressiveness === '偏保守' ? C.blue
+                          : 'var(--text-secondary)',
+                    }}>{r.aggressiveness || '--'}</td>
+                    <td style={{ color: 'var(--text-secondary)', maxWidth: 220 }}>{(r.tags || []).join(' · ')}</td>
+                    <td>
+                      <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }}
+                        title="市场结构参考,需确认后写入"
+                        onClick={() => applyFloor(r.symbol)}>参考愿接价</button>
+                    </td>
+                  </tr>
+                  {admissionExpand === r.symbol && (
+                    <tr key={`${r.symbol}-detail`}>
+                      <td colSpan={6} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 11 }}>
+                        <div style={{ marginBottom: 4, color: 'var(--text-secondary)' }}>
+                          主分=趋势/波动/IV/历史/数据 · floor 仅轻提示 · 点行展开
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                          {(r.factor_detail?.length
+                            ? r.factor_detail
+                            : Object.entries(r.factors || {}).map(([k, v]) => ({ key: k, delta: v, label: k, note: '' }))
+                          ).map((row: any) => {
+                            const d = Number(row.delta) || 0
+                            return (
+                              <span key={row.key || row.label} style={{
+                                padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)',
+                                color: d > 0 ? C.green : d < 0 ? C.red : 'var(--text-secondary)',
+                              }}>
+                                {row.label || row.key} {d > 0 ? '+' : ''}{d}
+                                {row.note ? ` · ${row.note}` : ''}
+                              </span>
+                            )
+                          })}
+                        </div>
+                        {r.metrics?.floor_price != null && (
+                          <div style={{ marginTop: 6, opacity: 0.9 }}>
+                            愿接价 ${r.metrics.floor_price}
+                            {r.metrics.spot != null && ` · 现价 $${Number(r.metrics.spot).toFixed(2)}`}
+                            {r.metrics.floor_spot_ratio != null && ` · floor/spot=${r.metrics.floor_spot_ratio}`}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* 愿接价变更日志 */}
+      <div style={card}>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>愿接价变更记录</div>
+        {floorLog.length === 0 ? (
+          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>暂无记录(修改/应用参考愿接价后出现)</div>
+        ) : (
+          <div style={{ maxHeight: 140, overflow: 'auto', fontSize: 11 }}>
+            {floorLog.map((x: any) => (
+              <div key={x.id} style={{ display: 'flex', gap: 10, padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
+                <span style={{ fontWeight: 600, width: 56 }}>{x.symbol}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  ${x.old_floor ?? '--'} → <b style={{ color: 'var(--text)' }}>${x.new_floor}</b>
+                </span>
+                <span style={{ color: C.blue }}>{x.source === 'smart' ? '参考应用' : '手改'}</span>
+                <span style={{ opacity: 0.7, marginLeft: 'auto' }}>{(x.created_at || '').slice(0, 16)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 策略体检 */}
