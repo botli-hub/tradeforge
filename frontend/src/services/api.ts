@@ -691,8 +691,13 @@ export interface WheelOpenPositionItem {
   secondary_hint?: string | null
   /** no_roll | roll_out | adjust_strike */
   prefer_card?: string | null
+  /** 0–100:规则越硬、证据越足越高 */
+  decision_confidence?: number | null
   thin_otm?: boolean
   otm_buffer_pct?: number | null
+  /** CSP: strike 是否高于接货底线 */
+  strike_above_floor?: boolean
+  floor_price?: number | null
   reasons?: string[]
   profit_pct: number | null
   spot: number

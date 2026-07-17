@@ -164,6 +164,79 @@ def test_21dte_roll_out():
     assert r["prefer_card"] == "roll_out"
 
 
+def test_underwater_otm_not_healthy():
+    """浮亏 OTM:不得标成健康收租/吃θ;剩余权利金高≠值得拿"""
+    # 开 3.0 买回 4.0 → 浮亏; rem 仍可能很高
+    r = decide_position(
+        _item(
+            side="PUT", strike=240.0, spot=245.0, dte=30, itm=False,
+            profit_pct=-32.0, buyback_ask=4.0, current_price=4.0, open_price=3.0,
+        ),
+        15, 50,
+    )
+    assert r["decision_tree"]["underwater"]
+    assert not r["decision_tree"]["hold_for_theta"]
+    assert not r["decision_tree"]["residual_worth_keeping"]
+    assert r["action_code"] == "NONE"
+    assert "浮亏" in (r["action_hint"] or "")
+    assert r["decision_confidence"] is not None
+    assert r["decision_confidence"] <= 60  # 条件持有,置信偏低
+
+
+def test_underwater_strike_above_floor_close():
+    """CSP 浮亏且 strike > 接货底线 → 优先止损/不宜等接货"""
+    r = decide_position(
+        _item(
+            side="PUT", strike=240.0, spot=250.0, dte=35, itm=False,
+            profit_pct=-25.0, buyback_ask=3.5, current_price=3.5,
+            floor_price=220.0,
+        ),
+        15, 50,
+    )
+    assert r["strike_above_floor"]
+    assert r["action_code"] == "CLOSE"
+    assert "底线" in (r["action_hint"] or "")
+    assert r["decision_confidence"] >= 80
+
+
+def test_underwater_threatened_rolls():
+    """浮亏 + 临近 DTE + 安全垫薄 → Roll 防守,不是放任"""
+    # buffer = (245-240)/245 ≈ 2% < 5%; dte 18 ≤ 21
+    r = decide_position(
+        _item(
+            side="PUT", strike=240.0, spot=245.0, dte=18, itm=False,
+            profit_pct=-20.0, buyback_ask=3.0, current_price=3.0,
+            floor_price=250.0,  # strike 在底线内,不走 strike_above_floor
+        ),
+        15, 50,
+    )
+    # floor 250 > strike 240 → not strike_above_floor
+    assert not r["strike_above_floor"]
+    assert r["decision_tree"]["threatened_underwater"]
+    assert r["action_code"] == "ROLL"
+    assert r["prefer_card"] == "roll_out"
+
+
+def test_decision_confidence_profit_close():
+    r = decide_position(_item(profit_pct=60.0, buyback_ask=1.0), 15, 50)
+    assert r["action_code"] == "CLOSE"
+    assert r["decision_confidence"] >= 80
+
+
+def test_cc_shallow_div_early_assign():
+    """浅 ITM CC + 除息窗口:也要标 early_assign"""
+    r = decide_position(
+        _item(
+            side="CALL", strike=100, spot=100.8, itm=True, delta=0.48,
+            profit_pct=-5.0, buyback_ask=2.0, days_to_ex_div=5,
+        ),
+        15, 50,
+    )
+    assert r["shallow_itm"]
+    assert r["early_assign_risk"]
+    assert r["action_code"] == "ROLL_ADJUST"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

@@ -688,6 +688,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         ctx.close()
 
     min_ann_by_symbol: Dict[str, float] = {}
+    target_by_symbol: Dict[str, Any] = {}
     items = []
     for c in cycles:
         q = quotes.get(c["open_contract_code"], {})
@@ -707,9 +708,13 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             (c["open_option_type"] == "PUT" and spot < strike) or
             (c["open_option_type"] == "CALL" and spot > strike)))
         dte = c.get("open_dte")
-        if c["symbol"] not in min_ann_by_symbol:
-            t = repo.get_target(c["symbol"])
-            min_ann_by_symbol[c["symbol"]] = float((t or {}).get("min_annualized") or 0)
+        # 每标的只取一次 target: min_annualized + floor_price 供决策树
+        if c["symbol"] not in target_by_symbol:
+            tgt = repo.get_target(c["symbol"])
+            target_by_symbol[c["symbol"]] = tgt
+            min_ann_by_symbol[c["symbol"]] = float((tgt or {}).get("min_annualized") or 0)
+        tgt = target_by_symbol[c["symbol"]]
+        floor_px = float((tgt or {}).get("floor_price") or 0) or None
         # 除息窗口先算,决策树需要 days_to_ex_div
         days_to_ex_div = None
         dividend_warn_payload = None
@@ -733,6 +738,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "qty": c.get("open_qty") or 1,
             "contract_size": c.get("contract_size") or 100,
             "days_to_ex_div": days_to_ex_div,
+            "floor_price": floor_px,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
         }

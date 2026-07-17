@@ -2914,10 +2914,15 @@ export default function WheelPage() {
                             {check?.itm && <Badge color="red">ITM</Badge>}
                             {dteVal != null && dteVal <= 7 && <Badge color="orange">临期</Badge>}
                             {check?.profit_hit && <Badge color="green">达标</Badge>}
+                            {check?.strike_above_floor && <Badge color="red" title="行权价高于接货底线">strike>底线</Badge>}
+                            {check?.profit_pct != null && check.profit_pct < 0 && !check.profit_hit && (
+                              <Badge color="orange" title="买回价高于开仓权利金">浮亏</Badge>
+                            )}
                             {check?.action_hint && !check.profit_hit && (
                               <Badge color={check.deep_itm ? 'red' : check.low_yield && !check.roll_21dte ? 'blue' : 'orange'}
                                 title={(check.reasons || []).join(';')}>
                                 👉 {check.action_hint}
+                                {check.decision_confidence != null ? ` · ${check.decision_confidence}%` : ''}
                               </Badge>
                             )}
                             {status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3 && (
@@ -4135,26 +4140,39 @@ export default function WheelPage() {
         const isCall = mc.side === 'CALL'
         const code = (mc.action_code || '').toUpperCase()
         // 决策树主建议 → 高亮哪张卡
+        const underwater = mc.profit_pct != null && mc.profit_pct < 0
+        // 与 action_code 对齐:NONE/HOLD_THETA → 持有/放任;勿默认高亮买回
         const prefer: 'expire' | 'close' | 'roll' =
-          code === 'HOLD_THETA' ? 'expire'
+          code === 'HOLD_THETA' || code === 'NONE' ? 'expire'
             : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
               : (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') ? 'roll'
-                : (mc.profit_hit && (mc.dte == null || mc.dte > 7) ? 'close'
-                  : (mc.dte != null && mc.dte <= 7 && !mc.itm ? 'expire' : 'close'))
+                : (mc.profit_hit ? 'close' : 'expire')
         const buy = fmt(mc.buyback_ask || mc.current_price)
         const expireBody = isCall
           ? (mc.itm
             ? '到期若仍 ITM:正股可能被 call 走(交货)。只有当你愿意按 strike 卖出持股、且不急着用覆盖股时再放任。'
-            : 'OTM 到期作废,你留下持股并吃光剩余权利金。临期 OTM 且买回摩擦大时,往往优于付点差止盈。')
+            : underwater
+              ? '仍 OTM:到期作废可收回当前浮亏。前提是你仍愿按 strike 交货;否则应买回或 Roll,而不是「赌一把」。'
+              : 'OTM 到期作废,你留下持股并吃光剩余权利金。临期 OTM 且买回摩擦大时,往往优于付点差止盈。')
           : (mc.itm
             ? '到期若仍 ITM:可能被指派接货(按 strike 买进正股)。确认愿意接货且有资金,再放任;否则优先 Roll/平仓。'
-            : 'OTM 到期作废,现金担保释放。临期 OTM 且买回摩擦大时,可放任吃 θ。')
+            : underwater
+              ? '仍 OTM:到期作废可收回当前浮亏。前提是你仍愿按 strike 接货;若不愿接货,应止损买回或 Roll,不要误当成「健康收租」。'
+              : 'OTM 到期作废,现金担保释放。临期 OTM 且买回摩擦大时,可放任吃 θ。')
         const closeBody = isCall
-          ? `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。结束 Call 义务、保留持股,便于再卖下一轮 CC 或调仓。`
-          : `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。释放 CSP 现金担保,便于再开新 Put 或换标的。`
+          ? (underwater
+            ? `成本约 $${buy}/股;确认亏损约 ${mc.profit_pct}%。结束 Call 义务、保留持股;适合观点改变或不愿被 call 走。`
+            : `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。结束 Call 义务、保留持股,便于再卖下一轮 CC 或调仓。`)
+          : (underwater
+            ? `成本约 $${buy}/股;确认亏损约 ${mc.profit_pct}%。释放 CSP 担保;适合不愿在 ${mc.strike} 接货或要腾资金。`
+            : `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。释放 CSP 现金担保,便于再开新 Put 或换标的。`)
         const rollBody = isCall
-          ? '买回当前 Call + 卖更远到期(可同 strike 或 roll up)。适合仍想持有正股收租、但当前 DTE/ITM 风险不舒服。'
-          : '买回当前 Put + 卖更远到期(可同 strike 或 roll down)。适合仍想赚权利金、但临期/ITM 风险上升、尚未想接货。'
+          ? (underwater
+            ? '买回当前 + 卖更远/更高 strike:用时间换空间,仍想持股收租时常用防守。'
+            : '买回当前 Call + 卖更远到期(可同 strike 或 roll up)。适合仍想持有正股收租、但当前 DTE/ITM 风险不舒服。')
+          : (underwater
+            ? '买回当前 + 卖更远/更低 strike:经典 CSP 防守,推迟接货、摊薄成本;确认仍愿接货再 roll。'
+            : '买回当前 Put + 卖更远到期(可同 strike 或 roll down)。适合仍想赚权利金、但临期/ITM 风险上升、尚未想接货。')
         const cardStyle = (key: 'expire' | 'close' | 'roll', accent?: string) => ({
           border: prefer === key
             ? `2px solid ${accent || C.green}`
@@ -4181,21 +4199,48 @@ export default function WheelPage() {
               · 浮盈 {mc.profit_pct ?? '--'}% · 剩余年化 {mc.remaining_annualized ?? '--'}%
               · 买回约 ${buy}
               {mc.itm ? ' · ITM' : ' · OTM'}
+              {mc.floor_price != null && mc.floor_price > 0 && ` · 底线 $${mc.floor_price}`}
+              {mc.strike_above_floor && ' · strike>底线'}
             </div>
-            {mc.action_hint && (
+            {mc.action_hint && (() => {
+              const conf = mc.decision_confidence
+              const confColor = conf == null ? 'var(--text-secondary)'
+                : conf >= 80 ? C.green : conf >= 65 ? C.orange : 'var(--text-secondary)'
+              const confLabel = conf == null ? null
+                : conf >= 80 ? '高' : conf >= 65 ? '中' : '偏低'
+              return (
               <div style={{
                 marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 13,
-                background: 'var(--green-dim, #22c55e18)', border: '1px solid var(--green, #22c55e55)',
+                background: underwater || code === 'CLOSE' || code === 'ROLL_ADJUST'
+                  ? 'var(--orange-dim, #f59e0b18)'
+                  : 'var(--green-dim, #22c55e18)',
+                border: `1px solid ${underwater || code === 'CLOSE' || code === 'ROLL_ADJUST'
+                  ? 'var(--orange, #f59e0b55)'
+                  : 'var(--green, #22c55e55)'}`,
               }}>
-                <b>主建议:</b> {mc.action_hint}
-                {mc.reasons?.[0] ? ` · ${mc.reasons[0]}` : ''}
-                {(mc as any).secondary_hint && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+                  <span><b>主建议:</b> {mc.action_hint}</span>
+                  {conf != null && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 600, color: confColor, whiteSpace: 'nowrap',
+                      padding: '1px 6px', borderRadius: 4,
+                      border: `1px solid ${confColor}66`,
+                    }} title="规则证据充分度,非胜率预测">
+                      置信 {conf}%{confLabel ? ` · ${confLabel}` : ''}
+                    </span>
+                  )}
+                </div>
+                {mc.reasons?.[0] ? (
+                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>{mc.reasons[0]}</div>
+                ) : null}
+                {mc.secondary_hint && (
                   <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>
-                    备选: {(mc as any).secondary_hint}
+                    备选: {mc.secondary_hint}
                   </div>
                 )}
               </div>
-            )}
+              )
+            })()}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
               <div style={cardStyle('expire')}>
                 <div style={{ fontWeight: 700, marginBottom: 6 }}>
