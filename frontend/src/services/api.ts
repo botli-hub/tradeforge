@@ -698,6 +698,15 @@ export interface WheelOpenPositionItem {
   /** CSP: strike 是否高于接货底线 */
   strike_above_floor?: boolean
   floor_price?: number | null
+  /** 组合资金占用偏紧 */
+  capital_tight?: boolean
+  capital_util_pct?: number | null
+  portfolio_put_blocked?: boolean
+  symbol_headroom?: number | null
+  /** CSP 平仓约释放担保金 */
+  freed_capital_est?: number | null
+  /** 换仓/平仓后下一步文案 */
+  replace_hint?: string | null
   reasons?: string[]
   profit_pct: number | null
   spot: number
@@ -709,8 +718,23 @@ export interface WheelOpenPositionItem {
   moneyness_pct?: number
 }
 
+export interface WheelPortfolioContext {
+  utilization_pct?: number | null
+  capital_tight?: boolean
+  portfolio_put_blocked?: boolean
+  idle_cash?: number | null
+  over_portfolio?: boolean
+  equity?: number | null
+  assignment_stress?: number | null
+  capital_tight_util_pct?: number
+}
+
 export async function checkWheelOpenPositions(host: string, port: number) {
-  return request<{ items: WheelOpenPositionItem[]; profit_target_pct: number }>(
+  return request<{
+    items: WheelOpenPositionItem[]
+    profit_target_pct: number
+    portfolio_context?: WheelPortfolioContext
+  }>(
     `/api/wheel/open-positions/check?host=${encodeURIComponent(host)}&port=${port}`
   )
 }

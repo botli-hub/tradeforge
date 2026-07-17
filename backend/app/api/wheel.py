@@ -652,6 +652,59 @@ def _position_hints(item: Dict[str, Any], min_annualized: float, profit_target: 
     return decide_position(item, min_annualized, profit_target, pos_cfg or _wheel_cfg().get("wheel_position"))
 
 
+def _portfolio_context_for_manage() -> Dict[str, Any]:
+    """体检用组合上下文:利用率 / 是否资金紧 / 是否停新 Put。不触发扫描。"""
+    full_cfg = _wheel_cfg()
+    pos_cfg = full_cfg.get("wheel_position", {}) or {}
+    pcfg = full_cfg.get("wheel_portfolio", {}) or {}
+    tight_util = float(pos_cfg.get("capital_tight_util_pct", 75.0))
+    try:
+        from app.core.wheel_opportunities import _portfolio_put_stress
+        from app.core.wheel_portfolio import portfolio_overview
+
+        put_blocked, stress_meta = _portfolio_put_stress(full_cfg)
+        overview = portfolio_overview(
+            total_equity=float(pcfg["total_equity"]) if pcfg.get("total_equity") else None,
+            max_portfolio_pct=float(pcfg.get("max_portfolio_pct", 0.80)),
+            max_symbol_pct=float(pcfg.get("max_symbol_pct", 0.25)),
+        )
+        util = overview.get("utilization_pct")
+        over_pf = bool(overview.get("over_portfolio"))
+        capital_tight = bool(
+            over_pf
+            or (util is not None and float(util) >= tight_util)
+        )
+        headroom_by: Dict[str, Optional[float]] = {}
+        for row in overview.get("per_symbol") or []:
+            sym = row.get("symbol")
+            if sym:
+                headroom_by[sym] = row.get("headroom")
+        return {
+            "utilization_pct": util,
+            "capital_tight": capital_tight,
+            "portfolio_put_blocked": put_blocked,
+            "idle_cash": overview.get("idle_cash"),
+            "over_portfolio": over_pf,
+            "equity": overview.get("equity"),
+            "assignment_stress": stress_meta.get("assignment_stress"),
+            "headroom_by_symbol": headroom_by,
+            "capital_tight_util_pct": tight_util,
+        }
+    except Exception as e:
+        logger.warning("portfolio_context for manage failed: %s", e)
+        return {
+            "utilization_pct": None,
+            "capital_tight": False,
+            "portfolio_put_blocked": False,
+            "idle_cash": None,
+            "over_portfolio": False,
+            "equity": None,
+            "assignment_stress": None,
+            "headroom_by_symbol": {},
+            "capital_tight_util_pct": tight_util,
+        }
+
+
 def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     """拉在场合约与标的快照,计算浮盈/DTE/ITM/delta 及行动建议。供 API 和后台推送共用"""
     import futu
@@ -660,11 +713,21 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
 
     cfg = _wheel_cfg().get("wheel_position", {}) or {}
     profit_target = cfg.get("profit_target_pct", 50)
+    portfolio_ctx = _portfolio_context_for_manage()
+    capital_tight = bool(portfolio_ctx.get("capital_tight"))
+    put_blocked = bool(portfolio_ctx.get("portfolio_put_blocked"))
+    util_pct = portfolio_ctx.get("utilization_pct")
+    headroom_by = portfolio_ctx.get("headroom_by_symbol") or {}
 
     cycles = [c for c in repo.get_cycles(include_closed=False)
               if c["status"] in ("CSP_OPEN", "CC_OPEN") and c.get("open_contract_code")]
     if not cycles:
-        return {"items": [], "profit_target_pct": profit_target, "pos_cfg": cfg}
+        return {
+            "items": [],
+            "profit_target_pct": profit_target,
+            "pos_cfg": cfg,
+            "portfolio_context": portfolio_ctx,
+        }
 
     codes = [c["open_contract_code"] for c in cycles]
     und_codes = list({_to_futu_symbol(c["symbol"]) for c in cycles})
@@ -715,6 +778,8 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             min_ann_by_symbol[c["symbol"]] = float((tgt or {}).get("min_annualized") or 0)
         tgt = target_by_symbol[c["symbol"]]
         floor_px = float((tgt or {}).get("floor_price") or 0) or None
+        qty = c.get("open_qty") or 1
+        size = c.get("contract_size") or c.get("open_contract_size") or 100
         # 除息窗口先算,决策树需要 days_to_ex_div
         days_to_ex_div = None
         dividend_warn_payload = None
@@ -735,16 +800,38 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
             "delta": q.get("delta") or 0,
             "theta": q.get("theta") or 0,
-            "qty": c.get("open_qty") or 1,
-            "contract_size": c.get("contract_size") or 100,
+            "qty": qty,
+            "contract_size": size,
             "days_to_ex_div": days_to_ex_div,
             "floor_price": floor_px,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
+            "capital_util_pct": util_pct,
+            "capital_tight": capital_tight,
+            "portfolio_put_blocked": put_blocked,
+            "symbol_headroom": headroom_by.get(c["symbol"]),
         }
         item.update(_position_hints(item, min_ann_by_symbol[c["symbol"]], profit_target, cfg))
         # 与决策树对齐:profit_hit 以树内结果为准
         item["profit_hit"] = bool((item.get("decision_tree") or {}).get("profit_hit"))
+        # 释放资本粗估 + 换仓提示(不重扫机会)
+        if c["open_option_type"] == "PUT" and strike:
+            freed = float(strike) * float(qty) * float(size)
+        else:
+            freed = 0.0  # CC 主要是解除义务,不释放现金担保
+        item["freed_capital_est"] = round(freed, 2) if freed else None
+        code = (item.get("action_code") or "").upper()
+        if code in ("REPLACE", "CLOSE"):
+            if put_blocked and c["open_option_type"] == "PUT":
+                item["replace_hint"] = (
+                    "释放后组合仍停新 Put(利用率/行权压力),先空仓或等触线;可看 CC 机会"
+                )
+            elif freed > 0:
+                item["replace_hint"] = (
+                    f"释放约 ${freed:,.0f} 担保,可去机会列表开新 Put/CC"
+                )
+            else:
+                item["replace_hint"] = "结束 Call 义务后可再卖 CC 或调仓,见机会列表"
         if dividend_warn_payload:
             item["dividend_warn"] = dividend_warn_payload
         items.append(item)
@@ -753,7 +840,14 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         x.get("dte") if x.get("dte") is not None else 999,
         x.get("symbol") or "",
     ))
-    return {"items": items, "profit_target_pct": profit_target, "pos_cfg": cfg}
+    return {
+        "items": items,
+        "profit_target_pct": profit_target,
+        "pos_cfg": cfg,
+        "portfolio_context": {
+            k: v for k, v in portfolio_ctx.items() if k != "headroom_by_symbol"
+        },
+    }
 
 
 @router.get("/open-positions/check")

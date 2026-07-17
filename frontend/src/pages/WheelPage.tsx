@@ -11,6 +11,7 @@ import {
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
   WheelScanStatus, WheelTimingHistoryPage, WheelTimingHistoryItem, WheelOpenPositionItem, WheelRollOptions,
+  type WheelPortfolioContext,
 } from '../services/api'
 import WheelOptimizePanel from '../components/WheelOptimizePanel'
 import {
@@ -263,6 +264,38 @@ function rankedTags(o: WheelScanOpportunity): string[] {
 function capitalForOpp(side: 'PUT' | 'CALL' | undefined, strike?: number | null, size = 100): number | null {
   if (strike == null || !side) return null
   return strike * size
+}
+
+/** 换仓/平仓后候选下一腿:用已有机会缓存,不重扫 */
+function pickReplaceCandidates(
+  opps: WheelOpportunitiesResult | null | undefined,
+  mc: Pick<WheelOpenPositionItem, 'symbol' | 'side' | 'freed_capital_est' | 'portfolio_put_blocked'>,
+  limit = 2,
+): { opp: WheelOpportunity; putBlocked: boolean; capitalEst: number | null }[] {
+  if (!opps) return []
+  const putBlocked = !!(mc.portfolio_put_blocked || opps.summary?.portfolio_put_blocked || opps.portfolio?.portfolio_put_blocked)
+  const pool: WheelOpportunity[] = []
+  for (const list of [opps.primary_picks, opps.actionable_items, opps.items]) {
+    if (!list) continue
+    for (const o of list) {
+      if (o.actionable || o.grade === 'dual' || o.grade === 'timing' || o.grade === 'score') pool.push(o)
+    }
+  }
+  const seen = new Set<string>()
+  const out: { opp: WheelOpportunity; putBlocked: boolean; capitalEst: number | null }[] = []
+  const freed = mc.freed_capital_est
+  for (const o of pool) {
+    const key = o.contract_code || `${o.symbol}|${o.side}|${o.strike}|${o.expiry}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (o.symbol === mc.symbol && String(o.side) === String(mc.side)) continue
+    const capitalEst = capitalForOpp(o.side as 'PUT' | 'CALL', o.strike ?? null)
+    if (freed != null && freed > 0 && capitalEst != null && capitalEst > freed * 1.1) continue
+    const blocked = putBlocked && o.side === 'PUT'
+    out.push({ opp: o, putBlocked: blocked, capitalEst })
+    if (out.length >= limit) break
+  }
+  return out
 }
 
 /** 优先度 ≈ 年化×流动性 / 资金占用 × 触线加成 × IV加成 × 风控折扣 */
@@ -736,7 +769,10 @@ function buildOppRows(
         : '该Roll'
       efficiency = 900 + (item.dte != null ? Math.max(0, 30 - item.dte) : 0)
     } else if (code === 'REPLACE') {
-      cat = 'LOW_YIELD'; tag = '该换仓'; efficiency = 800 + (item.profit_pct || 0)
+      cat = 'LOW_YIELD'
+      tag = item.capital_tight ? '该换仓·资金紧' : '该换仓'
+      // 资金紧时升排:与后端 action_priority 下调一致
+      efficiency = (item.capital_tight ? 920 : 800) + (item.profit_pct || 0)
     } else if (code === 'HOLD_THETA') {
       cat = 'CLOSE'; tag = '吃θ'; actionable = false; efficiency = 400
     } else if (item.action_hint) {
@@ -779,6 +815,7 @@ function buildOppRows(
       risk_soft: [
         ...(item.itm && !item.deep_itm ? ['ITM'] : []),
         ...(item.dividend_warn ? [`除息${item.dividend_warn.days_to_ex}d`] : []),
+        ...(item.capital_tight ? ['资金紧'] : []),
       ],
       risk_block: false,
       efficiency: efficiency + Math.max(0, 10 - prio) * 10,
@@ -1336,6 +1373,7 @@ export default function WheelPage() {
   const [historyPage, setHistoryPage] = useState(1)
   // 在场合约体检(cycle_id → item)
   const [openChecks, setOpenChecks] = useState<Record<string, WheelOpenPositionItem>>({})
+  const [portfolioContext, setPortfolioContext] = useState<WheelPortfolioContext | null>(null)
   const [profitTarget, setProfitTarget] = useState(50)
   // Roll 弹窗
   const [rollData, setRollData] = useState<WheelRollOptions | null>(null)
@@ -1427,10 +1465,11 @@ export default function WheelPage() {
       const map: Record<string, WheelOpenPositionItem> = {}
       r.items.forEach(i => { map[i.cycle_id] = i })
       setOpenChecks(map)
+      setPortfolioContext(r.portfolio_context || null)
       setProfitTarget(r.profit_target_pct)
       setChecksAt(new Date())
       setOpendOk(true)
-    }).catch(() => { setOpenChecks({}); setOpendOk(false) })
+    }).catch(() => { setOpenChecks({}); setPortfolioContext(null); setOpendOk(false) })
   }, [])
 
   // 每 5 分钟自动刷新体检数据;每 30 秒重算新鲜度显示
@@ -2464,6 +2503,11 @@ export default function WheelPage() {
                     <div className="opp-row-meta">
                       <span>{r.headline || r.action_hint}</span>
                       {r.remaining_annualized != null && <span>剩余年化 {fmt(r.remaining_annualized, 1)}%</span>}
+                      {r.check?.replace_hint && (
+                        <span style={{ opacity: 0.9, color: 'var(--accent, #38bdf8)' }}>
+                          {r.check.replace_hint}
+                        </span>
+                      )}
                       {r.decision_why?.[0] && <span style={{ opacity: 0.85 }}>{r.decision_why[0]}</span>}
                     </div>
                   </div>
@@ -2914,7 +2958,12 @@ export default function WheelPage() {
                             {check?.itm && <Badge color="red">ITM</Badge>}
                             {dteVal != null && dteVal <= 7 && <Badge color="orange">临期</Badge>}
                             {check?.profit_hit && <Badge color="green">达标</Badge>}
-                            {check?.strike_above_floor && <Badge color="red" title="行权价高于接货底线">strike>底线</Badge>}
+                            {check?.capital_tight && (
+                              <Badge color="orange" title={check.capital_util_pct != null ? `利用率 ${check.capital_util_pct}%` : '组合资金占用偏紧'}>
+                                资金紧
+                              </Badge>
+                            )}
+                            {check?.strike_above_floor && <Badge color="red" title="行权价高于接货底线">{'strike>底线'}</Badge>}
                             {check?.profit_pct != null && check.profit_pct < 0 && !check.profit_hit && (
                               <Badge color="orange" title="买回价高于开仓权利金">浮亏</Badge>
                             )}
@@ -4201,6 +4250,12 @@ export default function WheelPage() {
               {mc.itm ? ' · ITM' : ' · OTM'}
               {mc.floor_price != null && mc.floor_price > 0 && ` · 底线 $${mc.floor_price}`}
               {mc.strike_above_floor && ' · strike>底线'}
+              {mc.capital_tight && (
+                <span style={{ color: C.orange }}>
+                  {' · 资金紧'}
+                  {mc.capital_util_pct != null ? ` ${Math.round(mc.capital_util_pct)}%` : ''}
+                </span>
+              )}
             </div>
             {mc.action_hint && (() => {
               const conf = mc.decision_confidence
@@ -4211,10 +4266,10 @@ export default function WheelPage() {
               return (
               <div style={{
                 marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 13,
-                background: underwater || code === 'CLOSE' || code === 'ROLL_ADJUST'
+                background: underwater || code === 'CLOSE' || code === 'ROLL_ADJUST' || code === 'REPLACE'
                   ? 'var(--orange-dim, #f59e0b18)'
                   : 'var(--green-dim, #22c55e18)',
-                border: `1px solid ${underwater || code === 'CLOSE' || code === 'ROLL_ADJUST'
+                border: `1px solid ${underwater || code === 'CLOSE' || code === 'ROLL_ADJUST' || code === 'REPLACE'
                   ? 'var(--orange, #f59e0b55)'
                   : 'var(--green, #22c55e55)'}`,
               }}>
@@ -4239,6 +4294,67 @@ export default function WheelPage() {
                   </div>
                 )}
               </div>
+              )
+            })()}
+            {(code === 'CLOSE' || code === 'REPLACE') && (() => {
+              const nextLegs = pickReplaceCandidates(serverOpps, mc, 2)
+              const putBlocked = !!(mc.portfolio_put_blocked || serverOpps?.summary?.portfolio_put_blocked
+                || portfolioContext?.portfolio_put_blocked)
+              return (
+                <div style={{
+                  marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
+                  background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6, color: C.blue }}>平仓后 · 下一腿</div>
+                  {mc.replace_hint && (
+                    <div style={{ marginBottom: 6, color: 'var(--text-secondary)' }}>{mc.replace_hint}</div>
+                  )}
+                  {mc.freed_capital_est != null && mc.freed_capital_est > 0 && (
+                    <div style={{ marginBottom: 6, opacity: 0.9 }}>
+                      约释放担保 <b>${fmt(mc.freed_capital_est, 0)}</b>
+                    </div>
+                  )}
+                  {nextLegs.length === 0 ? (
+                    <div style={{ color: 'var(--text-secondary)' }}>
+                      {putBlocked
+                        ? '组合已停新 Put(利用率/行权压力)。可先空仓,或扫描后看 CC/触线。'
+                        : '暂无缓存机会 — 请先在「机会」页扫描,再回来看下一腿。'}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {nextLegs.map(({ opp, putBlocked: blocked, capitalEst }) => (
+                        <div key={opp.id || opp.contract_code || `${opp.symbol}-${opp.strike}`}
+                          style={{
+                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+                            opacity: blocked ? 0.55 : 1,
+                            padding: '4px 0',
+                            borderTop: '1px solid var(--border)',
+                          }}>
+                          <div>
+                            <b>{opp.symbol}</b> {opp.side}
+                            {opp.strike != null && ` $${opp.strike}`}
+                            {opp.expiry && ` · ${(opp.expiry || '').slice(0, 10)}`}
+                            {opp.annualized != null && ` · 年化 ${fmt(opp.annualized, 0)}%`}
+                            {capitalEst != null && ` · 约占 $${fmt(capitalEst, 0)}`}
+                            {blocked && <span style={{ color: C.orange }}> · 停 Put</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ marginTop: 8, fontSize: 12 }}
+                    onClick={() => {
+                      setManageCompare(null)
+                      setTab('opps')
+                      setOppCatFilter('PRIORITY')
+                    }}
+                  >
+                    去看机会
+                  </button>
+                </div>
               )
             })()}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>

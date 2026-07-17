@@ -123,6 +123,7 @@ def decide_position(
     """输入 item 建议含:
       side/strike/spot/dte/current_price/buyback_ask/profit_pct/itm/delta/expiring
       qty(张,默认1)/contract_size(默认100)/days_to_ex_div(除息剩几天,可选)
+      可选资本上下文: capital_util_pct / capital_tight / portfolio_put_blocked / symbol_headroom
 
     返回增强字段见末尾 dict。
     """
@@ -138,6 +139,7 @@ def decide_position(
     thin_otm_pct = float(cfg.get("thin_otm_buffer_pct", 1.5))
     # 浮盈已很高(默认 80%)且 DTE 仍不短 → 倾向落袋,避免「永远拿着」
     max_hold_profit_pct = float(cfg.get("max_hold_profit_pct", 80.0))
+    capital_tight_util = float(cfg.get("capital_tight_util_pct", 75.0))
 
     strike = item.get("strike") or 0
     spot = item.get("spot") or 0
@@ -170,6 +172,25 @@ def decide_position(
     div_window = days_to_div is not None and int(days_to_div) >= 0 and int(days_to_div) <= int(
         cfg.get("dividend_warn_days", 14)
     )
+
+    # 组合资本上下文(可选;缺省不感知)
+    capital_util_pct = item.get("capital_util_pct")
+    try:
+        capital_util_pct = float(capital_util_pct) if capital_util_pct is not None else None
+    except (TypeError, ValueError):
+        capital_util_pct = None
+    portfolio_put_blocked = bool(item.get("portfolio_put_blocked"))
+    symbol_headroom = item.get("symbol_headroom")
+    try:
+        symbol_headroom = float(symbol_headroom) if symbol_headroom is not None else None
+    except (TypeError, ValueError):
+        symbol_headroom = None
+    if "capital_tight" in item and item.get("capital_tight") is not None:
+        capital_tight = bool(item.get("capital_tight"))
+    else:
+        capital_tight = bool(
+            capital_util_pct is not None and capital_util_pct >= capital_tight_util
+        )
 
     remaining_ann = remaining_annualized(close_px, float(strike), dte if isinstance(dte, int) else None)
 
@@ -291,6 +312,9 @@ def decide_position(
         reasons.append(f"临期 OTM 且浮盈≥{hold_theta_min_profit}%,可持有吃 theta")
     if profit_cap_close:
         reasons.append(f"浮盈 {profit_pct}% 已很高(≥{max_hold_profit_pct}%),倾向落袋")
+    if capital_tight and (low_yield or soft_hit):
+        util_txt = f"{capital_util_pct:.0f}%" if capital_util_pct is not None else "偏高"
+        reasons.append(f"组合资金占用偏紧(利用率 {util_txt}),宜优先释放低效担保金")
 
     # ── 决策优先级(数字越小越紧急) ──
     code: str = ACTION_NONE
@@ -327,7 +351,11 @@ def decide_position(
         else:
             hint = "持有吃 theta(临期高浮盈)"
         if profit_hit:
-            secondary_hint = "若需腾出仓位/换股,仍可止盈买回"
+            secondary_hint = (
+                "资金紧时可主动止盈腾仓;否则可继续吃 θ"
+                if capital_tight
+                else "若需腾出仓位/换股,仍可止盈买回"
+            )
     elif profit_hit or profit_cap_close:
         code, priority = ACTION_CLOSE, 2
         prefer_card = "no_roll"
@@ -403,6 +431,19 @@ def decide_position(
         hint = "OTM 健康持有,临期再评估"
         reasons.append(f"DTE {dte}≤{hard_dte} 但 OTM 且剩余年化尚可,无需强行 Roll")
 
+    # 资金紧:低效/换仓腿升权;不改变高优先级风险动作
+    if capital_tight and code == ACTION_REPLACE:
+        priority = max(2, priority - 1)
+        if side == "PUT":
+            hint = (hint or "换仓") + "·资金紧"
+        else:
+            hint = (hint or "换仓") + "·资金紧"
+    elif capital_tight and code == ACTION_CLOSE and not (profit_hit or profit_cap_close or strike_above_floor):
+        priority = max(2, priority - 1)
+    elif capital_tight and code == ACTION_HOLD_THETA and profit_hit:
+        # 仍吃 θ,但排序略提前以便看见「可腾仓」
+        priority = min(priority, 4)
+
     # 决策置信度 0–100:规则越硬、证据越足越高
     confidence = 50
     if code in (ACTION_ROLL_ADJUST, ACTION_PREPARE_ASSIGN) and (deep_itm or (itm and expiring)):
@@ -418,7 +459,7 @@ def decide_position(
     elif code == ACTION_ROLL:
         confidence = 68
     elif code == ACTION_REPLACE:
-        confidence = 72
+        confidence = 78 if capital_tight else 72
     elif code == ACTION_NONE and underwater:
         confidence = 55  # 条件持有,依赖用户接货意愿
     elif code == ACTION_NONE:
@@ -450,6 +491,11 @@ def decide_position(
         "close_px": close_px or None,
         "otm_buffer_pct": buffer,
         "floor_price": floor_price,
+        "capital_tight": capital_tight,
+        "capital_util_pct": capital_util_pct,
+        "portfolio_put_blocked": portfolio_put_blocked,
+        "symbol_headroom": symbol_headroom,
+        "capital_tight_util_pct": capital_tight_util,
     }
 
     return {
@@ -462,6 +508,10 @@ def decide_position(
         "thin_otm": thin_otm,
         "otm_buffer_pct": buffer,
         "strike_above_floor": strike_above_floor,
+        "capital_tight": capital_tight,
+        "capital_util_pct": capital_util_pct,
+        "portfolio_put_blocked": portfolio_put_blocked,
+        "symbol_headroom": symbol_headroom,
         "action_code": code,
         "action_hint": hint,
         "secondary_hint": secondary_hint,

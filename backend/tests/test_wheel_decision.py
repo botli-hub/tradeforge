@@ -237,6 +237,72 @@ def test_cc_shallow_div_early_assign():
     assert r["action_code"] == "ROLL_ADJUST"
 
 
+def test_low_yield_replace_priority_normal_when_not_tight():
+    r = decide_position(
+        _item(current_price=0.3, buyback_ask=0.3, profit_pct=10.0, dte=35),
+        15, 50,
+    )
+    assert r["action_code"] == "REPLACE"
+    assert r["action_priority"] == 4
+    assert not r["capital_tight"]
+
+
+def test_capital_tight_boosts_replace_priority():
+    """资金紧时 low_yield REPLACE 升权, reasons 含资金"""
+    r = decide_position(
+        _item(
+            current_price=0.3, buyback_ask=0.3, profit_pct=10.0, dte=35,
+            capital_tight=True, capital_util_pct=85.0,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "REPLACE"
+    assert r["action_priority"] == 3  # 4 - 1
+    assert r["capital_tight"]
+    assert any("资金" in x for x in r["reasons"])
+    assert "资金紧" in (r["action_hint"] or "")
+
+
+def test_capital_tight_soft_replace():
+    r = decide_position(
+        _item(
+            current_price=0.3, buyback_ask=0.3, profit_pct=40.0, dte=35,
+            capital_util_pct=80.0,  # >= 75 → tight
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "REPLACE"
+    assert r["capital_tight"]
+    assert r["action_priority"] == 2  # soft was 3, -1
+
+
+def test_healthy_otm_capital_tight_no_force_close():
+    """健康 OTM + 资金紧:不误推 CLOSE/REPLACE"""
+    r = decide_position(
+        _item(
+            dte=35, current_price=1.6, buyback_ask=1.6, profit_pct=30.0,
+            capital_tight=True, capital_util_pct=90.0,
+        ),
+        15, 50,
+    )
+    # rem ≈ 1.6/100*365/35 ≈ 16.7 > 15
+    assert r["action_code"] == "NONE"
+    assert r["action_hint"] is None or "换仓" not in (r["action_hint"] or "")
+
+
+def test_put_blocked_does_not_change_action_code():
+    """portfolio_put_blocked 只作上下文,不单独改 action_code"""
+    r = decide_position(
+        _item(
+            dte=35, current_price=1.6, buyback_ask=1.6, profit_pct=30.0,
+            portfolio_put_blocked=True,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "NONE"
+    assert r["portfolio_put_blocked"]
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
