@@ -23,7 +23,9 @@ const MODE_KEY = 'tradeforge.appMode'
 const PENDING_KEY = 'tradeforge.wheel.pendingReg'
 const ONBOARD_KEY = 'tradeforge.wheel.onboardDone'
 const TIER_KEY = 'tradeforge.wheel.riskTier'
+/** @deprecated 仅作迁移缓存;权威来源=设置页 wheel_portfolio.total_equity */
 const BUDGET_KEY = 'tradeforge.wheel.portfolioBudget'
+const BUDGET_SOURCE_KEY = 'tradeforge.wheel.portfolioBudgetSource'
 
 export function getAppMode(): AppMode {
   try {
@@ -51,6 +53,11 @@ export function setRiskTier(tier: RiskTier) {
   localStorage.setItem(TIER_KEY, tier)
 }
 
+/**
+ * 组合预算/净值(前端运算用)。
+ * 权威来源:设置页 → 后端配置 → 组合风控 →「组合净值」total_equity。
+ * localStorage 仅为缓存(及未设净值时的历史迁移兜底)。
+ */
 export function getPortfolioBudget(): number {
   try {
     const n = Number(localStorage.getItem(BUDGET_KEY))
@@ -60,8 +67,57 @@ export function getPortfolioBudget(): number {
   }
 }
 
-export function setPortfolioBudget(v: number) {
-  localStorage.setItem(BUDGET_KEY, String(Math.max(0, v)))
+export function getPortfolioBudgetSource(): 'config' | 'legacy' | 'default' {
+  try {
+    const s = localStorage.getItem(BUDGET_SOURCE_KEY)
+    if (s === 'config' || s === 'legacy' || s === 'default') return s
+  } catch { /* */ }
+  try {
+    if (localStorage.getItem(BUDGET_KEY)) return 'legacy'
+  } catch { /* */ }
+  return 'default'
+}
+
+/** 仅内部/测试写入缓存;业务修改请走设置页 total_equity */
+export function setPortfolioBudget(v: number, source: 'config' | 'legacy' | 'default' = 'legacy') {
+  const n = Math.max(0, v)
+  if (n > 0) localStorage.setItem(BUDGET_KEY, String(n))
+  else localStorage.removeItem(BUDGET_KEY)
+  localStorage.setItem(BUDGET_SOURCE_KEY, source)
+  window.dispatchEvent(new CustomEvent('tradeforge:portfolio-budget', {
+    detail: { budget: n > 0 ? n : getPortfolioBudget(), source },
+  }))
+}
+
+/**
+ * 从后端配置同步组合净值到前端缓存。
+ * total_equity>0 → 采用设置;否则保留 localStorage 历史预算作兜底。
+ */
+export function syncPortfolioBudgetFromConfig(totalEquity: number | null | undefined): number {
+  const eq = totalEquity != null && Number(totalEquity) > 0 ? Number(totalEquity) : 0
+  if (eq > 0) {
+    setPortfolioBudget(eq, 'config')
+    return eq
+  }
+  // 未配置:若已有 legacy 缓存则沿用,并标记来源
+  try {
+    const n = Number(localStorage.getItem(BUDGET_KEY))
+    if (Number.isFinite(n) && n > 0) {
+      localStorage.setItem(BUDGET_SOURCE_KEY, 'legacy')
+      return n
+    }
+  } catch { /* */ }
+  localStorage.setItem(BUDGET_SOURCE_KEY, 'default')
+  return getPortfolioBudget()
+}
+
+export function subscribePortfolioBudget(cb: (budget: number, source: string) => void): () => void {
+  const handler = (e: Event) => {
+    const d = (e as CustomEvent).detail || {}
+    cb(Number(d.budget) || getPortfolioBudget(), d.source || getPortfolioBudgetSource())
+  }
+  window.addEventListener('tradeforge:portfolio-budget', handler)
+  return () => window.removeEventListener('tradeforge:portfolio-budget', handler)
 }
 
 export function isOnboardDone(): boolean {

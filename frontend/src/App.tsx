@@ -62,6 +62,34 @@ function App() {
     return () => window.removeEventListener('tradeforge:app-mode', onMode)
   }, [])
 
+  useEffect(() => {
+    const valid: PageKey[] = [
+      'wheel', 'market', 'strategy', 'backtest', 'options', 'orders',
+      'positions', 'history', 'stocks', 'leaps', 'plan2032', 'settings',
+    ]
+    const onNav = (e: Event) => {
+      const d = (e as CustomEvent).detail || {}
+      const page = d.page as PageKey | undefined
+      if (page && valid.includes(page)) {
+        // 从 Wheel 跳设置时保持交易壳
+        if (page === 'settings' || page === 'wheel') {
+          setAppMode('wheel')
+          setMode('wheel')
+        }
+        setCurrentPage(page)
+        if (d.section) {
+          queueMicrotask(() => {
+            window.dispatchEvent(new CustomEvent('tradeforge:settings-section', {
+              detail: { section: d.section },
+            }))
+          })
+        }
+      }
+    }
+    window.addEventListener('tradeforge:navigate', onNav)
+    return () => window.removeEventListener('tradeforge:navigate', onNav)
+  }, [])
+
   const nav = mode === 'wheel' ? TRADE_NAV : RESEARCH_NAV
   const mobileTabs = mode === 'wheel' ? MOBILE_TRADE_TABS : MOBILE_RESEARCH_TABS
 

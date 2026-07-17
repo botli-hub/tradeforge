@@ -17,9 +17,10 @@ import WheelOptimizePanel from '../components/WheelOptimizePanel'
 import {
   addPendingReg, annPerDelta, buildFutuOrderMemo, computeOpsMetrics, contractCodeWarning, copyText,
   dailyRentPer10k, dteBucket, DTE_BUCKET_META, estimateAnnualized, evaluateTradeability, explainOpenOpp,
-  fmtRelativeTime, getPortfolioBudget, getRiskTier, isOnboardDone, loadPendingQueue,
+  fmtRelativeTime, getPortfolioBudget, getPortfolioBudgetSource, getRiskTier, isOnboardDone, loadPendingQueue,
   normalizeContractCode, removePendingReg, resolveOppSellPrice, resolveTradeTier, savePendingQueue, scanFailureHint,
-  setOnboardDone, setPortfolioBudget, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
+  setOnboardDone, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
+  subscribePortfolioBudget, syncPortfolioBudgetFromConfig,
   type DteBucket, type PendingRegItem, type RiskTier, type TradeTier,
 } from '../services/wheelProduct'
 import Drawer from '../components/ui/Drawer'
@@ -104,7 +105,7 @@ const QTY_CONTRACT_OPTS = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20]
 const QTY_SHARE_OPTS = [100, 200, 300, 400, 500, 1000]
 const FEE_OPTS = [0, 0.65, 1, 1.5, 2, 3, 5, 10]
 const CONTRACT_SIZE_OPTS = [100]
-const BUDGET_OPTS = [10_000, 25_000, 50_000, 100_000, 200_000, 500_000, 1_000_000]
+
 const DELTA_OPTS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
 const DTE_OPTS = [7, 14, 21, 30, 35, 45, 60, 90]
 const ANN_OPTS = [8, 10, 12, 15, 18, 20, 25, 30, 40]
@@ -1348,6 +1349,7 @@ export default function WheelPage() {
   const [pendingLeaving, setPendingLeaving] = useState<string | null>(null)
   const [riskTier, setRiskTierState] = useState<RiskTier>(() => getRiskTier())
   const [budget, setBudgetState] = useState(() => getPortfolioBudget())
+  const [budgetSource, setBudgetSource] = useState(() => getPortfolioBudgetSource())
   const [showOnboard, setShowOnboard] = useState(() => !isOnboardDone())
   const [manageCompare, setManageCompare] = useState<WheelOpenPositionItem | null>(null)
   const [expandedExplain, setExpandedExplain] = useState<string | null>(null)
@@ -1456,12 +1458,23 @@ export default function WheelPage() {
       if (hist) setTimingHistory(hist)
       // 在场合约体检(需 OpenD,失败静默)
       refreshChecks()
-      // Telegram 配置状态
-      getBackendConfig().then(cfg => setTgOk(!!cfg.telegram?.bot_token)).catch(() => setTgOk(null))
+      // Telegram + 组合净值(唯一预算源)同步
+      getBackendConfig().then(cfg => {
+        setTgOk(!!cfg.telegram?.bot_token)
+        const n = syncPortfolioBudgetFromConfig(cfg.wheel_portfolio?.total_equity)
+        setBudgetState(n)
+        setBudgetSource(getPortfolioBudgetSource())
+      }).catch(() => setTgOk(null))
     } catch (e: any) {
       setError(e.message)
     }
   }, [])
+
+  // 设置页保存净值后,首页预算即时刷新
+  useEffect(() => subscribePortfolioBudget((n, src) => {
+    setBudgetState(n)
+    setBudgetSource(src as 'config' | 'legacy' | 'default')
+  }), [])
 
   const refreshChecks = useCallback(() => {
     const st = getAppSettings()
@@ -1845,7 +1858,7 @@ export default function WheelPage() {
       trades, cycles, capital: stats?.capital ?? null,
       conversion: stats?.conversion ?? null, idleCount, uncoveredCount,
     })
-  }, [trades, cycles, stats, targets])
+  }, [trades, cycles, stats, targets, budget])
 
   const allOppRows = useMemo(() => {
     const local = buildOppRows(
@@ -2204,7 +2217,10 @@ export default function WheelPage() {
       {cockpitOpen && (
         <div className="metrics-grid" style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
           {[
-            { label: '预算', value: `$${fmtMoney(ops.budget)}` },
+            {
+              label: budgetSource === 'config' ? '组合净值' : '预算(未设净值)',
+              value: `$${fmtMoney(ops.budget)}`,
+            },
             { label: '占用', value: `$${fmtMoney(ops.committed)}` },
             { label: '本月权利金', value: `$${fmt(stats?.premium_month)}` },
             { label: '活跃轮子', value: String(stats?.active_cycles ?? '—') },
@@ -3889,7 +3905,7 @@ export default function WheelPage() {
       {tab === 'targets' && (
         <div>
           <div className="card" style={{ padding: '14px 18px', marginBottom: 16 }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>策略模板与组合预算</h3>
+            <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>策略模板</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
               {(Object.keys(STRATEGY_TEMPLATES) as RiskTier[]).map(tier => (
                 <button key={tier} type="button" className="btn"
@@ -3908,21 +3924,34 @@ export default function WheelPage() {
                 {STRATEGY_TEMPLATES[riskTier].desc}
               </span>
             </div>
+            <div style={{
+              display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10,
+              fontSize: 12, color: 'var(--text-secondary)',
+              padding: '8px 10px', borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+            }}>
+              <span>
+                组合净值 / 预算{' '}
+                <b style={{ color: 'var(--text)' }}>${fmtMoney(budget)}</b>
+                <span style={{ marginLeft: 6, opacity: 0.85 }}>
+                  {budgetSource === 'config' ? '· 来自设置页(唯一入口)'
+                    : budgetSource === 'legacy' ? '· 本地旧缓存,请到设置页填写组合净值后统一'
+                      : '· 默认值,请到设置页填写组合净值'}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ fontSize: 11 }}
+                onClick={() => {
+                  // 跳转设置:用 hash / 自定义事件;无路由时提示
+                  window.dispatchEvent(new CustomEvent('tradeforge:navigate', { detail: { page: 'settings', section: 'wheel' } }))
+                  flash('请在「设置 → Wheel → 组合风控」修改组合净值(唯一入口)', 'info')
+                }}
+              >
+                去设置修改
+              </button>
+            </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                组合预算 $
-                <SelectNum
-                  value={budget}
-                  options={BUDGET_OPTS}
-                  style={{ ...inputStyle, width: 140 }}
-                  onChange={v => {
-                    const n = Number(v) || 0
-                    setBudgetState(n)
-                    setPortfolioBudget(n)
-                    flash(`预算已设为 $${n.toLocaleString()}`, 'success')
-                  }}
-                />
-              </label>
               <button className="btn" style={{ fontSize: 12 }}
                 onClick={async () => {
                   const tpl = STRATEGY_TEMPLATES[riskTier]

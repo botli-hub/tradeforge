@@ -1000,11 +1000,18 @@ export async function getBackendConfig() {
 }
 
 export async function saveBackendConfig(body: Partial<BackendConfig>) {
-  return request<BackendConfig>('/api/config/backend', {
+  const saved = await request<BackendConfig>('/api/config/backend', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  // 组合净值变更后同步前端预算缓存(首页可用/建议张数)
+  try {
+    const { syncPortfolioBudgetFromConfig } = await import('./wheelProduct')
+    const eq = saved.wheel_portfolio?.total_equity
+    syncPortfolioBudgetFromConfig(eq != null && eq > 0 ? eq : null)
+  } catch { /* */ }
+  return saved
 }
 
 export async function getWheelRollOptions(

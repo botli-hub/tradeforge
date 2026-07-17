@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
   AppSettings,
-  BackendConfig,
   connectTrading,
   disconnectTrading,
   getAppSettings,
@@ -88,6 +87,15 @@ export default function SettingsPage() {
     { k: 'research', label: '研究', hint: '回测 / 行情 / 交易前端' },
     { k: 'general', label: '通用', hint: 'Telegram / API / OpenD' },
   ]
+
+  useEffect(() => {
+    const onSec = (e: Event) => {
+      const sec = (e as CustomEvent).detail?.section
+      if (sec === 'wheel' || sec === 'research' || sec === 'general') setTab(sec)
+    }
+    window.addEventListener('tradeforge:settings-section', onSec)
+    return () => window.removeEventListener('tradeforge:settings-section', onSec)
+  }, [])
 
   return (
     <div className="page" style={{ maxWidth: 920 }}>
@@ -641,12 +649,15 @@ function BackendConfigCard({
           <div className="editor-section">
             <h4>组合风控</h4>
             <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-              用于风控 Tab 的利用率/闲置资金。单标的上限在 <b>Wheel → 标的设置</b> 的 max_capital。
+              <b>组合净值</b>是账户总预算的<b>唯一入口</b>：Wheel 首页可用资金/建议张数、体检资金紧、
+              优化页利用率均读此值。请勿在标的页另设「组合预算」。
+              单标的上限在 <b>Wheel → 标的</b> 的 max_capital。
             </p>
             <div className="settings-row">
-              <label>组合净值(USD,0=未设)</label>
+              <label>组合净值 / 预算(USD,0=未设)</label>
               <input type="number" step="1000" value={cfg.wheel_portfolio?.total_equity ?? 0}
                 placeholder="例如 300000"
+                title="唯一组合预算;保存后同步到 Wheel 首页"
                 onChange={e => up('wheel_portfolio', 'total_equity', Number(e.target.value))} />
             </div>
             <div className="settings-row">
