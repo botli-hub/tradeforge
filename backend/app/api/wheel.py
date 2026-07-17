@@ -675,10 +675,16 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
             or (util is not None and float(util) >= tight_util)
         )
         headroom_by: Dict[str, Optional[float]] = {}
+        committed_by: Dict[str, float] = {}
+        max_cap_by: Dict[str, Optional[float]] = {}
         for row in overview.get("per_symbol") or []:
             sym = row.get("symbol")
             if sym:
                 headroom_by[sym] = row.get("headroom")
+                committed_by[sym] = float(row.get("committed") or 0)
+                max_cap_by[sym] = (
+                    float(row["max_capital"]) if row.get("max_capital") else None
+                )
         return {
             "utilization_pct": util,
             "capital_tight": capital_tight,
@@ -688,6 +694,8 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
             "equity": overview.get("equity"),
             "assignment_stress": stress_meta.get("assignment_stress"),
             "headroom_by_symbol": headroom_by,
+            "committed_by_symbol": committed_by,
+            "max_capital_by_symbol": max_cap_by,
             "capital_tight_util_pct": tight_util,
         }
     except Exception as e:
@@ -701,6 +709,8 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
             "equity": None,
             "assignment_stress": None,
             "headroom_by_symbol": {},
+            "committed_by_symbol": {},
+            "max_capital_by_symbol": {},
             "capital_tight_util_pct": tight_util,
         }
 
@@ -752,6 +762,10 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
 
     min_ann_by_symbol: Dict[str, float] = {}
     target_by_symbol: Dict[str, Any] = {}
+    trend_by_symbol: Dict[str, Optional[str]] = {}
+    equity = portfolio_ctx.get("equity")
+    committed_by: Dict[str, float] = portfolio_ctx.get("committed_by_symbol") or {}
+
     items = []
     for c in cycles:
         q = quotes.get(c["open_contract_code"], {})
@@ -778,8 +792,20 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             min_ann_by_symbol[c["symbol"]] = float((tgt or {}).get("min_annualized") or 0)
         tgt = target_by_symbol[c["symbol"]]
         floor_px = float((tgt or {}).get("floor_price") or 0) or None
+        max_cap = float((tgt or {}).get("max_capital") or 0) or None
         qty = c.get("open_qty") or 1
         size = c.get("contract_size") or c.get("open_contract_size") or 100
+        # 轻量趋势:每标的缓存一次(不跑全量 admission)
+        if c["symbol"] not in trend_by_symbol:
+            tr_name = None
+            try:
+                from app.core.wheel_score import trend_profile
+                tp = trend_profile(c["symbol"], float(spot) if spot else None)
+                tr_name = (tp or {}).get("trend")
+            except Exception:
+                tr_name = None
+            trend_by_symbol[c["symbol"]] = tr_name
+        trend_name = trend_by_symbol[c["symbol"]]
         # 除息窗口先算,决策树需要 days_to_ex_div
         days_to_ex_div = None
         dividend_warn_payload = None
@@ -810,6 +836,13 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "capital_tight": capital_tight,
             "portfolio_put_blocked": put_blocked,
             "symbol_headroom": headroom_by.get(c["symbol"]),
+            "trend": trend_name,
+            "target_enabled": bool((tgt or {}).get("enabled", True)) if tgt is not None else True,
+            "equity": equity,
+            "symbol_max_capital": max_cap,
+            "symbol_committed": committed_by.get(c["symbol"]),
+            "share_cost": c.get("share_cost"),
+            "cost_basis": c.get("cost_basis"),
         }
         item.update(_position_hints(item, min_ann_by_symbol[c["symbol"]], profit_target, cfg))
         # 与决策树对齐:profit_hit 以树内结果为准
@@ -845,7 +878,8 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         "profit_target_pct": profit_target,
         "pos_cfg": cfg,
         "portfolio_context": {
-            k: v for k, v in portfolio_ctx.items() if k != "headroom_by_symbol"
+            k: v for k, v in portfolio_ctx.items()
+            if k not in ("headroom_by_symbol", "committed_by_symbol", "max_capital_by_symbol")
         },
     }
 

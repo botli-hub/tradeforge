@@ -303,6 +303,79 @@ def test_put_blocked_does_not_change_action_code():
     assert r["portfolio_put_blocked"]
 
 
+def test_prepare_assign_checklist_put():
+    """临期 ITM Put:PREPARE_ASSIGN + 清单(担保覆盖、floor_ok)"""
+    r = decide_position(
+        _item(
+            side="PUT", strike=100, spot=99, itm=True, delta=0.45, dte=5,
+            expiring=True, profit_pct=-10.0, buyback_ask=2.0,
+            floor_price=105.0, equity=100000, qty=1, contract_size=100,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "PREPARE_ASSIGN"
+    cl = r["assign_checklist"]
+    assert cl is not None
+    assert cl["collateral_covers"] is True
+    assert cl["floor_ok"] is True
+    assert cl["assign_notional"] == 10000.0
+    assert "担保" in " ".join(cl["notes"])
+
+
+def test_would_open_no_strike_above_floor():
+    r = decide_position(
+        _item(
+            side="PUT", strike=240, spot=250, dte=35, itm=False,
+            profit_pct=-25.0, buyback_ask=3.5, floor_price=220.0,
+        ),
+        15, 50,
+    )
+    assert r["would_open_today"] == "no"
+    assert r["strike_above_floor"]
+    assert any("底线" in x for x in r["would_open_reasons"])
+
+
+def test_would_open_no_trend_down_underwater():
+    """浮亏 + 趋势 DOWN → 纪律否决;仍 NONE 但升权"""
+    r = decide_position(
+        _item(
+            side="PUT", strike=100, spot=105, dte=30, itm=False,
+            profit_pct=-20.0, buyback_ask=3.0, floor_price=110.0,
+            trend="DOWN",
+        ),
+        15, 50,
+    )
+    assert r["would_open_today"] == "no"
+    assert r["action_code"] == "NONE"
+    assert r["action_priority"] <= 4
+    assert any("纪律" in x or "DOWN" in x for x in r["reasons"] + r["would_open_reasons"])
+
+
+def test_would_open_yes_healthy_put():
+    r = decide_position(
+        _item(
+            side="PUT", strike=100, spot=110, dte=35, itm=False,
+            profit_pct=30.0, buyback_ask=1.6, floor_price=105.0,
+            trend="UP",
+        ),
+        15, 50,
+    )
+    assert r["would_open_today"] == "yes"
+    assert r["action_code"] == "NONE"
+
+
+def test_would_open_unknown_no_floor():
+    r = decide_position(
+        _item(
+            side="PUT", strike=100, spot=110, dte=35, itm=False,
+            profit_pct=30.0, buyback_ask=1.6,
+            # no floor_price
+        ),
+        15, 50,
+    )
+    assert r["would_open_today"] == "unknown"
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

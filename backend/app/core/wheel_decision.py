@@ -114,6 +114,180 @@ def otm_buffer_pct(side: Optional[str], spot: float, strike: float) -> Optional[
     return None
 
 
+def eval_would_open_today(
+    *,
+    side: Optional[str],
+    strike: float,
+    spot: float,
+    floor_price: Optional[float],
+    strike_above_floor: bool,
+    thin_otm: bool,
+    buffer: Optional[float],
+    itm: bool,
+    deep_itm: bool,
+    trend: Optional[str],
+    capital_tight: bool,
+    target_enabled: Optional[bool] = None,
+    dte: Optional[int] = None,
+) -> Dict[str, Any]:
+    """反事实:以今天纪律还会不会新开这张腿。
+
+    返回 would_open_today: yes|no|caution|unknown + reasons。
+    轻量规则,不跑全量 admission。
+    """
+    reasons: List[str] = []
+    hard_no = False
+    caution = False
+    missing_key = False
+
+    if target_enabled is False:
+        hard_no = True
+        reasons.append("标的已禁用,不会新开")
+
+    if side == "PUT":
+        if floor_price is None or floor_price <= 0:
+            missing_key = True
+            reasons.append("未设置接货底线,无法完整校验开仓纪律")
+        elif strike_above_floor or strike > floor_price:
+            hard_no = True
+            reasons.append(f"strike {strike:g} > 接货底线 {floor_price:g},纪律不会新开此 Put")
+        if trend == "DOWN":
+            hard_no = True
+            reasons.append("趋势 DOWN,按纪律不新开 Put")
+        elif trend == "WEAK":
+            caution = True
+            reasons.append("趋势 WEAK,新开 Put 需谨慎")
+        if capital_tight:
+            caution = True
+            reasons.append("组合资金偏紧,不宜再占担保开新 Put")
+        if thin_otm or (buffer is not None and buffer < 2.0 and not itm):
+            caution = True
+            reasons.append("安全垫偏薄,新开同类 Put 风险高")
+        if itm or deep_itm:
+            caution = True
+            reasons.append("已 ITM,更不应以现价「新开」同结构")
+    elif side == "CALL":
+        if trend == "DOWN":
+            # 持股 CC 在下跌趋势仍可卖,但需谨慎
+            caution = True
+            reasons.append("趋势 DOWN,CC 需确认仍愿持股收租")
+        if deep_itm or (itm and dte is not None and dte <= 7):
+            caution = True
+            reasons.append("Call 已深/临期 ITM,不会以当前结构新开")
+        if capital_tight:
+            caution = True
+            reasons.append("资金紧时优先处理既有仓,不急新开 CC")
+    else:
+        missing_key = True
+        reasons.append("缺少 side")
+
+    if not spot or not strike:
+        missing_key = True
+        if "缺" not in " ".join(reasons):
+            reasons.append("缺 spot/strike,无法完整判断")
+
+    if hard_no:
+        verdict = "no"
+    elif missing_key and not caution and side == "PUT" and (floor_price is None or floor_price <= 0):
+        # 关键缺失且无硬否决 → unknown
+        verdict = "unknown"
+    elif caution:
+        verdict = "caution"
+    elif missing_key:
+        verdict = "unknown"
+    else:
+        verdict = "yes"
+        if side == "PUT":
+            reasons.append("strike 在底线内、无硬否决因子,纪律上仍可能新开同类 Put")
+        else:
+            reasons.append("无硬否决因子,纪律上仍可能新开同类 CC")
+
+    return {
+        "would_open_today": verdict,
+        "would_open_reasons": reasons,
+    }
+
+
+def build_assign_checklist(
+    *,
+    side: Optional[str],
+    strike: float,
+    qty: float,
+    size: float,
+    floor_price: Optional[float],
+    strike_above_floor: bool,
+    itm: bool,
+    deep_itm: bool,
+    expiring: bool,
+    early_assign: bool,
+    share_cost: Optional[float] = None,
+    cost_basis: Optional[float] = None,
+    equity: Optional[float] = None,
+    symbol_max_capital: Optional[float] = None,
+    symbol_committed: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """接货/交货清单骨架。CSP 强调担保已覆盖,不恐吓「再付全额现金」。"""
+    need = bool(itm or deep_itm or expiring or early_assign)
+    if not need or not strike or not side:
+        return None
+
+    notional = round(float(strike) * float(qty) * float(size), 2)
+    notes: List[str] = []
+    floor_ok: Optional[bool] = None
+    if side == "PUT":
+        if floor_price is not None and floor_price > 0:
+            floor_ok = not strike_above_floor and strike <= floor_price
+            if not floor_ok:
+                notes.append(f"strike {strike:g} 高于接货底线 {floor_price:g},被指派不符合预设愿接价")
+        else:
+            notes.append("未设接货底线,请自行确认愿接价")
+        notes.append("CSP 现金担保通常已覆盖行权名义:指派多为担保变正股,一般不必再掏同等现金")
+        next_step = "接货后可按成本基础/现价扫描 Covered Call,继续轮动"
+        collateral_covers = True
+    else:
+        floor_ok = None
+        collateral_covers = None  # CC 不占 CSP 担保
+        next_step = "被 call 后轮子可结束,或现金到位后重开 CSP"
+        notes.append("被 call 走 = 按 strike 卖出持股,请确认愿意在此价交货")
+        cb = cost_basis if cost_basis is not None else share_cost
+        if cb is not None and strike:
+            pnl_ps = float(strike) - float(cb)
+            notes.append(
+                f"相对成本约 ${cb:g}:交货粗算每股 {'盈利' if pnl_ps >= 0 else '亏损'} ${abs(pnl_ps):.2f}"
+                " (未计累计权利金)"
+            )
+
+    post_holding_pct = None
+    over_symbol_cap = None
+    if side == "PUT" and equity and equity > 0 and notional > 0:
+        # 接货后该腿持股名义占净值(简化:用 assign notional)
+        post_holding_pct = round(notional / float(equity) * 100, 1)
+    if side == "PUT" and symbol_max_capital and symbol_max_capital > 0:
+        post_committed = float(symbol_committed or 0)
+        # 接货后占用近似 max(原占用, notional)——CSP 担保已计入时用 notional 作持股成本代理
+        post_val = max(post_committed, notional)
+        over_symbol_cap = post_val > float(symbol_max_capital) + 1e-6
+        if over_symbol_cap:
+            notes.append(
+                f"接货后名义约 ${post_val:,.0f} 可能超过标的上限 ${symbol_max_capital:,.0f}"
+            )
+
+    return {
+        "side": side,
+        "strike": strike,
+        "assign_notional": notional,
+        "collateral_covers": collateral_covers,
+        "floor_ok": floor_ok,
+        "floor_price": floor_price,
+        "post_holding_pct": post_holding_pct,
+        "over_symbol_cap": over_symbol_cap,
+        "next_step_hint": next_step,
+        "notes": notes,
+        "qty": qty,
+        "contract_size": size,
+    }
+
+
 def decide_position(
     item: Dict[str, Any],
     min_annualized: float,
@@ -124,6 +298,7 @@ def decide_position(
       side/strike/spot/dte/current_price/buyback_ask/profit_pct/itm/delta/expiring
       qty(张,默认1)/contract_size(默认100)/days_to_ex_div(除息剩几天,可选)
       可选资本上下文: capital_util_pct / capital_tight / portfolio_put_blocked / symbol_headroom
+      可选: trend(UP|WEAK|DOWN)/target_enabled/share_cost/cost_basis/equity/symbol_max_capital/symbol_committed
 
     返回增强字段见末尾 dict。
     """
@@ -251,6 +426,34 @@ def decide_position(
     # 薄 OTM:安全垫不足,高浮盈也不鼓励「死拿」到被扫到
     if thin_otm and hold_for_theta and dte is not None and dte > gamma_dte and profit_hit:
         hold_for_theta = False
+
+    trend = item.get("trend")
+    if isinstance(trend, dict):
+        trend = trend.get("trend")
+    trend = str(trend).upper() if trend else None
+    if trend and trend not in ("UP", "WEAK", "DOWN"):
+        trend = None
+    target_enabled = item.get("target_enabled")
+    if target_enabled is not None:
+        target_enabled = bool(target_enabled)
+
+    would_meta = eval_would_open_today(
+        side=side,
+        strike=float(strike or 0),
+        spot=float(spot or 0),
+        floor_price=floor_price,
+        strike_above_floor=strike_above_floor,
+        thin_otm=thin_otm,
+        buffer=buffer,
+        itm=itm,
+        deep_itm=deep_itm,
+        trend=trend,
+        capital_tight=capital_tight,
+        target_enabled=target_enabled,
+        dte=dte if isinstance(dte, int) else None,
+    )
+    would_open = would_meta["would_open_today"]
+    would_open_reasons = list(would_meta["would_open_reasons"] or [])
 
     # 浮亏 OTM 且安全垫偏薄/临近 → 倾向 Roll 防守(不是「健康持有」)
     threatened_underwater = bool(
@@ -414,6 +617,16 @@ def decide_position(
         reasons.append(
             "theta 仍对卖方有利,但浮亏未恢复;仅当标的逻辑与行权价仍可接受时持有"
         )
+        if would_open == "no":
+            # 保持 NONE 不强制 CLOSE(strike>floor 已单独 CLOSE);升权+强调纪律否决
+            priority = 4
+            secondary_hint = (
+                "纪律否决新开此腿:优先止损买回或 Roll,勿用沉没成本自我安慰"
+            )
+            reasons.append("以当前纪律不会新开此腿 — 继续持有=主动偏离策略")
+        elif would_open == "caution":
+            priority = min(priority, 5)
+            reasons.append("纪律上对新开偏谨慎,持有需额外确认逻辑")
     elif shallow_itm and side == "PUT":
         code, priority = ACTION_NONE, 6
         prefer_card = None
@@ -468,6 +681,67 @@ def decide_position(
         confidence = 82
     if thin_otm and code in (ACTION_HOLD_THETA, ACTION_NONE):
         confidence = max(40, confidence - 15)
+    # 纪律否决仅下调「仍建议持有」类置信;已 CLOSE/ROLL 与纪律一致则不降
+    if would_open == "no" and code in (ACTION_NONE, ACTION_HOLD_THETA) and underwater:
+        confidence = max(35, confidence - 15)
+    elif would_open == "yes" and underwater and code == ACTION_NONE:
+        confidence = min(70, confidence + 5)
+
+    # 接货/交货清单(ITM/临期/提前行权相关)
+    share_cost = item.get("share_cost")
+    cost_basis = item.get("cost_basis")
+    try:
+        share_cost = float(share_cost) if share_cost is not None else None
+    except (TypeError, ValueError):
+        share_cost = None
+    try:
+        cost_basis = float(cost_basis) if cost_basis is not None else None
+    except (TypeError, ValueError):
+        cost_basis = None
+    equity = item.get("equity")
+    try:
+        equity = float(equity) if equity is not None else None
+    except (TypeError, ValueError):
+        equity = None
+    symbol_max_capital = item.get("symbol_max_capital")
+    try:
+        symbol_max_capital = float(symbol_max_capital) if symbol_max_capital is not None else None
+    except (TypeError, ValueError):
+        symbol_max_capital = None
+    symbol_committed = item.get("symbol_committed")
+    try:
+        symbol_committed = float(symbol_committed) if symbol_committed is not None else None
+    except (TypeError, ValueError):
+        symbol_committed = None
+
+    assign_checklist = build_assign_checklist(
+        side=side,
+        strike=float(strike or 0),
+        qty=qty,
+        size=size,
+        floor_price=floor_price,
+        strike_above_floor=strike_above_floor,
+        itm=itm,
+        deep_itm=deep_itm,
+        expiring=expiring,
+        early_assign=early_assign,
+        share_cost=share_cost,
+        cost_basis=cost_basis,
+        equity=equity,
+        symbol_max_capital=symbol_max_capital,
+        symbol_committed=symbol_committed,
+    )
+    # PREPARE / 深 ITM 时 reasons 挂一条清单摘要
+    if assign_checklist and code in (ACTION_PREPARE_ASSIGN, ACTION_ROLL_ADJUST) and (itm or deep_itm):
+        if side == "PUT":
+            reasons.append(
+                f"接货名义约 ${assign_checklist['assign_notional']:,.0f}"
+                + ("(担保通常已覆盖)" if assign_checklist.get("collateral_covers") else "")
+            )
+            if assign_checklist.get("floor_ok") is False:
+                reasons.append("floor 校验未通过:被指派不符合愿接价")
+        else:
+            reasons.append(f"交货名义约 ${assign_checklist['assign_notional']:,.0f}(按 strike 卖股)")
 
     tree = {
         "profit_hit": profit_hit,
@@ -496,6 +770,8 @@ def decide_position(
         "portfolio_put_blocked": portfolio_put_blocked,
         "symbol_headroom": symbol_headroom,
         "capital_tight_util_pct": capital_tight_util,
+        "would_open_today": would_open,
+        "trend": trend,
     }
 
     return {
@@ -512,6 +788,9 @@ def decide_position(
         "capital_util_pct": capital_util_pct,
         "portfolio_put_blocked": portfolio_put_blocked,
         "symbol_headroom": symbol_headroom,
+        "would_open_today": would_open,
+        "would_open_reasons": would_open_reasons,
+        "assign_checklist": assign_checklist,
         "action_code": code,
         "action_hint": hint,
         "secondary_hint": secondary_hint,

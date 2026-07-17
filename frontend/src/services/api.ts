@@ -707,6 +707,24 @@ export interface WheelOpenPositionItem {
   freed_capital_est?: number | null
   /** 换仓/平仓后下一步文案 */
   replace_hint?: string | null
+  /** yes|no|caution|unknown — 以今天纪律还会不会新开此腿 */
+  would_open_today?: 'yes' | 'no' | 'caution' | 'unknown' | string | null
+  would_open_reasons?: string[]
+  /** 接货/交货清单 */
+  assign_checklist?: {
+    side?: string
+    strike?: number
+    assign_notional?: number
+    collateral_covers?: boolean | null
+    floor_ok?: boolean | null
+    floor_price?: number | null
+    post_holding_pct?: number | null
+    over_symbol_cap?: boolean | null
+    next_step_hint?: string | null
+    notes?: string[]
+    qty?: number
+    contract_size?: number
+  } | null
   reasons?: string[]
   profit_pct: number | null
   spot: number

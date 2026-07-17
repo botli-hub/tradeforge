@@ -2508,6 +2508,16 @@ export default function WheelPage() {
                           {r.check.replace_hint}
                         </span>
                       )}
+                      {r.check?.would_open_today === 'no' && (
+                        <span style={{ color: C.red }}>规则已否决新开</span>
+                      )}
+                      {r.check?.assign_checklist && (r.action_code === 'PREPARE_ASSIGN' || r.check.itm) && (
+                        <span style={{ color: C.orange }}>
+                          {r.side === 'PUT' ? '接货' : '交货'}名义 $
+                          {fmt(r.check.assign_checklist.assign_notional, 0)}
+                          {r.check.assign_checklist.floor_ok === false ? ' · floor未过' : ''}
+                        </span>
+                      )}
                       {r.decision_why?.[0] && <span style={{ opacity: 0.85 }}>{r.decision_why[0]}</span>}
                     </div>
                   </div>
@@ -2966,6 +2976,22 @@ export default function WheelPage() {
                             {check?.strike_above_floor && <Badge color="red" title="行权价高于接货底线">{'strike>底线'}</Badge>}
                             {check?.profit_pct != null && check.profit_pct < 0 && !check.profit_hit && (
                               <Badge color="orange" title="买回价高于开仓权利金">浮亏</Badge>
+                            )}
+                            {check?.would_open_today === 'no' && (
+                              <Badge color="red" title={(check.would_open_reasons || []).join(';') || '以今天纪律不会新开此腿'}>
+                                规则已否决
+                              </Badge>
+                            )}
+                            {check?.would_open_today === 'yes' && check.profit_pct != null && check.profit_pct < 0 && (
+                              <Badge color="green" title={(check.would_open_reasons || []).join(';') || '纪律仍接纳'}>
+                                规则仍会开
+                              </Badge>
+                            )}
+                            {check?.would_open_today === 'caution' && (
+                              <Badge color="orange" title={(check.would_open_reasons || []).join(';')}>纪律谨慎</Badge>
+                            )}
+                            {(check?.action_code === 'PREPARE_ASSIGN' || (check?.itm && check?.assign_checklist)) && (
+                              <Badge color="red" title="见管理弹窗接货/交货清单">接货清单</Badge>
                             )}
                             {check?.action_hint && !check.profit_hit && (
                               <Badge color={check.deep_itm ? 'red' : check.low_yield && !check.roll_21dte ? 'blue' : 'orange'}
@@ -4294,6 +4320,74 @@ export default function WheelPage() {
                   </div>
                 )}
               </div>
+              )
+            })()}
+            {/* 今天还会开吗 */}
+            {mc.would_open_today && (
+              <div style={{
+                marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
+                background: mc.would_open_today === 'no' ? '#f8717118'
+                  : mc.would_open_today === 'yes' ? '#22c55e14'
+                    : 'var(--bg-secondary)',
+                border: `1px solid ${mc.would_open_today === 'no' ? C.red + '66'
+                  : mc.would_open_today === 'yes' ? C.green + '66' : 'var(--border)'}`,
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  今天还会开吗 ·{' '}
+                  {mc.would_open_today === 'yes' ? '规则仍会开'
+                    : mc.would_open_today === 'no' ? '规则已否决'
+                      : mc.would_open_today === 'caution' ? '谨慎'
+                        : '数据不足'}
+                </div>
+                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                  {(mc.would_open_reasons && mc.would_open_reasons[0])
+                    || (mc.would_open_today === 'no'
+                      ? '以当前纪律不会新开此腿;继续持有=主动偏离策略'
+                      : '对照开仓纪律的反事实检验')}
+                </div>
+              </div>
+            )}
+            {/* 接货/交货清单 */}
+            {mc.assign_checklist && (code === 'PREPARE_ASSIGN' || code === 'ROLL_ADJUST' || mc.itm) && (() => {
+              const cl = mc.assign_checklist!
+              const isPut = (cl.side || mc.side) === 'PUT'
+              return (
+                <div style={{
+                  marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
+                  background: 'var(--orange-dim, #f59e0b14)', border: `1px solid ${C.orange}55`,
+                }}>
+                  <div style={{ fontWeight: 600, marginBottom: 6, color: C.orange }}>
+                    {isPut ? '接货清单(签合同前确认)' : '交货清单(被 call 前确认)'}
+                  </div>
+                  <ul style={{ margin: '0 0 6px', paddingLeft: 18, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
+                    <li>
+                      {isPut ? '接货名义' : '交货名义'}{' '}
+                      <b style={{ color: 'var(--text)' }}>
+                        ${fmt(cl.assign_notional, 0)}
+                      </b>
+                      {cl.collateral_covers && isPut && ' · CSP 担保通常已覆盖(担保→正股,一般不必再掏同等现金)'}
+                    </li>
+                    {isPut && cl.floor_ok != null && (
+                      <li style={{ color: cl.floor_ok ? C.green : C.red }}>
+                        接货底线: {cl.floor_ok ? 'OK' : '未通过'}
+                        {cl.floor_price != null && ` (floor $${cl.floor_price}, strike $${cl.strike ?? mc.strike})`}
+                      </li>
+                    )}
+                    {cl.post_holding_pct != null && (
+                      <li>接货后约占净值 <b>{cl.post_holding_pct}%</b></li>
+                    )}
+                    {cl.over_symbol_cap && (
+                      <li style={{ color: C.red }}>可能超过该标的 max_capital 上限</li>
+                    )}
+                    {cl.next_step_hint && <li>下一步: {cl.next_step_hint}</li>}
+                    {(cl.notes || []).slice(0, 2).map((n, i) => (
+                      <li key={i}>{n}</li>
+                    ))}
+                  </ul>
+                  <div style={{ opacity: 0.85 }}>
+                    愿意 → 可放任/准备指派;不愿意 → 优先 Roll 或买回
+                  </div>
+                </div>
               )
             })()}
             {(code === 'CLOSE' || code === 'REPLACE') && (() => {
