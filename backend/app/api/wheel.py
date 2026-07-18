@@ -53,22 +53,44 @@ def list_targets():
         t["suggested_floor"] = None
         t["suggested_floor_delta"] = None
         t["suggested_floor_spot"] = None
+        t["suggested_floor_note"] = None
         try:
+            # spot 优先用 vol 档案里的现价(若有),否则 suggest 内部用日K
+            spot_hint = None
+            if vol:
+                for k in ("last", "spot", "underlying_price", "close"):
+                    try:
+                        v = vol.get(k) if isinstance(vol, dict) else None
+                        if v is not None and float(v) > 0:
+                            spot_hint = float(v)
+                            break
+                    except (TypeError, ValueError):
+                        pass
             sug = suggest_floor(
                 t["symbol"],
-                None,
+                spot_hint,
                 t.get("floor_price"),
-                (vol or {}).get("iv_rank"),
+                (vol or {}).get("iv_rank") if isinstance(vol, dict) else None,
             )
             sf = sug.get("suggested_floor")
-            if sf is not None:
-                t["suggested_floor"] = float(sf)
+            t["suggested_floor_note"] = sug.get("message")
+            if sf is not None and float(sf) > 0:
+                t["suggested_floor"] = round(float(sf), 2)
                 t["suggested_floor_spot"] = sug.get("spot")
                 cur = t.get("floor_price")
-                if cur is not None:
+                if cur is not None and float(cur) > 0:
                     t["suggested_floor_delta"] = round(float(sf) - float(cur), 2)
         except Exception as e:
-            logger.debug("suggested_floor %s: %s", t.get("symbol"), e)
+            logger.warning("suggested_floor %s failed: %s", t.get("symbol"), e)
+            # 最后兜底:至少不要整列空白
+            try:
+                cur = float(t.get("floor_price") or 0)
+                if cur > 0:
+                    t["suggested_floor"] = cur
+                    t["suggested_floor_delta"] = 0.0
+                    t["suggested_floor_note"] = f"计算失败,暂显示当前愿接价({e})"
+            except (TypeError, ValueError):
+                pass
     return targets
 
 

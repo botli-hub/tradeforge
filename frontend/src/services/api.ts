@@ -500,6 +500,7 @@ export interface WheelTarget {
   /** suggested_floor - floor_price */
   suggested_floor_delta?: number | null
   suggested_floor_spot?: number | null
+  suggested_floor_note?: string | null
   max_capital: number
   delta_min: number
   delta_max: number

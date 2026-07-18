@@ -22,13 +22,23 @@ def suggest_floor(
     from app.core.wheel_score import compute_atr
 
     closes = _closes(symbol)
+    if spot is None or spot <= 0:
+        spot = closes[-1] if closes else None
+    # 无日K时仍尽量给参考:用现价×0.9 或沿用当前愿接价
     if not closes:
+        fallback = None
+        if spot and spot > 0:
+            fallback = round(float(spot) * 0.90, 2)
+        elif current_floor and float(current_floor) > 0:
+            fallback = float(current_floor)
         return {
             "symbol": symbol,
-            "suggested_floor": current_floor,
+            "suggested_floor": fallback,
             "spot": spot,
             "components": {},
-            "message": "无本地日K,无法计算",
+            "message": "无本地日K,参考为现价×0.9或当前愿接价",
+            "is_reference_only": True,
+            "definition": "floor=CSP愿接最高价(Put行权价上限),不是止损线",
         }
     if spot is None or spot <= 0:
         spot = closes[-1]

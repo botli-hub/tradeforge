@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   getAppSettings, subscribeSettings, type AppSettings,
   getWheelTargets, getWheelCandidates, addWheelTarget, updateWheelTarget, deleteWheelTarget,
+  getWheelFloorSuggest,
   getWheelCycles, getWheelTrades, recordWheelTrade, updateWheelTrade, deleteWheelTrade,
   getWheelStats, getWheelSuggest, triggerWheelTimingScan, getWheelTimingSignals,
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
@@ -140,15 +141,24 @@ function fmt(v: number | null | undefined, digits = 2) {
   return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
-/** 智能参考愿接价展示(相对当前愿接价的差) */
-function fmtSuggestedFloor(t: { suggested_floor?: number | null; suggested_floor_delta?: number | null }) {
-  if (t.suggested_floor == null || Number.isNaN(t.suggested_floor)) return null
-  const d = t.suggested_floor_delta
-  const dTxt = d == null || Number.isNaN(d) ? ''
-    : d > 0 ? ` (+${fmt(d, d < 1 ? 2 : 1)})`
+/** 智能参考愿接价展示(相对当前愿接价的差);兼容字符串数字 */
+function fmtSuggestedFloor(t: {
+  suggested_floor?: number | string | null
+  suggested_floor_delta?: number | string | null
+  suggested_floor_note?: string | null
+}) {
+  const price = t.suggested_floor == null || t.suggested_floor === ''
+    ? NaN
+    : Number(t.suggested_floor)
+  if (!Number.isFinite(price) || price <= 0) return null
+  const dRaw = t.suggested_floor_delta
+  const d = dRaw == null || dRaw === '' ? null : Number(dRaw)
+  const dOk = d != null && Number.isFinite(d)
+  const dTxt = !dOk ? ''
+    : d > 0 ? ` (+${fmt(d, Math.abs(d) < 1 ? 2 : 1)})`
       : d < 0 ? ` (${fmt(d, Math.abs(d) < 1 ? 2 : 1)})`
         : ' (±0)'
-  return { price: t.suggested_floor, deltaTxt: dTxt, delta: d }
+  return { price, deltaTxt: dTxt, delta: dOk ? d : null, note: t.suggested_floor_note || null }
 }
 
 // ── 颜色语义:绿=收益/安全 橙=注意 红=风险 蓝=信息 紫=中性标记 ──────────────────
@@ -1461,6 +1471,41 @@ export default function WheelPage() {
         getWheelTimingHistory(1, 40).catch(() => null),
       ])
       setTargets(t)
+      // 后端未带 suggested_floor 时(旧进程/失败)前端补拉,避免整列「参考 --」
+      const needFloor = (t as WheelTarget[]).filter(
+        x => x.suggested_floor == null || !Number.isFinite(Number(x.suggested_floor)),
+      )
+      if (needFloor.length > 0) {
+        Promise.all(
+          needFloor.map(async row => {
+            try {
+              const f = await getWheelFloorSuggest(row.symbol)
+              const sf = f.suggested_floor != null ? Number(f.suggested_floor) : NaN
+              if (!Number.isFinite(sf) || sf <= 0) return null
+              return {
+                symbol: row.symbol,
+                suggested_floor: sf,
+                suggested_floor_delta: row.floor_price != null
+                  ? Math.round((sf - Number(row.floor_price)) * 100) / 100
+                  : (f.delta_vs_current ?? null),
+                suggested_floor_spot: f.spot ?? null,
+                suggested_floor_note: f.rationale || null,
+              }
+            } catch {
+              return null
+            }
+          }),
+        ).then(rows => {
+          const by = Object.fromEntries(
+            rows.filter(Boolean).map(r => [r!.symbol, r!]),
+          )
+          if (!Object.keys(by).length) return
+          setTargets(prev => prev.map(x => {
+            const u = by[x.symbol]
+            return u ? { ...x, ...u } : x
+          }))
+        })
+      }
       setStats(s)
       setCycles(c)
       setTrades(tr)
