@@ -1991,7 +1991,16 @@ export default function WheelPage() {
         if (row.cycle_id) handleRoll(row.cycle_id, row.prefer_card || row.check?.prefer_card)
         return
       }
-      if (row.categories.includes('CLOSE') && row.check && code !== 'REPLACE') {
+      // 平仓/换仓/止盈:一律先决策弹窗(与轮子列表一致)
+      if (
+        row.check
+        && (
+          row.categories.includes('CLOSE')
+          || row.categories.includes('LOW_YIELD')
+          || code === 'REPLACE'
+          || code === 'CLOSE'
+        )
+      ) {
         setManageCompare(row.check)
         return
       }
@@ -2003,6 +2012,7 @@ export default function WheelPage() {
         handleSuggest(row.symbol, 'put')
         return
       }
+      // 无体检缓存时才退回直接登记
       if ((row.categories.includes('CLOSE') || row.categories.includes('LOW_YIELD') || code === 'REPLACE' || code === 'CLOSE') && row.side) {
         const closeType = row.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE'
         setTradeModal({
@@ -3176,17 +3186,32 @@ export default function WheelPage() {
                           )}
                           {hasOpen && check?.profit_hit && (
                             <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
-                              onClick={() => setTradeModal({
-                                initial: {
-                                  symbol: sel.symbol,
-                                  trade_type: status === 'CSP_OPEN' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE',
-                                  price: String(check.buyback_ask || ''),
-                                  qty: String(c.open_qty || 1),
-                                  contract_size: String(c.open_contract_size || 100),
-                                },
-                                status, cycleId: c.id,
-                              })}>
+                              title="先看决策建议,再决定是否登记"
+                              onClick={() => {
+                                // 与机会列表一致:先决策弹窗,再在弹窗内登记买回
+                                if (check) {
+                                  setManageCompare(check)
+                                  return
+                                }
+                                setTradeModal({
+                                  initial: {
+                                    symbol: sel.symbol,
+                                    trade_type: status === 'CSP_OPEN' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE',
+                                    price: '',
+                                    qty: String(c.open_qty || 1),
+                                    contract_size: String(c.open_contract_size || 100),
+                                  },
+                                  status, cycleId: c.id,
+                                })
+                              }}>
                               💰 平仓
+                            </button>
+                          )}
+                          {hasOpen && check && !check.profit_hit && (check.action_priority ?? 9) <= 3 && (
+                            <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%', color: '#fb923c', fontWeight: 600 }}
+                              title="有管理建议,先打开决策弹窗"
+                              onClick={() => setManageCompare(check)}>
+                              管理
                             </button>
                           )}
                           {hasOpen && (
