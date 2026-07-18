@@ -194,3 +194,159 @@ def recent_suggestion_logs(limit: int = 10) -> List[Dict[str, Any]]:
         return out
     finally:
         conn.close()
+
+
+def suggestion_follow_through(days: int = 7, top_n: int = 5) -> Dict[str, Any]:
+    """建议 vs 实操:近 N 天扫描 Top 是否在随后开仓。
+
+    推了没做 / 做了但不在建议列表 → 纪律偏离信号。
+    """
+    from datetime import datetime, timedelta
+    from app.data import wheel_repository as repo
+
+    logs = recent_suggestion_logs(limit=20)
+    cutoff = datetime.now() - timedelta(days=days)
+    suggested: List[Dict[str, Any]] = []
+    seen = set()
+    for lg in logs:
+        try:
+            scanned = datetime.fromisoformat(str(lg.get("scanned_at") or lg.get("created_at") or "")[:19])
+        except Exception:
+            continue
+        if scanned < cutoff:
+            continue
+        payload = lg.get("payload") or {}
+        opps = payload.get("opportunities") or payload.get("top") or []
+        for o in opps[:top_n]:
+            key = (
+                str(o.get("symbol") or "").upper(),
+                str(o.get("side") or "").upper(),
+                str(o.get("strike")),
+                str(o.get("expiry") or "")[:10],
+            )
+            if key in seen or not key[0]:
+                continue
+            seen.add(key)
+            suggested.append({
+                "symbol": key[0],
+                "side": key[1],
+                "strike": o.get("strike"),
+                "expiry": key[3],
+                "score": o.get("score"),
+                "scanned_at": scanned.isoformat(timespec="seconds"),
+            })
+
+    trades = repo.get_trades(limit=500)
+    opens = []
+    for t in trades:
+        if t.get("trade_type") not in ("SELL_PUT", "SELL_CALL"):
+            continue
+        try:
+            ta = datetime.fromisoformat(str(t.get("traded_at") or "")[:19])
+        except Exception:
+            continue
+        if ta < cutoff:
+            continue
+        opens.append(t)
+
+    def _match(s: Dict[str, Any], t: Dict[str, Any]) -> bool:
+        if (t.get("symbol") or "").upper() != s["symbol"]:
+            return False
+        side = "PUT" if t["trade_type"] == "SELL_PUT" else "CALL"
+        if side != s["side"]:
+            return False
+        # strike 容差
+        try:
+            if s.get("strike") is not None and t.get("strike") is not None:
+                if abs(float(s["strike"]) - float(t["strike"])) > 0.01:
+                    return False
+        except (TypeError, ValueError):
+            pass
+        return True
+
+    followed = []
+    missed = []
+    for s in suggested:
+        hit = next((t for t in opens if _match(s, t)), None)
+        if hit:
+            followed.append({**s, "trade_id": hit.get("id"), "traded_at": hit.get("traded_at")})
+        else:
+            missed.append(s)
+
+    # 开了但不在建议
+    off_script = []
+    for t in opens:
+        if not any(_match(s, t) for s in suggested):
+            off_script.append({
+                "symbol": t.get("symbol"),
+                "trade_type": t.get("trade_type"),
+                "strike": t.get("strike"),
+                "expiry": str(t.get("expiry") or "")[:10],
+                "traded_at": t.get("traded_at"),
+                "price": t.get("price"),
+            })
+
+    rate = (len(followed) / len(suggested) * 100) if suggested else None
+    return {
+        "days": days,
+        "suggested_n": len(suggested),
+        "followed_n": len(followed),
+        "missed_n": len(missed),
+        "off_script_n": len(off_script),
+        "follow_rate_pct": round(rate, 1) if rate is not None else None,
+        "followed": followed[:20],
+        "missed": missed[:20],
+        "off_script": off_script[:20],
+        "tip": "follow_rate 低=推了不做;off_script 高=纪律外开仓",
+    }
+
+
+def position_scenario(item: Dict[str, Any]) -> Dict[str, Any]:
+    """轻情景:现在平 vs 拿到到期(粗)。"""
+    side = (item.get("side") or "").upper()
+    strike = float(item.get("strike") or 0)
+    qty = float(item.get("qty") or 1)
+    size = float(item.get("contract_size") or 100)
+    open_px = float(item.get("open_price") or 0)
+    buy = float(item.get("buyback_ask") or item.get("current_price") or 0)
+    dte = item.get("dte")
+    spot = item.get("spot")
+
+    # 卖权净权利金已收
+    premium_in = open_px * qty * size
+    close_cost = buy * qty * size
+    pnl_if_close = round(premium_in - close_cost, 2)
+
+    # 到期 OTM 作废:保留全部权利金
+    pnl_if_expire_otm = round(premium_in, 2)
+    # 到期 ITM 接货/交货粗估
+    assign_note = None
+    if side == "PUT" and strike:
+        assign_note = f"接货成本 ${strike}/股 × {int(qty * size)} 股"
+    elif side == "CALL" and strike:
+        assign_note = f"按 ${strike} 交货持股"
+
+    rem_ann = item.get("remaining_annualized")
+    return {
+        "symbol": item.get("symbol"),
+        "side": side,
+        "strike": strike,
+        "dte": dte,
+        "if_close_now": {
+            "pnl_est": pnl_if_close,
+            "buyback": buy,
+            "label": "现在买回",
+        },
+        "if_expire_otm": {
+            "pnl_est": pnl_if_expire_otm,
+            "label": "到期 OTM 作废",
+        },
+        "if_assigned": {
+            "note": assign_note,
+            "label": "到期 ITM 指派",
+        },
+        "remaining_annualized": rem_ann,
+        "spot": spot,
+        "recommendation": item.get("action_hint") or item.get("action_code"),
+        "note": "粗算不含滑点/税费;用于 10 秒决策对比",
+    }

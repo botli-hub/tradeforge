@@ -27,11 +27,14 @@ type Props = {
   serverOpps: WheelOpportunitiesResult | null
   portfolioPutBlocked?: boolean
   rollLoading?: boolean
+  executeLoading?: boolean
   onDismiss: () => void
   onExpire: () => void
   onBuyback: () => void
   onRoll: () => void
   onGoOpps: () => void
+  /** 一键记账主建议(跳过填表) */
+  onQuickExecute?: () => void
   pickReplaceCandidates: ManageModalPickFn
 }
 
@@ -40,11 +43,13 @@ export default function ManageDecisionModal({
   serverOpps,
   portfolioPutBlocked,
   rollLoading,
+  executeLoading,
   onDismiss,
   onExpire,
   onBuyback,
   onRoll,
   onGoOpps,
+  onQuickExecute,
   pickReplaceCandidates,
 }: Props) {
   const isCall = mc.side === 'CALL'
@@ -90,6 +95,11 @@ export default function ManageDecisionModal({
         : (mc.action_hint || '按规则建议操作'))
   const conf = mc.decision_confidence
   const doPrimary = () => {
+    // 一键执行(非 Roll 需候选时走原路径)
+    if (onQuickExecute && prefer !== 'roll') {
+      onQuickExecute()
+      return
+    }
     if (prefer === 'expire') onExpire()
     else if (prefer === 'close') onBuyback()
     else onRoll()
@@ -144,10 +154,17 @@ export default function ManageDecisionModal({
             )}
           </div>
           <button type="button" className="btn btn-primary" style={{ width: '100%' }}
-            disabled={prefer === 'roll' && rollLoading}
+            disabled={(prefer === 'roll' && rollLoading) || !!executeLoading}
             onClick={doPrimary}>
-            {prefer === 'expire' ? '登记到期' : prefer === 'close' ? '登记买回' : '打开 Roll 对比'}
+            {executeLoading ? '执行中…'
+              : prefer === 'expire' ? (onQuickExecute ? '一键登记到期' : '登记到期')
+                : prefer === 'close' ? (onQuickExecute ? '一键买回记账' : '登记买回')
+                  : '打开 Roll 对比'}
           </button>
+          {prefer === 'close' && (
+            <button type="button" className="btn btn-ghost btn-sm" style={{ width: '100%', marginTop: 6 }}
+              onClick={onBuyback}>改价格再登记…</button>
+          )}
         </div>
 
         <details className="manage-details">

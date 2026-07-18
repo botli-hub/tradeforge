@@ -310,6 +310,14 @@ def record_trade(body: TradeIn):
             contract_size=body.contract_size, note=body.note, traded_at=body.traded_at,
             cycle_id=body.cycle_id, new_cycle=body.new_cycle,
         )
+        # 指派后附下一步(CC / 成本基础)
+        if body.trade_type == "ASSIGNED" or (cycle and cycle.get("status") == "HOLDING"
+                                            and body.trade_type in ("ASSIGNED", "BUY_SHARES")):
+            try:
+                from app.core.wheel_post_assign import post_assign_hint
+                return {**cycle, "post_assign": post_assign_hint(cycle)}
+            except Exception:
+                pass
         return cycle
     except WheelError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -792,14 +800,25 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
 
 
 def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
-    """拉在场合约与标的快照,计算浮盈/DTE/ITM/delta 及行动建议。供 API 和后台推送共用"""
+    """拉在场合约与标的快照,计算浮盈/DTE/ITM/delta 及行动建议。供 API 和后台推送共用。
+
+    OpenD 失败时返回缓存并标 stale=True(弱网降级)。
+    """
     import futu
     from datetime import date as _date
     from app.core.leaps_monitor import _throttle, _to_futu_symbol
+    from app.core.wheel_today import save_positions_cache, load_positions_cache, try_buying_power
 
     cfg = _wheel_cfg().get("wheel_position", {}) or {}
     profit_target = cfg.get("profit_target_pct", 50)
     portfolio_ctx = _portfolio_context_for_manage()
+    # 真实购买力(若交易账户已连接)
+    bp = try_buying_power()
+    if bp and bp.get("buying_power") is not None:
+        portfolio_ctx = dict(portfolio_ctx)
+        portfolio_ctx["buying_power"] = bp.get("buying_power")
+        portfolio_ctx["bp_source"] = bp.get("source")
+        # 有 BP 时辅助判断资金紧:利用率已算,再附 BP 字段
     capital_tight = bool(portfolio_ctx.get("capital_tight"))
     put_blocked = bool(portfolio_ctx.get("portfolio_put_blocked"))
     util_pct = portfolio_ctx.get("utilization_pct")
@@ -808,33 +827,52 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     cycles = [c for c in repo.get_cycles(include_closed=False)
               if c["status"] in ("CSP_OPEN", "CC_OPEN") and c.get("open_contract_code")]
     if not cycles:
-        return {
+        out = {
             "items": [],
             "profit_target_pct": profit_target,
             "pos_cfg": cfg,
             "portfolio_context": portfolio_ctx,
+            "stale": False,
         }
+        save_positions_cache(out)
+        return out
 
     codes = [c["open_contract_code"] for c in cycles]
     und_codes = list({_to_futu_symbol(c["symbol"]) for c in cycles})
     quotes: Dict[str, Dict[str, float]] = {}
-    ctx = futu.OpenQuoteContext(host=host, port=port)
     try:
-        for i in range(0, len(codes) + len(und_codes), 80):
-            chunk = (codes + und_codes)[i:i + 80]
-            _throttle()
-            ret, snap = ctx.get_market_snapshot(chunk)
-            if ret == futu.RET_OK and snap is not None and not snap.empty:
-                for _, row in snap.iterrows():
-                    quotes[str(row.get("code"))] = {
-                        "last": float(row.get("last_price", 0) or 0),
-                        "ask": float(row.get("ask_price", 0) or 0),
-                        "bid": float(row.get("bid_price", 0) or 0),
-                        "delta": abs(float(row.get("option_delta", 0) or 0)),
-                        "theta": abs(float(row.get("option_theta", 0) or 0)),
-                    }
-    finally:
-        ctx.close()
+        ctx = futu.OpenQuoteContext(host=host, port=port)
+        try:
+            for i in range(0, len(codes) + len(und_codes), 80):
+                chunk = (codes + und_codes)[i:i + 80]
+                _throttle()
+                ret, snap = ctx.get_market_snapshot(chunk)
+                if ret == futu.RET_OK and snap is not None and not snap.empty:
+                    for _, row in snap.iterrows():
+                        quotes[str(row.get("code"))] = {
+                            "last": float(row.get("last_price", 0) or 0),
+                            "ask": float(row.get("ask_price", 0) or 0),
+                            "bid": float(row.get("bid_price", 0) or 0),
+                            "delta": abs(float(row.get("option_delta", 0) or 0)),
+                            "theta": abs(float(row.get("option_theta", 0) or 0)),
+                        }
+        finally:
+            ctx.close()
+    except Exception as e:
+        logger.warning("open-positions OpenD 失败,尝试缓存: %s", e)
+        cached = load_positions_cache(max_age_min=24 * 60)
+        if cached and cached.get("data"):
+            data = dict(cached["data"])
+            data["stale"] = True
+            data["stale_age_minutes"] = cached.get("age_minutes")
+            data["stale_reason"] = str(e)
+            # 组合上下文仍用最新
+            data["portfolio_context"] = {
+                k: v for k, v in portfolio_ctx.items()
+                if k not in ("headroom_by_symbol", "committed_by_symbol", "max_capital_by_symbol")
+            }
+            return data
+        raise
 
     min_ann_by_symbol: Dict[str, float] = {}
     target_by_symbol: Dict[str, Any] = {}
@@ -949,7 +987,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         x.get("dte") if x.get("dte") is not None else 999,
         x.get("symbol") or "",
     ))
-    return {
+    out = {
         "items": items,
         "profit_target_pct": profit_target,
         "pos_cfg": cfg,
@@ -957,7 +995,13 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             k: v for k, v in portfolio_ctx.items()
             if k not in ("headroom_by_symbol", "committed_by_symbol", "max_capital_by_symbol")
         },
+        "stale": False,
     }
+    try:
+        save_positions_cache(out)
+    except Exception:
+        pass
+    return out
 
 
 @router.get("/open-positions/check")
@@ -1633,6 +1677,106 @@ def portfolio_stress(equity: Optional[float] = Query(None)):
 def portfolio_corr():
     from app.core.wheel_portfolio import correlation_matrix
     return correlation_matrix()
+
+
+@router.get("/portfolio/concentration")
+def portfolio_concentration():
+    """高相关叠加 + 板块集中。"""
+    from app.core.wheel_today import concentration_warnings
+    return concentration_warnings(_wheel_cfg())
+
+
+@router.get("/events/calendar")
+def events_calendar(days: int = Query(21, ge=1, le=90)):
+    from app.core.wheel_today import event_calendar
+    return {"items": event_calendar(days)}
+
+
+@router.get("/today")
+def today_board(
+    host: str = Query("127.0.0.1"),
+    port: int = Query(11111),
+    refresh: bool = Query(True),
+):
+    """今日一页:必管 / 可开 / 资金 / 指派后 / 事件 / 相关。"""
+    from app.core.wheel_today import build_today
+    try:
+        return build_today(host, port, refresh_positions=refresh)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"今日看板失败: {e}")
+
+
+@router.get("/post-assign")
+def post_assign_list():
+    """HOLDING 待挂 CC 队列。"""
+    from app.core.wheel_post_assign import post_assign_queue
+    return {"items": post_assign_queue()}
+
+
+class ExecuteDraftIn(BaseModel):
+    kind: str = "manage"  # manage | open
+    action: Optional[str] = "auto"
+    item: Optional[Dict[str, Any]] = None  # 体检 item 或机会
+    buyback_price: Optional[float] = None
+    roll: Optional[Dict[str, Any]] = None
+    qty: Optional[float] = None
+    apply: bool = False  # true=直接记账
+
+
+@router.post("/execute/preview")
+def execute_preview(body: ExecuteDraftIn):
+    """一键执行草稿预览(不记账)。"""
+    from app.core.wheel_execute import draft_from_manage, draft_from_opportunity
+    item = body.item or {}
+    if body.kind == "open":
+        draft = draft_from_opportunity(item, qty=body.qty)
+    else:
+        draft = draft_from_manage(
+            item, action=body.action, buyback_price=body.buyback_price, roll=body.roll,
+        )
+    if not draft.get("ok"):
+        raise HTTPException(status_code=400, detail=draft.get("error") or "草稿失败")
+    return draft
+
+
+@router.post("/execute")
+def execute_apply(body: ExecuteDraftIn):
+    """预览并记账(apply 默认 true)。"""
+    from app.core.wheel_execute import (
+        draft_from_manage, draft_from_opportunity, apply_draft,
+    )
+    from app.data.wheel_repository import WheelError
+    item = body.item or {}
+    if body.kind == "open":
+        draft = draft_from_opportunity(item, qty=body.qty)
+    else:
+        draft = draft_from_manage(
+            item, action=body.action, buyback_price=body.buyback_price, roll=body.roll,
+        )
+    if not draft.get("ok"):
+        raise HTTPException(status_code=400, detail=draft.get("error") or "草稿失败")
+    if body.apply is False:
+        return {"draft": draft, "applied": False}
+    try:
+        result = apply_draft(draft)
+        return {"draft": draft, "applied": True, **result}
+    except WheelError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/scenario/position")
+def scenario_position(body: Dict[str, Any]):
+    """轻情景:现在平 vs 到期。"""
+    from app.core.wheel_attribution import position_scenario
+    item = body.get("item") or body
+    return position_scenario(item)
+
+
+@router.get("/attribution/follow-through")
+def attribution_follow_through(days: int = Query(7, ge=1, le=60)):
+    """建议 vs 实操跟进率。"""
+    from app.core.wheel_attribution import suggestion_follow_through
+    return suggestion_follow_through(days=days)
 
 
 @router.get("/admission")

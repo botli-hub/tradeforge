@@ -9,6 +9,7 @@ import {
   getWheelPoolScan, pushWheelPoolScan, WheelScanResult, WheelScanOpportunity, getBackendConfig,
   getWheelOpportunities, type WheelOpportunitiesResult, type WheelOpportunity,
   getWheelScanProgress, getWheelContractQuote, type WheelScanProgress,
+  getWheelToday, executeWheelDraft, type WheelTodayBoard,
   WheelTarget, WheelCycle, WheelTrade, WheelStats, WheelTradeType,
   WheelSuggestResponse, LeapsCandidate, LeapsSignal, VolatilityProfile,
   WheelScanStatus, WheelTimingHistoryPage, WheelTimingHistoryItem, WheelOpenPositionItem, WheelRollOptions,
@@ -1325,6 +1326,8 @@ export default function WheelPage() {
   const [budgetSource, setBudgetSource] = useState(() => getPortfolioBudgetSource())
   const [showOnboard, setShowOnboard] = useState(() => !isOnboardDone())
   const [manageCompare, setManageCompare] = useState<WheelOpenPositionItem | null>(null)
+  const [executeLoading, setExecuteLoading] = useState(false)
+  const [todayBoard, setTodayBoard] = useState<WheelTodayBoard | null>(null)
   const [expandedExplain, setExpandedExplain] = useState<string | null>(null)
   const [rowCursor, setRowCursor] = useState(0)
 
@@ -1413,7 +1416,8 @@ export default function WheelPage() {
   const loadAll = useCallback(async () => {
     setError(null)
     try {
-      const [t, s, c, tr, cand, tim, hist] = await Promise.all([
+      const st = getAppSettings()
+      const [t, s, c, tr, cand, tim, hist, today] = await Promise.all([
         getWheelTargets().catch(() => []),
         getWheelStats().catch(() => null),
         getWheelCycles().catch(() => []),
@@ -1421,8 +1425,10 @@ export default function WheelPage() {
         getWheelCandidates().catch(() => []),
         getWheelTimingSignals(20).catch(() => []),
         getWheelTimingHistory(1, 40).catch(() => null),
+        getWheelToday(st.marketHost, st.marketPort, false).catch(() => null),
       ])
       setTargets(t)
+      if (today) setTodayBoard(today)
       // 后端未带 suggested_floor 时(旧进程/失败)前端补拉,避免整列「参考 --」
       const needFloor = (t as WheelTarget[]).filter(
         x => x.suggested_floor == null || !Number.isFinite(Number(x.suggested_floor)),
@@ -2283,7 +2289,14 @@ export default function WheelPage() {
                 档位 {STRATEGY_TEMPLATES[riskTier].label}
                 {putBlocked ? ' · 行权压力高已停新 Put' : ''}
                 {opendOk === false ? ' · OpenD 离线' : ''}
+                {todayBoard?.stale ? ` · 行情缓存${todayBoard.stale_age_minutes != null ? ` ${todayBoard.stale_age_minutes}m` : ''}` : ''}
+                {todayBoard?.capital?.buying_power != null ? ` · BP $${fmt(todayBoard.capital.buying_power, 0)}` : ''}
               </div>
+              {todayBoard?.headline && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  {todayBoard.headline}
+                </div>
+              )}
             </div>
             <div className="context-actions">
               <button type="button" className="btn btn-primary"
@@ -2398,6 +2411,36 @@ export default function WheelPage() {
                 组合压力高:已暂停新开 Put
                 {serverOpps?.portfolio?.utilization_pct != null
                   && ` · 利用率 ${fmt(serverOpps.portfolio.utilization_pct, 0)}%`}
+              </div>
+            )}
+            {todayBoard?.stale && (
+              <div className="banner warn" style={{ marginBottom: 10 }}>
+                行情缓存(OpenD 弱网) · 决策可看但价格可能旧
+                {todayBoard.stale_age_minutes != null ? ` · ${todayBoard.stale_age_minutes} 分钟前` : ''}
+              </div>
+            )}
+            {(todayBoard?.concentration?.warnings?.length || 0) > 0 && (
+              <div className="banner warn" style={{ marginBottom: 10, fontSize: 13 }}>
+                集中度: {(todayBoard!.concentration!.warnings || []).slice(0, 2).join('；')}
+              </div>
+            )}
+            {(todayBoard?.events?.length || 0) > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                近事件: {(todayBoard!.events || []).slice(0, 4).map(e =>
+                  `${e.symbol} ${e.label}${e.days === 0 ? '今' : `${e.days}d`}`).join(' · ')}
+              </div>
+            )}
+            {(todayBoard?.post_assign?.length || 0) > 0 && (
+              <div className="banner info" style={{ marginBottom: 10 }}>
+                <b>指派后待挂 CC</b>
+                {(todayBoard!.post_assign || []).slice(0, 3).map((p: any) => (
+                  <div key={String(p.cycle_id)} style={{ marginTop: 4 }}>
+                    {p.symbol} {p.shares}股
+                    {p.cost_basis != null ? ` · CB≈$${p.cost_basis}` : ''}
+                    {p.uncovered_days != null ? ` · 裸奔${p.uncovered_days}天` : ''}
+                    {' · '}{p.next_step_hint || '找 Call'}
+                  </div>
+                ))}
               </div>
             )}
             <div className="home-todo">
@@ -4319,8 +4362,32 @@ export default function WheelPage() {
           serverOpps={serverOpps}
           portfolioPutBlocked={!!portfolioContext?.portfolio_put_blocked}
           rollLoading={rollLoading}
+          executeLoading={executeLoading}
           pickReplaceCandidates={pickReplaceCandidates}
           onDismiss={() => setManageCompare(null)}
+          onQuickExecute={async () => {
+            const mc = manageCompare
+            setExecuteLoading(true)
+            try {
+              const r = await executeWheelDraft({
+                kind: 'manage',
+                action: 'auto',
+                item: mc as unknown as Record<string, unknown>,
+                apply: true,
+              })
+              if (r.post_assign) {
+                flash(`已记账 · 下一步: ${(r.post_assign as any).next_step_hint || '找 CC'}`, 'success')
+              } else {
+                flash('已一键记账', 'success')
+              }
+              setManageCompare(null)
+              loadAll()
+            } catch (e: any) {
+              flash(e.message || '执行失败', 'error')
+            } finally {
+              setExecuteLoading(false)
+            }
+          }}
           onExpire={() => {
             const mc = manageCompare
             setTradeModal({

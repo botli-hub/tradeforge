@@ -983,6 +983,9 @@ export interface BackendConfig {
     scan_dedupe_hours?: number
     scan_skip_blocked_puts?: boolean
     scan_only_new?: boolean
+    scan_max_spread_pct?: number
+    scan_require_executable?: boolean
+    scan_session_mode?: 'always' | 'rth' | 'eod' | string
   }
   wheel_scan?: {
     max_spread_pct: number
@@ -1694,6 +1697,95 @@ export async function testWheelAlert(kind: 'position' | 'scan' | 'ping' = 'posit
     reason?: string
     preview?: string
   }>(`/api/wheel/alerts/test?kind=${encodeURIComponent(kind)}`, { method: 'POST' })
+}
+
+export type WheelTodayBoard = {
+  as_of: string
+  session: string
+  stale?: boolean
+  stale_age_minutes?: number | null
+  headline?: string
+  must_manage?: WheelOpenPositionItem[]
+  must_count?: number
+  primary_opens?: Array<Record<string, unknown>>
+  post_assign?: Array<Record<string, unknown>>
+  events?: Array<{ date: string; symbol: string; label: string; kind: string; days: number }>
+  concentration?: { warnings?: string[]; high_corr?: unknown[] }
+  capital?: {
+    utilization_pct?: number | null
+    idle_cash?: number | null
+    equity?: number | null
+    capital_tight?: boolean
+    portfolio_put_blocked?: boolean
+    buying_power?: number | null
+  }
+  positions_error?: string | null
+}
+
+export async function getWheelToday(host: string, port: number, refresh = true) {
+  return request<WheelTodayBoard>(
+    `/api/wheel/today?host=${encodeURIComponent(host)}&port=${port}&refresh=${refresh ? 'true' : 'false'}`,
+  )
+}
+
+export async function executeWheelDraft(body: {
+  kind?: 'manage' | 'open'
+  action?: string
+  item?: Record<string, unknown>
+  buyback_price?: number
+  roll?: Record<string, unknown>
+  qty?: number
+  apply?: boolean
+}) {
+  return request<{
+    draft?: Record<string, unknown>
+    applied?: boolean
+    ok?: boolean
+    cycle?: WheelCycle
+    post_assign?: Record<string, unknown>
+    error?: string
+  }>('/api/wheel/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function getWheelFollowThrough(days = 7) {
+  return request<{
+    follow_rate_pct?: number | null
+    suggested_n: number
+    followed_n: number
+    missed_n: number
+    off_script_n: number
+    tip?: string
+  }>(`/api/wheel/attribution/follow-through?days=${days}`)
+}
+
+export async function getWheelPostAssign() {
+  return request<{ items: Array<Record<string, unknown>> }>('/api/wheel/post-assign')
+}
+
+export async function getWheelEventCalendar(days = 21) {
+  return request<{ items: Array<Record<string, unknown>> }>(
+    `/api/wheel/events/calendar?days=${days}`,
+  )
+}
+
+export async function getWheelConcentration() {
+  return request<{
+    warnings?: string[]
+    high_corr?: unknown[]
+    csp_corr_stack?: unknown[]
+  }>('/api/wheel/portfolio/concentration')
+}
+
+export async function scenarioWheelPosition(item: Record<string, unknown>) {
+  return request<Record<string, unknown>>('/api/wheel/scenario/position', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item }),
+  })
 }
 
 export async function getLeapsSignals(symbol?: string, limit = 50) {

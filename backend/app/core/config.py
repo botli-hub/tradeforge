@@ -104,6 +104,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "scan_dedupe_hours": 12.0,
         "scan_skip_blocked_puts": True,
         "scan_only_new": True,
+        "scan_max_spread_pct": 8.0,
+        "scan_require_executable": True,
+        "scan_session_mode": "eod",  # always | rth | eod
     },
     "wheel_scan": {
         "max_spread_pct": 10.0, "spread_soft_pct": 4.0,

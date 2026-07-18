@@ -877,6 +877,29 @@ function NotificationCenter({
           <option value="0">否(每轮全推 Top)</option>
         </select>
       </div>
+      <div className="settings-row">
+        <label>机会推送会话</label>
+        <select value={alerts.scan_session_mode || 'eod'}
+          onChange={e => upAlerts('scan_session_mode', e.target.value)}>
+          <option value="eod">收盘后(推荐)</option>
+          <option value="rth">仅盘中</option>
+          <option value="always">不限</option>
+        </select>
+      </div>
+      <div className="settings-row">
+        <label>机会最大点差%</label>
+        <input type="number" step="0.5" min={0}
+          value={alerts.scan_max_spread_pct ?? 8}
+          onChange={e => upAlerts('scan_max_spread_pct', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>仅可执行机会</label>
+        <select value={alerts.scan_require_executable === false ? '0' : '1'}
+          onChange={e => upAlerts('scan_require_executable', e.target.value === '1')}>
+          <option value="1">是(点差/资金过关)</option>
+          <option value="0">否</option>
+        </select>
+      </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '12px 0 8px' }}>
         <button type="button" className="btn btn-secondary btn-sm" disabled={busy}

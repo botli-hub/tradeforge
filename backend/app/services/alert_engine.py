@@ -33,6 +33,11 @@ DEFAULT_ALERTS: Dict[str, Any] = {
     "scan_dedupe_hours": 12.0,
     "scan_skip_blocked_puts": True,
     "scan_only_new": True,
+    # 可执行阈值
+    "scan_max_spread_pct": 8.0,
+    "scan_require_executable": True,
+    # 会话: always | rth | eod — 机会推送时机
+    "scan_session_mode": "eod",  # eod=收盘后窗口推; rth=仅盘中; always=不限
 }
 
 
@@ -699,6 +704,48 @@ def process_position_alerts(
 
 # ── 开仓机会推送 ─────────────────────────────────────────────────────────────
 
+def scan_session_allows(mode: str = "eod", now: Optional[datetime] = None) -> bool:
+    """机会推送是否在允许会话窗口。
+
+    always: 总是; rth: 美股盘中; eod: 收盘后约 2h 窗口(UTC 21–23 宽松)
+    """
+    mode = (mode or "always").lower()
+    if mode == "always":
+        return True
+    try:
+        from app.core.wheel_today import us_session_phase
+        phase = us_session_phase(now)
+    except Exception:
+        phase = "open"
+    if mode == "rth":
+        return phase == "open"
+    if mode == "eod":
+        return phase in ("after", "closed")  # 收盘后+周末可推 digest
+    return True
+
+
+def _opp_executable(o: Dict[str, Any], max_spread: float) -> bool:
+    if o.get("exceeds_capital"):
+        return False
+    if o.get("portfolio_blocked") or o.get("actionable") is False:
+        return False
+    sp = o.get("spread_pct")
+    if sp is not None and max_spread > 0:
+        try:
+            if float(sp) > float(max_spread):
+                return False
+        except (TypeError, ValueError):
+            pass
+    bid = o.get("bid")
+    if bid is not None:
+        try:
+            if float(bid) <= 0:
+                return False
+        except (TypeError, ValueError):
+            pass
+    return True
+
+
 def filter_scan_opportunities(
     opps: List[Dict[str, Any]],
     *,
@@ -709,6 +756,8 @@ def filter_scan_opportunities(
     skip_blocked_puts: bool = True,
     only_new: bool = True,
     dedupe_hours: float = 12.0,
+    max_spread_pct: float = 8.0,
+    require_executable: bool = True,
     state: Optional[Dict[str, str]] = None,
     now: Optional[datetime] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -733,7 +782,8 @@ def filter_scan_opportunities(
         if min_annualized > 0 and ann < min_annualized:
             continue
         if o.get("exceeds_capital") and side == "PUT":
-            # 超资金上限的 put 降权: 仍可进列表但靠后; 这里直接跳过更干净
+            continue
+        if require_executable and not _opp_executable(o, max_spread_pct):
             continue
         filtered.append(o)
 
@@ -781,6 +831,9 @@ def process_scan_push(
     dedupe_h = float(acfg.get("scan_dedupe_hours") or 12)
     skip_puts = bool(acfg.get("scan_skip_blocked_puts", True))
     only_new = bool(acfg.get("scan_only_new", True)) and not force
+    max_spread = float(acfg.get("scan_max_spread_pct") or 8)
+    require_exec = bool(acfg.get("scan_require_executable", True))
+    session_mode = str(acfg.get("scan_session_mode") or "eod")
 
     put_blocked = False
     capital_tight = False
@@ -788,16 +841,23 @@ def process_scan_push(
         put_blocked = bool(portfolio_ctx.get("portfolio_put_blocked"))
         capital_tight = bool(portfolio_ctx.get("capital_tight"))
     else:
-        # 尽力从机会摘要读
         summary = (result or {}).get("summary") or {}
         put_blocked = bool(summary.get("portfolio_put_blocked"))
         capital_tight = bool(summary.get("capital_tight"))
+
+    if not force and not scan_session_allows(session_mode):
+        log_push(category="scan", body="(session skip)", status="skipped", reason=f"session:{session_mode}")
+        return {
+            "sent": False,
+            "reason": f"session_{session_mode}",
+            "selected": 0,
+            "put_blocked": put_blocked,
+        }
 
     q_start = int(acfg.get("quiet_hours_start") or 22)
     q_end = int(acfg.get("quiet_hours_end") or 7)
     quiet = (not force) and in_quiet_hours(_now(), q_start, q_end)
     if quiet:
-        body = format_scan_alerts([], scanned_at=result.get("scanned_at", ""))
         log_push(category="scan", body="(quiet skip)", status="skipped", reason="quiet_hours")
         return {
             "sent": False,
@@ -816,6 +876,8 @@ def process_scan_push(
         skip_blocked_puts=skip_puts,
         only_new=only_new,
         dedupe_hours=dedupe_h,
+        max_spread_pct=max_spread,
+        require_executable=require_exec,
     )
 
     if not selected:

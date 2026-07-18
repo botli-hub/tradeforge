@@ -740,6 +740,23 @@ def build_opportunities(
         ),
     )
 
+    # 相关/板块提示(轻量)
+    concentration = {}
+    try:
+        from app.core.wheel_today import concentration_warnings
+        concentration = concentration_warnings(cfg)
+        corr_syms = set()
+        for p in concentration.get("csp_corr_stack") or []:
+            if p.get("both_csp"):
+                corr_syms.add(p.get("a"))
+                corr_syms.add(p.get("b"))
+        for it in items:
+            if it.get("symbol") in corr_syms and (it.get("side") or "").upper() == "PUT":
+                it.setdefault("risk_soft", []).append("与在场 Put 高相关,注意集中度")
+                it["high_corr_warn"] = "高相关叠加"
+    except Exception:
+        pass
+
     return {
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "headline": headline,
@@ -761,6 +778,7 @@ def build_opportunities(
         "items": items,
         "actionable_items": actionable,
         "pool": pool_meta,
+        "concentration": concentration,
         "rules": {
             "actionable": "无硬红线(超资金/Put财报/组合压力) 且 (双满足 | 触线READY/STRONG | 纯高分≥阈值)",
             "dual": "触线历史/信号 与 全池扫描合约匹配",
