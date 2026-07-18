@@ -140,6 +140,17 @@ function fmt(v: number | null | undefined, digits = 2) {
   return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
+/** 智能参考愿接价展示(相对当前愿接价的差) */
+function fmtSuggestedFloor(t: { suggested_floor?: number | null; suggested_floor_delta?: number | null }) {
+  if (t.suggested_floor == null || Number.isNaN(t.suggested_floor)) return null
+  const d = t.suggested_floor_delta
+  const dTxt = d == null || Number.isNaN(d) ? ''
+    : d > 0 ? ` (+${fmt(d, d < 1 ? 2 : 1)})`
+      : d < 0 ? ` (${fmt(d, Math.abs(d) < 1 ? 2 : 1)})`
+        : ' (±0)'
+  return { price: t.suggested_floor, deltaTxt: dTxt, delta: d }
+}
+
 // ── 颜色语义:绿=收益/安全 橙=注意 红=风险 蓝=信息 紫=中性标记 ──────────────────
 const C = { green: '#4ade80', orange: '#fb923c', red: '#f87171', blue: '#38bdf8', purple: '#a78bfa' } as const
 type SemColor = keyof typeof C
@@ -2822,6 +2833,25 @@ export default function WheelPage() {
                               权利金 ${fmtMoney(premiumBySymbol[t.symbol] || 0)}
                             </span>
                           </div>
+                          {(() => {
+                            const sf = fmtSuggestedFloor(t)
+                            if (!sf) return (
+                              <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 1 }}>
+                                愿接 ${fmt(t.floor_price)} · 参考 --
+                              </div>
+                            )
+                            const dColor = sf.delta == null ? 'var(--text-secondary)'
+                              : Math.abs(sf.delta) < 0.5 ? 'var(--text-secondary)'
+                                : sf.delta > 0 ? C.orange : C.blue
+                            return (
+                              <div style={{ fontSize: 10, marginTop: 1, color: 'var(--text-secondary)' }}
+                                title="智能参考愿接价(市场结构,非自动写入)">
+                                愿接 ${fmt(t.floor_price)}
+                                {' · 参考 '}
+                                <span style={{ color: dColor, fontWeight: 600 }}>${fmt(sf.price)}{sf.deltaTxt}</span>
+                              </div>
+                            )
+                          })()}
                         </div>
                         <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
                           {cs.length === 0 ? (
@@ -2864,6 +2894,21 @@ export default function WheelPage() {
                             <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
                               title="愿接最高价:被指派时最多愿付的股价;Put strike必须≤此价;Call用成本底线">
                               愿接 <b style={{ color: 'var(--text)' }}>${fmt(sel.floor_price)}</b>
+                              {(() => {
+                                const sf = fmtSuggestedFloor(sel)
+                                if (!sf) return <> · 参考 --</>
+                                const dColor = sf.delta == null ? 'var(--text-secondary)'
+                                  : Math.abs(sf.delta) < 0.5 ? 'var(--text-secondary)'
+                                    : sf.delta > 0 ? C.orange : C.blue
+                                return (
+                                  <>
+                                    {' · 参考 '}
+                                    <b style={{ color: dColor }} title="智能参考愿接价(市场结构)">
+                                      ${fmt(sf.price)}{sf.deltaTxt}
+                                    </b>
+                                  </>
+                                )
+                              })()}
                               {' · '}Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
                               {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
                               {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
@@ -4062,13 +4107,15 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '愿接价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
-                  <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}>{h}</th>
+                {['标的', '愿接价', '智能参考愿接价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
+                    title={h === '智能参考愿接价' ? '市场结构参考(EMA/低点/ATR),不自动写库' : undefined}
+                  >{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {targets.length === 0 && <tr><td colSpan={8} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
+              {targets.length === 0 && <tr><td colSpan={9} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
               {targets.map(t => (
                 <TargetRow key={t.symbol} target={t} onSaved={loadAll}
                   onToggle={() => handleToggleTarget(t)} onDelete={() => handleDeleteTarget(t.symbol)} />
@@ -4922,6 +4969,10 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
   }
 
   if (!editing) {
+    const sf = fmtSuggestedFloor(target)
+    const dColor = sf?.delta == null ? 'var(--text)'
+      : Math.abs(sf.delta) < 0.5 ? 'var(--text-secondary)'
+        : sf.delta > 0 ? C.orange : C.blue
     return (
       <tr style={{ borderBottom: '1px solid var(--border)' }}>
         <td style={{ padding: '8px 10px' }}>
@@ -4930,6 +4981,10 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
         </td>
         <td style={{ padding: '8px 10px' }} title="愿接最高价(Put strike上限)">
           ${fmt(target.floor_price)}
+        </td>
+        <td style={{ padding: '8px 10px', color: dColor }}
+          title="智能参考愿接价(市场结构,非自动写入);括号为相对当前愿接价的差">
+          {sf ? `$${fmt(sf.price)}${sf.deltaTxt}` : '--'}
         </td>
         <td style={{ padding: '8px 10px' }}>{target.delta_min} ~ {target.delta_max}</td>
         <td style={{ padding: '8px 10px' }}>{target.dte_min} ~ {target.dte_max} 天</td>
@@ -4956,6 +5011,10 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
         <input type="number" step="any" style={inputStyle} value={form.floor_price}
           onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
           title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
+      </td>
+      <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-secondary)' }}
+        title="智能参考愿接价(只读)">
+        {target.suggested_floor != null ? `$${fmt(target.suggested_floor)}` : '--'}
       </td>
       <td style={{ padding: '8px 10px' }}>
         <SelectNum value={form.delta_min} options={DELTA_OPTS} style={inputStyle}

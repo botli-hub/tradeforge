@@ -495,6 +495,11 @@ export interface WheelTarget {
   name: string
   market: string
   floor_price: number
+  /** 智能参考愿接价(市场结构,不自动写库) */
+  suggested_floor?: number | null
+  /** suggested_floor - floor_price */
+  suggested_floor_delta?: number | null
+  suggested_floor_spot?: number | null
   max_capital: number
   delta_min: number
   delta_max: number

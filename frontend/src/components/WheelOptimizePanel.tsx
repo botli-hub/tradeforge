@@ -385,7 +385,9 @@ export default function WheelOptimizePanel() {
           <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
-                <th>标的</th><th>分</th><th>建议</th><th>激进度</th><th>标签</th><th>操作</th>
+                <th>标的</th><th>分</th><th>建议</th><th>激进度</th>
+                <th title="市场结构参考愿接价">参考愿接</th>
+                <th>标签</th><th>操作</th>
               </tr>
             </thead>
             <tbody>

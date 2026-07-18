@@ -186,15 +186,18 @@ def score_symbol(symbol: str) -> Dict[str, Any]:
 
     # 与智能建议偏离(可选轻标签,不重罚)
     suggest_delta_pct = None
+    suggested_floor = None
     try:
         from app.core.wheel_floor import suggest_floor
-        if spot and floor_px:
+        if spot:
             sug = suggest_floor(symbol, spot, floor_px, ivr)
             sf = sug.get("suggested_floor")
-            if sf and floor_px:
-                suggest_delta_pct = round((floor_px - sf) / spot * 100, 1)
-                if abs(suggest_delta_pct) >= 8:
-                    tags.append(f"愿接与市场结构参考偏离{suggest_delta_pct:+.0f}%spot")
+            if sf is not None:
+                suggested_floor = float(sf)
+                if floor_px and spot:
+                    suggest_delta_pct = round((floor_px - sf) / spot * 100, 1)
+                    if abs(suggest_delta_pct) >= 8:
+                        tags.append(f"愿接与市场结构参考偏离{suggest_delta_pct:+.0f}%spot")
     except Exception:
         pass
 
@@ -239,6 +242,7 @@ def score_symbol(symbol: str) -> Dict[str, Any]:
             "realized_pnl": round(realized, 2),
             "kline_days": len(closes),
             "floor_price": floor_px,
+            "suggested_floor": suggested_floor,
             "floor_spot_ratio": fs["floor_spot_ratio"],
             "suggest_delta_pct_spot": suggest_delta_pct,
             "enabled": bool((target or {}).get("enabled", True)),

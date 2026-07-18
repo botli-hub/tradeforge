@@ -24,8 +24,11 @@ def _wheel_cfg() -> Dict[str, Any]:
 @router.get("/targets")
 def list_targets():
     from datetime import datetime
+    from app.core.wheel_floor import suggest_floor
+    from app.core.volatility import brief_profile
+
     targets = repo.get_targets()
-    # 附带全部活跃 cycle(支持同标的多轮并行) + 空转天数
+    # 附带全部活跃 cycle(支持同标的多轮并行) + 空转天数 + 智能参考愿接价
     for t in targets:
         cycles = repo.get_active_cycles(t["symbol"])
         t["active_cycles"] = cycles
@@ -39,11 +42,33 @@ def list_targets():
             except Exception:
                 idle_days = None
         t["idle_days"] = idle_days
+        vol = None
         try:
-            from app.core.volatility import brief_profile
-            t["volatility_brief"] = brief_profile(t["symbol"])
+            vol = brief_profile(t["symbol"])
+            t["volatility_brief"] = vol
         except Exception:
             t["volatility_brief"] = None
+            vol = None
+        # 智能参考愿接价(市场结构,不自动写库)
+        t["suggested_floor"] = None
+        t["suggested_floor_delta"] = None
+        t["suggested_floor_spot"] = None
+        try:
+            sug = suggest_floor(
+                t["symbol"],
+                None,
+                t.get("floor_price"),
+                (vol or {}).get("iv_rank"),
+            )
+            sf = sug.get("suggested_floor")
+            if sf is not None:
+                t["suggested_floor"] = float(sf)
+                t["suggested_floor_spot"] = sug.get("spot")
+                cur = t.get("floor_price")
+                if cur is not None:
+                    t["suggested_floor_delta"] = round(float(sf) - float(cur), 2)
+        except Exception as e:
+            logger.debug("suggested_floor %s: %s", t.get("symbol"), e)
     return targets
 
 
