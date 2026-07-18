@@ -386,6 +386,7 @@ export default function WheelOptimizePanel() {
             <thead>
               <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
                 <th>标的</th><th>分</th><th>建议</th><th>激进度</th>
+                <th title="现价(本地日K)">现价</th>
                 <th title="市场结构参考愿接价">参考愿接</th>
                 <th>标签</th><th>操作</th>
               </tr>
@@ -415,6 +416,9 @@ export default function WheelOptimizePanel() {
                         : r.aggressiveness === '保守' || r.aggressiveness === '偏保守' ? C.blue
                           : 'var(--text-secondary)',
                     }}>{r.aggressiveness || '--'}</td>
+                    <td style={{ fontWeight: 600 }} title="现价">
+                      {r.metrics?.spot != null ? `$${fmt(r.metrics.spot)}` : '--'}
+                    </td>
                     <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}
                       title="智能参考愿接价(不自动写库)">
                       {r.metrics?.suggested_floor != null
@@ -424,7 +428,7 @@ export default function WheelOptimizePanel() {
                         <span style={{ opacity: 0.7 }}> / 现设 ${fmt(r.metrics.floor_price)}</span>
                       )}
                     </td>
-                    <td style={{ color: 'var(--text-secondary)', maxWidth: 180 }}>{(r.tags || []).join(' · ')}</td>
+                    <td style={{ color: 'var(--text-secondary)', maxWidth: 160 }}>{(r.tags || []).join(' · ')}</td>
                     <td>
                       <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }}
                         title="市场结构参考,需确认后写入"
@@ -433,7 +437,7 @@ export default function WheelOptimizePanel() {
                   </tr>
                   {admissionExpand === r.symbol && (
                     <tr>
-                      <td colSpan={7} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 11 }}>
+                      <td colSpan={8} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 11 }}>
                         <div style={{ marginBottom: 4, color: 'var(--text-secondary)' }}>
                           主分=趋势/波动/IV/历史/数据 · floor 仅轻提示 · 点标的展开
                         </div>
@@ -455,9 +459,9 @@ export default function WheelOptimizePanel() {
                           })}
                         </div>
                         <div style={{ marginTop: 6, opacity: 0.9 }}>
-                          愿接 ${r.metrics?.floor_price ?? '--'}
+                          现价 ${r.metrics?.spot != null ? fmt(r.metrics.spot) : '--'}
+                          {' · 愿接 $'}{r.metrics?.floor_price ?? '--'}
                           {r.metrics?.suggested_floor != null && ` · 智能参考 $${fmt(r.metrics.suggested_floor)}`}
-                          {r.metrics?.spot != null && ` · 现价 $${Number(r.metrics.spot).toFixed(2)}`}
                           {r.metrics?.floor_spot_ratio != null && ` · floor/spot=${r.metrics.floor_spot_ratio}`}
                         </div>
                       </td>

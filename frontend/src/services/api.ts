@@ -495,6 +495,8 @@ export interface WheelTarget {
   name: string
   market: string
   floor_price: number
+  /** 现价(本地日K最后收盘) */
+  spot?: number | null
   /** 智能参考愿接价(市场结构,不自动写库) */
   suggested_floor?: number | null
   /** suggested_floor - floor_price */

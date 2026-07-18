@@ -1490,6 +1490,7 @@ export default function WheelPage() {
                   : (f.delta_vs_current ?? null),
                 suggested_floor_spot: f.spot ?? null,
                 suggested_floor_note: f.rationale || null,
+                spot: row.spot ?? (f.spot != null ? Number(f.spot) : null),
               }
             } catch {
               return null
@@ -2870,7 +2871,10 @@ export default function WheelPage() {
                             {isIdle && <span title={`空转 ${t.idle_days} 天`} style={{ fontSize: 11 }}>⏸</span>}
                           </div>
                           <div style={{ fontSize: 10, marginTop: 1 }}>
-                            <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)' }}>
+                            <span style={{ color: 'var(--text)', fontWeight: 600 }} title="现价(本地日K收盘)">
+                              现价 ${t.spot != null ? fmt(t.spot) : '--'}
+                            </span>
+                            <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)', marginLeft: 8 }}>
                               占用 ${fmtMoney(targetCapital(cs))}
                               {(t.max_capital ?? 0) > 0 && <span style={{ color: 'var(--text-secondary)' }}>/{fmtMoney(t.max_capital)}</span>}
                             </span>
@@ -2920,6 +2924,9 @@ export default function WheelPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 700, fontSize: 17 }}>{sel.symbol}</span>
+                        <span style={{ fontSize: 14, color: 'var(--text)' }} title="现价(本地日K收盘)">
+                          ${sel.spot != null ? fmt(sel.spot) : '--'}
+                        </span>
                         {sel.volatility_brief && (sel.volatility_brief.atm_iv != null || sel.volatility_brief.hv20 != null) && (
                           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
                             title={`预期IV:最近一次ATM隐含波动率快照(${sel.volatility_brief.iv_date || '--'});实际IV:20日历史波动率;IVR:IV在自身252日历史中的百分位${sel.volatility_brief.iv_rank_source === 'hv_proxy' ? '(IV历史不足,HV近似)' : ''}`}>
@@ -4152,15 +4159,19 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '愿接价', '智能参考愿接价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '现价', '愿接价', '智能参考愿接价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
-                    title={h === '智能参考愿接价' ? '市场结构参考(EMA/低点/ATR),不自动写库' : undefined}
+                    title={
+                      h === '智能参考愿接价' ? '市场结构参考(EMA/低点/ATR),不自动写库'
+                        : h === '现价' ? '本地日K最后收盘价'
+                          : undefined
+                    }
                   >{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {targets.length === 0 && <tr><td colSpan={9} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
+              {targets.length === 0 && <tr><td colSpan={10} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
               {targets.map(t => (
                 <TargetRow key={t.symbol} target={t} onSaved={loadAll}
                   onToggle={() => handleToggleTarget(t)} onDelete={() => handleDeleteTarget(t.symbol)} />
@@ -5024,6 +5035,9 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
           <span style={{ fontWeight: 600 }}>{target.symbol}</span>
           <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 6 }}>{target.name}</span>
         </td>
+        <td style={{ padding: '8px 10px', fontWeight: 600 }} title="现价(本地日K收盘)">
+          {target.spot != null ? `$${fmt(target.spot)}` : '--'}
+        </td>
         <td style={{ padding: '8px 10px' }} title="愿接最高价(Put strike上限)">
           ${fmt(target.floor_price)}
         </td>
@@ -5052,6 +5066,9 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
   return (
     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
       <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 11 }}>{err}</div>}</td>
+      <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-secondary)' }} title="现价(只读)">
+        {target.spot != null ? `$${fmt(target.spot)}` : '--'}
+      </td>
       <td style={{ padding: '8px 10px' }}>
         <input type="number" step="any" style={inputStyle} value={form.floor_price}
           onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}

@@ -27,8 +27,10 @@ def list_targets():
     from app.core.wheel_floor import suggest_floor
     from app.core.volatility import brief_profile
 
+    from app.core.volatility import get_daily_closes
+
     targets = repo.get_targets()
-    # 附带全部活跃 cycle(支持同标的多轮并行) + 空转天数 + 智能参考愿接价
+    # 附带全部活跃 cycle(支持同标的多轮并行) + 空转天数 + 现价 + 智能参考愿接价
     for t in targets:
         cycles = repo.get_active_cycles(t["symbol"])
         t["active_cycles"] = cycles
@@ -49,34 +51,36 @@ def list_targets():
         except Exception:
             t["volatility_brief"] = None
             vol = None
+        # 现价:日K最后收盘(本地库,不打 OpenD)
+        spot = None
+        try:
+            closes = get_daily_closes(t["symbol"], limit=5)
+            if closes:
+                spot = float(closes[-1])
+        except Exception:
+            spot = None
+        t["spot"] = round(spot, 2) if spot and spot > 0 else None
         # 智能参考愿接价(市场结构,不自动写库)
         t["suggested_floor"] = None
         t["suggested_floor_delta"] = None
         t["suggested_floor_spot"] = None
         t["suggested_floor_note"] = None
         try:
-            # spot 优先用 vol 档案里的现价(若有),否则 suggest 内部用日K
-            spot_hint = None
-            if vol:
-                for k in ("last", "spot", "underlying_price", "close"):
-                    try:
-                        v = vol.get(k) if isinstance(vol, dict) else None
-                        if v is not None and float(v) > 0:
-                            spot_hint = float(v)
-                            break
-                    except (TypeError, ValueError):
-                        pass
             sug = suggest_floor(
                 t["symbol"],
-                spot_hint,
+                spot,
                 t.get("floor_price"),
                 (vol or {}).get("iv_rank") if isinstance(vol, dict) else None,
             )
             sf = sug.get("suggested_floor")
             t["suggested_floor_note"] = sug.get("message")
+            sug_spot = sug.get("spot")
+            if sug_spot is not None and float(sug_spot) > 0:
+                t["suggested_floor_spot"] = round(float(sug_spot), 2)
+                if t["spot"] is None:
+                    t["spot"] = t["suggested_floor_spot"]
             if sf is not None and float(sf) > 0:
                 t["suggested_floor"] = round(float(sf), 2)
-                t["suggested_floor_spot"] = sug.get("spot")
                 cur = t.get("floor_price")
                 if cur is not None and float(cur) > 0:
                     t["suggested_floor_delta"] = round(float(sf) - float(cur), 2)
