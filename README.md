@@ -1,96 +1,117 @@
 # TradeForge
 
-TradeForge 是一个面向多市场的量化交易工作台，当前已经打通：
+面向 **Wheel 策略交易员** 的本地工作台：开仓机会 → 持仓决策 → 登记台账 → Telegram 提醒。  
+同时保留行情 / 策略 / 回测等研究工具（「研究」模式）。
 
-- **行情**：美股 / A股 / 港股
-- **策略**：可视化策略 + Formula DSL
-- **信号**：实时策略信号评估 + 确认弹窗
-- **交易**：Mock / Futu
-- **期权**：Futu 期权链 + 收益曲线
-- **历史数据**：本地 SQLite 落库 + 每天 08:00 定时更新
+默认本机运行，数据落本地 SQLite，**不提交 git**。
 
 ---
 
-## 当前能力
+## 产品形态
 
-### 1. 行情页
-- 搜索股票
-- 查看实时 quote
-- 查看 K 线
-- 自动显示当前 **报价源 / K线源**
-- 观察池管理（关注 / 取消关注 / 快速切换）
+| 模式 | 导航 | 用途 |
+|------|------|------|
+| **Wheel（交易）** | 今日 · 设置 | 日常管仓、扫机会、记账、推送 |
+| **研究** | 行情 · 期权 · 策略 · 回测 · 股票池 · 数据 · LEAPS · 订单 · 持仓 · 2032 · 设置 | 研究与辅助 |
 
-### 2. 策略与信号
-- 策略列表 / 保存 / 更新
-- Formula 策略验证 / parse / transpile
-- 实时信号评估
-- 信号确认弹窗 → 下单
+前端顶栏可切换模式。
 
-### 3. 订单 / 持仓
-- 订单页
-- 持仓页
-- 账户资金概览
+---
 
-### 4. 期权页
-- 固定走 **Futu**
-- 到期日
-- 期权链
-- Greeks（Delta / Gamma / Theta / Vega / IV）
-- 组合策略收益图
-  - Long Call
-  - Long Put
-  - Bull Call Spread
-  - Bear Put Spread
+## 核心能力（Wheel）
 
-### 5. 历史数据系统
-- 本地数据库落地历史 K 线
-- local-first 读取
-- 历史数据页管理
-- 手动 backfill
-- 订阅列表
-- 每天 **08:00** 自动更新：
-  - `1d`
-  - `1h`
-  - `30m`
-  - `5m`
-  - `1m`
+### 今日一页
+- **必须处理**：深 ITM / 临期接货 / 止盈 / Roll 等（来自体检决策树）
+- **优先开仓**：高分扫描 ∩ 触线时机，可执行过滤
+- **资金**：组合占用、是否停新 Put、可选交易账户购买力
+- **指派后**：HOLDING 待挂 CC、成本基础
+- **事件 / 集中度**：财报与封锁日、高相关双 Put 提示
+- OpenD 弱网时可用**行情缓存**（标 stale）
+
+### 持仓决策树（量化）
+对在场 CSP/CC 给出 `action_code` + 优先级 + 置信度 + 带数字的理由：
+
+| 动作 | 含义 |
+|------|------|
+| `CLOSE` | 买回止盈 / 纪律否决后不硬扛 |
+| `REPLACE` | 软止盈或低效 → 腾仓 |
+| `ROLL` / `ROLL_ADJUST` | 展期（后者调 strike） |
+| `HOLD_THETA` | 高浮盈 OTM 继续收租 |
+| `PREPARE_ASSIGN` | 临期 ITM 准备接货/交货 |
+| `NONE` | 观察 / 条件持有 |
+
+默认阈值（可在设置 `wheel_position` 覆盖）包括：硬止盈 50%、软止盈 30%、过高持有 80%、吃 θ 40%/14DTE/年化 12%、硬处理窗 21DTE、临期 7DTE、深 ITM 3% 或 Δ0.5、薄垫 1.5%、资金紧利用率 75%、Put **strike ≤ 愿接价 floor** 等。
+
+轮子列表 **平仓 / 管理** → 先开**决策弹窗**，再决定登记（与机会列表一致）。
+
+### 机会流
+- **触线时机**：期权价穿 EMA50/200
+- **全池高分扫描**：年化 × 流动性 × 趋势 × 财报 × IV × POP 等
+- 统一机会流：双轨对齐、档位（优先/可排/观察）、组合闸门
+
+### 台账与执行
+- 状态机：`IDLE → CSP → HOLDING → CC → CLOSED`
+- 一键执行草稿（买回 / 到期 / 接货 / Roll 两腿）
+- Roll 对比与登记
+- 建议 vs 实操跟进率、轻量情景（平 vs 到期）
+
+### 推送（Telegram）
+- 持仓：状态指纹变化才推；冷却 / 静默 / 紧急破静默
+- 机会：TopN、点差与可执行过滤、会话（默认收盘后）、组合停 Put 时不推 Put
+- 设置页 **通知中心**：预览、测试、推送日志
+
+### 组合与风控
+- 组合净值、单票/组合占用上限
+- 行权压力 → 暂停新 Put
+- 相关矩阵与板块集中度
+
+---
+
+## 研究模式能力（摘要）
+
+| 模块 | 能力 |
+|------|------|
+| 行情 | 搜索、quote、K 线、观察池 |
+| 期权 | Futu 链、Greeks、收益图 |
+| 策略 / Formula | 可视化 + DSL 校验/转译、信号评估 |
+| 回测 | 策略回测；Wheel 规则轻回测 |
+| 历史数据 | 本地 K 线、补数、订阅、定时调度 |
+| 交易 | Mock / Futu 下单与账户（需连接） |
+| LEAPS | 监控、触线、信号推送 |
+| 2032 | 长期持仓计划 |
 
 ---
 
 ## 技术栈
 
-### 前端
-- React 18
-- TypeScript
-- Vite
-- lightweight-charts
-
-### 后端
-- FastAPI
-- SQLite
-- Pandas / NumPy
-- futu-api
+- **前端**：React 18 · TypeScript · Vite · lightweight-charts（端口 **1420**）
+- **后端**：FastAPI · SQLite · futu-api · httpx · pandas（端口 **8000**）
+- **行情 / 期权**：富途 OpenD；美股 quote 可走 Finnhub；历史 K 线 local-first（Yahoo/Futu 补数）
 
 ---
 
 ## 项目结构
 
 ```text
-tradeforge/
+trade/
 ├── backend/
 │   ├── app/
-│   │   ├── api/                 # 接口层
-│   │   ├── core/                # 策略/信号/Formula/配置
-│   │   ├── data/                # 行情适配器、本地历史库、调度器
+│   │   ├── api/           # wheel / market / leaps / trading / ...
+│   │   ├── core/          # 决策树、机会、打分、组合、推送相关逻辑
+│   │   ├── data/          # SQLite、wheel_repository、历史库
+│   │   ├── services/      # alert_engine、scanner、Telegram
+│   │   ├── tradeforge.db  # 本地库（gitignore，勿提交）
 │   │   └── main.py
 │   ├── tests/
-│   ├── .env.example
 │   ├── requirements.txt
 │   └── run.py
 ├── frontend/
-│   ├── src/pages/               # 页面：行情/策略/回测/期权/历史数据
-│   ├── src/services/api.ts
-│   └── package.json
+│   └── src/
+│       ├── pages/         # WheelPage、Settings、Market...
+│       ├── components/wheel/
+│       └── services/api.ts
+├── scripts/health_guard.py
+├── 启动后端.command / 启动前端.command   # macOS 双击启动
 └── README.md
 ```
 
@@ -98,35 +119,28 @@ tradeforge/
 
 ## 快速启动
 
-### 一、后端
+### 依赖
+- Python **≥ 3.10**
+- Node.js（前端）
+- 本机 **富途 OpenD**（期权链、部分行情、体检；默认 `127.0.0.1:11111`）
+
+### 后端
 
 ```bash
 cd backend
-cp .env.example .env
-```
-
-编辑 `backend/.env`，填写你本地需要的配置：
-
-```bash
-FINNHUB_API_KEY=your_finnhub_api_key_here
-FUTU_OPEND_HOST=127.0.0.1
-FUTU_OPEND_PORT=11111
-```
-
-安装依赖并启动：
-
-```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python run.py
 ```
 
-启动后：
-- API 文档：<http://127.0.0.1:8000/docs>
-- 健康检查：<http://127.0.0.1:8000/health>
+- API：http://127.0.0.1:8000  
+- 文档：http://127.0.0.1:8000/docs  
+- 健康：http://127.0.0.1:8000/health  
 
----
+macOS 也可双击仓库根目录 **`启动后端.command`**。
 
-### 二、前端
+### 前端
 
 ```bash
 cd frontend
@@ -134,207 +148,96 @@ npm install
 npm run dev -- --host 127.0.0.1
 ```
 
-前端地址：
-- <http://127.0.0.1:1420>
+- 页面：http://127.0.0.1:1420  
 
-打包：
+或双击 **`启动前端.command`**。
 
-```bash
-npm run build
-```
+### 建议首次配置顺序
+
+1. 设置 → **通用**：OpenD Host/Port、Telegram（可选代理）  
+2. 设置 → **Wheel**：组合净值、标的愿接价在 Wheel→标的页维护  
+3. 通知中心：管仓轮询分钟数、机会推送策略；点「测试连通」  
+4. 今日页：扫机会 / 处理待办  
+
+配置默认写在 **本地数据库**（设置页保存即生效），不是靠提交仓库里的密钥。
 
 ---
 
-## 健康守护 / 自愈重启
+## 数据存储
 
-当你怀疑出现“端口还在，但服务已经卡死”的情况，可以直接运行：
+| 内容 | 位置 | 是否进 git |
+|------|------|------------|
+| 业务主库 | `backend/app/tradeforge.db` | **否**（`*.db` ignore） |
+| 密钥/配置覆盖 | 库内 `app_kv` + 可选 `backend/.env` | `.env` **否** |
+| 前端偏好 / 待登记队列 | 浏览器 localStorage | 否 |
+| 实时行情 | OpenD / 外部 API | 不落主业务逻辑密钥 |
 
-```bash
-cd /Users/alibot/.openclaw/workspace/forge/projects/tradeforge
-python3 scripts/health_guard.py ensure
-```
+换机请自行备份 **`tradeforge.db`**。
 
-常用命令：
-
-```bash
-# 查看当前健康状态
-python3 scripts/health_guard.py status
-
-# 发现异常时自动重启前后端
-python3 scripts/health_guard.py ensure
-
-# 强制重启前后端
-python3 scripts/health_guard.py restart
-```
-
-脚本会真正探活这些接口，而不是只看端口：
-- `/health`
-- `/api/strategies`
-- `/api/history/subscriptions`
-
-日志位置：
-- `./.runtime/backend-dev.log`
-- `./.runtime/frontend-dev.log`
+库内主要包括：Wheel 标的/轮子/交易、配置、推送日志、建议快照、LEAPS、K 线历史等。
 
 ---
 
 ## 配置原则
 
-### 敏感配置只从本地读取
-项目中**不要硬编码密钥**。
-
-当前统一通过：
-- 系统环境变量
-- `backend/.env`
-
-读取配置。
-
-### 可提交模板
-可提交文件：
-- `backend/.env.example`
-
-不可提交文件：
-- `backend/.env`
+1. **密钥不进仓库**：Telegram Token、Finnhub Key 等只存在本机库或 `.env`  
+2. **业务参数**：设置页 `wheel_position` / `wheel_scan` / `wheel_alerts` / `wheel_portfolio`  
+3. **标的级**：愿接价 floor、min_annualized、max_capital、delta/DTE 区间  
 
 ---
 
-## 数据源路由
+## 常用 API（Wheel）
 
-当前数据链路如下：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/wheel/today` | 今日聚合看板 |
+| GET | `/api/wheel/open-positions/check` | 在场体检 + 决策 |
+| GET | `/api/wheel/opportunities` | 统一机会流 |
+| GET | `/api/wheel/scan` | 全池高分扫描 |
+| POST | `/api/wheel/execute` | 一键记账草稿 |
+| POST | `/api/wheel/roll/register` | Roll 两腿登记 |
+| GET | `/api/wheel/alerts/log` | 推送日志 |
+| POST | `/api/wheel/alerts/push` | 手动推持仓 |
+| GET | `/api/config/backend` | 读生效配置 |
+| PUT | `/api/config/backend` | 写配置 |
 
-### 行情 quote
-- **美股** → Finnhub
-- **A股 / 港股** → Futu
-- **兜底** → Mock
-
-### 历史 K 线
-- **统一 local-first**
-- 本地没有时自动补数：
-  - **美股** → Yahoo
-  - **A股 / 港股** → Futu
-
-### 期权
-- **固定走 Futu**
-- 包括：
-  - 到期日
-  - 期权链
-  - 快照
-  - Greeks
-
-### 交易
-- **Mock / Futu**
+完整列表见 http://127.0.0.1:8000/docs 。
 
 ---
 
-## 历史数据模块
+## 测试
 
-### local-first 逻辑
-`/api/market/klines` 当前不是直接打外部源，而是：
-
-```text
-先查本地 SQLite
-→ 不足则自动补数
-→ 写回本地
-→ 从本地返回
+```bash
+cd backend
+source .venv/bin/activate
+# 无 pytest 时可直接跑：
+python -c "import tests.test_wheel_decision as t; [getattr(t,n)() for n in dir(t) if n.startswith('test_')]"
 ```
 
-### 核心表
-- `instruments`
-- `kline_bars`
-- `kline_sync_state`
-- `kline_backfill_jobs`
-- `data_subscriptions`
-- `history_scheduler_runs`
-
-### 定时任务
-每天 **08:00** 自动更新所有订阅标的的：
-- `1d`
-- `1h`
-- `30m`
-- `5m`
-- `1m`
-
-可以在“历史数据”页：
-- 查看订阅列表
-- 手动执行调度
-- 查看补数任务
-- 查看 coverage
+主要单测：`tests/test_wheel_decision.py` · `test_alert_engine.py` · `test_wheel_trader_flow.py` · `test_wheel_score.py`。
 
 ---
 
-## 主要页面
+## 健康守护（可选）
 
-- `📊 行情`
-- `📈 策略`
-- `🎯 回测`
-- `🧩 期权`
-- `🧾 订单`
-- `💼 持仓`
-- `🗄️ 历史数据`
-- `⚙️ 设置`
+```bash
+python3 scripts/health_guard.py status
+python3 scripts/health_guard.py ensure   # 异常时重启前后端
+```
 
----
-
-## 常用后端接口
-
-### 行情
-- `GET /api/market/status`
-- `GET /api/market/search`
-- `GET /api/market/quote`
-- `GET /api/market/klines`
-
-### 策略 / 信号
-- `GET /api/strategies`
-- `POST /api/strategies`
-- `GET /api/strategies/{id}/signal`
-- `POST /api/formula/validate`
-- `POST /api/formula/parse`
-- `POST /api/formula/transpile`
-
-### 交易
-- `POST /api/trading/connect`
-- `GET /api/trading/status`
-- `POST /api/trading/order`
-- `GET /api/trading/orders`
-- `GET /api/trading/positions`
-- `GET /api/trading/account`
-
-### 期权
-- `GET /api/options/expirations`
-- `GET /api/options/chain`
-- `POST /api/options/payoff`
-
-### 历史数据
-- `GET /api/history/coverage`
-- `GET /api/history/jobs`
-- `POST /api/history/backfill`
-- `GET /api/history/subscriptions`
-- `POST /api/history/subscriptions`
-- `POST /api/history/subscriptions/{symbol}/enable`
-- `GET /api/history/scheduler/status`
-- `POST /api/history/scheduler/run`
-
----
-
-## 当前开发状态
-
-当前已经完成：
-- 多市场行情路由
-- Futu 真实期权链
-- 本地历史 K 线库
-- 每日定时更新
-- Git 仓库初始化与首次推送
-
-后续建议优先级：
-1. 回测 / 实时信号进一步统一到本地历史库
-2. 观察池 / 策略 / 历史订阅更深度联动
-3. 期权页标的现价来源精修
+会探活 `/health` 等，而非只看端口。
 
 ---
 
 ## 注意
 
-- `backend/.env` 是本地文件，不提交。
-- Futu 需要本机 OpenD 运行。
-- Finnhub 当前用于美股 quote；若 K 线权限不足，会由历史模块自动走 Yahoo 补数。
-- 期权页固定依赖 Futu。
+- 期权与在场体检强依赖 **OpenD 已登录运行**  
+- 中国大陆访问 Telegram 需在设置中填本地代理  
+- 本项目是**决策与台账工具**，默认不自动向券商下单；实盘下单需自行连接交易并确认  
+- 旧版 PRD/TECH 文档可能滞后，**以本 README 与代码为准**
+
+---
+
+## 许可
+
+见 [LICENSE](./LICENSE)。
