@@ -3185,7 +3185,15 @@ export default function WheelPage() {
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'call', c.id)}>找 Call</button>
                           )}
                           {hasOpen && check?.profit_hit && (
-                            <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              style={{
+                                width: '100%', fontWeight: 700, fontSize: 13,
+                                background: 'var(--green-dim)',
+                                color: 'var(--green)',
+                                border: '1px solid var(--green)',
+                              }}
                               title="先看决策建议,再决定是否登记"
                               onClick={() => {
                                 // 与机会列表一致:先决策弹窗,再在弹窗内登记买回
@@ -3204,23 +3212,33 @@ export default function WheelPage() {
                                   status, cycleId: c.id,
                                 })
                               }}>
-                              💰 平仓
+                              平仓
                             </button>
                           )}
                           {hasOpen && check && !check.profit_hit && (check.action_priority ?? 9) <= 3 && (
-                            <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%', color: '#fb923c', fontWeight: 600 }}
+                            <button
+                              type="button"
+                              className="btn btn-sm"
+                              style={{
+                                width: '100%', fontWeight: 700, fontSize: 13,
+                                background: 'rgba(251, 146, 60, 0.14)',
+                                color: '#fdba74',
+                                border: '1px solid #fb923c',
+                              }}
                               title="有管理建议,先打开决策弹窗"
                               onClick={() => setManageCompare(check)}>
                               管理
                             </button>
                           )}
                           {hasOpen && (
-                            <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%' }}
+                            <button type="button" className="btn btn-secondary btn-sm"
+                              style={{ width: '100%', fontSize: 13 }}
                               disabled={rollLoading} onClick={() => handleRoll(c.id)}>看 Roll</button>
                           )}
-                          <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%' }}
+                          <button type="button" className="btn btn-secondary btn-sm"
+                            style={{ width: '100%', fontSize: 13 }}
                             onClick={() => setTradeModal({ initial: { symbol: sel.symbol }, status, cycleId: c.id })}>
-                            登记交易
+                            登记
                           </button>
                         </div>
                       </div>
