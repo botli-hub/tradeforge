@@ -1,11 +1,12 @@
-"""Wheel 持仓动态决策树
+"""Wheel 持仓动态决策树(量化阈值版)
 
-在 50% 止盈 / 21DTE 基础上,按浮盈、DTE、剩余年化、ITM 深度、
-平仓真实成本(买回 ask)、手续费门槛、CSP/CC 分叉给出:
+所有形容词决策映射为数字阈值(见 POSITION_QUANT)。
+输出 action_code + priority + confidence + reasons(含数字) + quant_thresholds。
 
-  action_code + action_hint + action_priority + prefer_card + reasons
-
-供体检 API、今日管理卡、Telegram 告警、Roll 场景共用。
+优先级序(命中即停):
+  1 深ITM/临期ITM → 2 提前行权 → 3 吃θ → 4 硬止盈/过高持有
+  → 5 软止盈+低效 → 6 ≤21DTE处理 → 7 纯低效 → 8 超愿接/纪律否决
+  → 9 浮亏OTM → 10 浅ITM观察 → 11 健康持有
 """
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,12 +19,65 @@ ACTION_REPLACE = "REPLACE"
 ACTION_PREPARE_ASSIGN = "PREPARE_ASSIGN"
 ACTION_NONE = "NONE"
 
+# ── 量化默认(设置页 wheel_position 可覆盖) ──────────────────────────────────
+# 单位: 百分比用「点」(50=50%), DTE/美元/小数 delta 见注释
+POSITION_QUANT: Dict[str, float] = {
+    "profit_target_pct": 50.0,          # 硬止盈
+    "soft_profit_pct": 30.0,            # 软止盈
+    "max_hold_profit_pct": 80.0,        # 过高持有 → 落袋
+    "hold_theta_min_profit_pct": 40.0,  # 吃θ最低浮盈
+    "hold_theta_max_dte": 14.0,         # 吃θ最长 DTE(配合剩余年化)
+    "hold_theta_min_remaining_ann": 12.0,
+    "hard_roll_dte": 21.0,              # 硬处理窗
+    "gamma_warn_dte": 7.0,              # 临期/gamma
+    "shallow_itm_pct": 1.5,             # 浅 ITM 价内%
+    "deep_itm_moneyness_pct": 3.0,      # 深 ITM 价内%
+    "deep_itm_delta": 0.50,             # 深 ITM Δ
+    "shallow_itm_delta_max": 0.55,
+    "thin_otm_buffer_pct": 1.5,         # 薄 OTM 垫%
+    "threat_otm_buffer_pct": 5.0,       # 浮亏威胁垫% (≤hard_roll 内)
+    "min_close_notional": 20.0,         # 买回名义过低 → 手续费陷阱 $
+    "capital_tight_util_pct": 75.0,     # 资金紧利用率%
+    "dividend_warn_days": 14.0,
+    # CC 提前行权 Δ 门槛
+    "early_assign_delta_deep": 0.80,
+    "early_assign_delta_div": 0.55,
+    "early_assign_delta_shallow_div": 0.45,
+    "early_assign_delta_otm_div": 0.70,
+    # would_open 薄垫 caution
+    "open_caution_buffer_pct": 2.0,
+}
+
 
 def _cfg_num(cfg: Dict[str, Any], key: str, default: float) -> float:
     try:
         return float(cfg.get(key, default))
     except (TypeError, ValueError):
         return float(default)
+
+
+def merge_pos_quant(pos_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    """合并量化默认与用户配置。"""
+    out = dict(POSITION_QUANT)
+    if pos_cfg:
+        for k, v in pos_cfg.items():
+            if k in out or k in (
+                "profit_target_pct", "soft_profit_pct", "hard_roll_dte",
+                "gamma_warn_dte", "hold_theta_min_profit_pct", "hold_theta_max_dte",
+                "hold_theta_min_remaining_ann", "thin_otm_buffer_pct",
+                "max_hold_profit_pct", "min_close_notional", "shallow_itm_pct",
+                "deep_itm_moneyness_pct", "capital_tight_util_pct",
+                "dividend_warn_days", "threat_otm_buffer_pct",
+                "deep_itm_delta", "shallow_itm_delta_max",
+                "early_assign_delta_deep", "early_assign_delta_div",
+                "early_assign_delta_shallow_div", "early_assign_delta_otm_div",
+                "open_caution_buffer_pct",
+            ):
+                try:
+                    out[k] = float(v)
+                except (TypeError, ValueError):
+                    pass
+    return out
 
 
 def remaining_annualized(close_px: float, strike: float, dte: Optional[int]) -> Optional[float]:
@@ -34,8 +88,8 @@ def remaining_annualized(close_px: float, strike: float, dte: Optional[int]) -> 
 
 def residual_floor(min_annualized: float, pos_cfg: Optional[Dict[str, Any]] = None) -> float:
     """剩余年化「仍值得拿」的下限。"""
-    cfg = pos_cfg or {}
-    floor = _cfg_num(cfg, "hold_theta_min_remaining_ann", 12.0)
+    q = merge_pos_quant(pos_cfg)
+    floor = float(q["hold_theta_min_remaining_ann"])
     if min_annualized and min_annualized > 0:
         floor = min(floor, max(8.0, min_annualized * 0.5))
     return floor
@@ -53,12 +107,12 @@ def eval_hold_for_theta(
     pos_cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """统一「是否吃 θ」判定,持仓树与 Roll 场景共用。"""
-    cfg = pos_cfg or {}
-    hold_theta_min_profit = _cfg_num(cfg, "hold_theta_min_profit_pct", 40)
-    hold_theta_max_dte = int(_cfg_num(cfg, "hold_theta_max_dte", 14))
-    gamma_dte = int(_cfg_num(cfg, "gamma_warn_dte", 7))
-    min_close_notional = _cfg_num(cfg, "min_close_notional", 20.0)
-    rem_floor = residual_floor(min_annualized, cfg)
+    q = merge_pos_quant(pos_cfg)
+    hold_theta_min_profit = float(q["hold_theta_min_profit_pct"])
+    hold_theta_max_dte = int(q["hold_theta_max_dte"])
+    gamma_dte = int(q["gamma_warn_dte"])
+    min_close_notional = float(q["min_close_notional"])
+    rem_floor = residual_floor(min_annualized, pos_cfg)
 
     underwater = profit_pct is not None and profit_pct < 0
     fee_trap = bool(
@@ -129,12 +183,16 @@ def eval_would_open_today(
     capital_tight: bool,
     target_enabled: Optional[bool] = None,
     dte: Optional[int] = None,
+    pos_cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """反事实:以今天纪律还会不会新开这张腿。
 
     返回 would_open_today: yes|no|caution|unknown + reasons。
     轻量规则,不跑全量 admission。
     """
+    q = merge_pos_quant(pos_cfg)
+    caution_buf = float(q.get("open_caution_buffer_pct", 2.0))
+    gamma_dte = int(q["gamma_warn_dte"])
     reasons: List[str] = []
     hard_no = False
     caution = False
@@ -161,21 +219,24 @@ def eval_would_open_today(
             reasons.append("趋势 WEAK,新开 Put 需谨慎")
         if capital_tight:
             caution = True
-            reasons.append("组合资金偏紧,不宜再占担保开新 Put")
-        if thin_otm or (buffer is not None and buffer < 2.0 and not itm):
+            reasons.append(
+                f"组合资金偏紧(利用率≥{q['capital_tight_util_pct']:.0f}%),不宜再占担保开新 Put"
+            )
+        if thin_otm or (buffer is not None and buffer < caution_buf and not itm):
             caution = True
-            reasons.append("安全垫偏薄,新开同类 Put 风险高")
+            reasons.append(
+                f"安全垫{buffer if buffer is not None else '?'}% < {caution_buf}% ,新开同类 Put 风险高"
+            )
         if itm or deep_itm:
             caution = True
             reasons.append("已 ITM,更不应以现价「新开」同结构")
     elif side == "CALL":
         if trend == "DOWN":
-            # 持股 CC 在下跌趋势仍可卖,但需谨慎
             caution = True
             reasons.append("趋势 DOWN,CC 需确认仍愿持股收租")
-        if deep_itm or (itm and dte is not None and dte <= 7):
+        if deep_itm or (itm and dte is not None and dte <= gamma_dte):
             caution = True
-            reasons.append("Call 已深/临期 ITM,不会以当前结构新开")
+            reasons.append(f"Call 已深/临期 ITM(DTE≤{gamma_dte}),不会以当前结构新开")
         if capital_tight:
             caution = True
             reasons.append("资金紧时优先处理既有仓,不急新开 CC")
@@ -191,7 +252,6 @@ def eval_would_open_today(
     if hard_no:
         verdict = "no"
     elif missing_key and not caution and side == "PUT" and (floor_price is None or floor_price <= 0):
-        # 关键缺失且无硬否决 → unknown
         verdict = "unknown"
     elif caution:
         verdict = "caution"
@@ -308,18 +368,29 @@ def decide_position(
     返回增强字段见末尾 dict。
     """
     cfg = pos_cfg or {}
-    soft_profit = float(cfg.get("soft_profit_pct", max(profit_target * 0.6, 30)))
-    hard_dte = int(cfg.get("hard_roll_dte", 21))
-    gamma_dte = int(cfg.get("gamma_warn_dte", 7))
-    hold_theta_min_profit = float(cfg.get("hold_theta_min_profit_pct", 40))
-    hold_theta_max_dte = int(cfg.get("hold_theta_max_dte", 14))
-    shallow_itm_pct = float(cfg.get("shallow_itm_pct", 1.5))
-    deep_moneyness_pct = float(cfg.get("deep_itm_moneyness_pct", 3.0))
-    # OTM 安全垫过薄(默认 1.5%)时,不鼓励硬吃 θ/硬 roll 到无视风险
-    thin_otm_pct = float(cfg.get("thin_otm_buffer_pct", 1.5))
-    # 浮盈已很高(默认 80%)且 DTE 仍不短 → 倾向落袋,避免「永远拿着」
-    max_hold_profit_pct = float(cfg.get("max_hold_profit_pct", 80.0))
-    capital_tight_util = float(cfg.get("capital_tight_util_pct", 75.0))
+    q = merge_pos_quant(cfg)
+    # 调用方 profit_target 优先(体检 API 传入),否则用量化默认
+    profit_target = float(profit_target if profit_target is not None else q["profit_target_pct"])
+    soft_profit = float(cfg.get("soft_profit_pct", q["soft_profit_pct"]))
+    if soft_profit <= 0:
+        soft_profit = max(profit_target * 0.6, 30.0)
+    hard_dte = int(q["hard_roll_dte"])
+    gamma_dte = int(q["gamma_warn_dte"])
+    hold_theta_min_profit = float(q["hold_theta_min_profit_pct"])
+    hold_theta_max_dte = int(q["hold_theta_max_dte"])
+    shallow_itm_pct = float(q["shallow_itm_pct"])
+    deep_moneyness_pct = float(q["deep_itm_moneyness_pct"])
+    deep_itm_delta = float(q["deep_itm_delta"])
+    shallow_delta_max = float(q["shallow_itm_delta_max"])
+    thin_otm_pct = float(q["thin_otm_buffer_pct"])
+    threat_buf = float(q["threat_otm_buffer_pct"])
+    max_hold_profit_pct = float(q["max_hold_profit_pct"])
+    capital_tight_util = float(q["capital_tight_util_pct"])
+    div_warn_days = int(q["dividend_warn_days"])
+    ea_deep = float(q["early_assign_delta_deep"])
+    ea_div = float(q["early_assign_delta_div"])
+    ea_shallow = float(q["early_assign_delta_shallow_div"])
+    ea_otm = float(q["early_assign_delta_otm_div"])
 
     strike = item.get("strike") or 0
     spot = item.get("spot") or 0
@@ -332,7 +403,6 @@ def decide_position(
     profit_pct = item.get("profit_pct")
     profit_hit = profit_pct is not None and profit_pct >= profit_target
     soft_hit = profit_pct is not None and profit_pct >= soft_profit
-    # 浮亏(买回价 > 开仓权利金):「剩余年化高」=市场仍定价风险,不是「健康收租」
     underwater = profit_pct is not None and profit_pct < 0
     side = item.get("side")
     floor_price = item.get("floor_price")
@@ -340,7 +410,6 @@ def decide_position(
         floor_price = float(floor_price) if floor_price is not None else None
     except (TypeError, ValueError):
         floor_price = None
-    # CSP: 行权价高于接货底线 → 被指派也不符合个人风控
     strike_above_floor = bool(
         side == "PUT" and floor_price is not None and floor_price > 0 and strike > floor_price
     )
@@ -349,11 +418,8 @@ def decide_position(
     size = float(item.get("contract_size") or 100)
     close_notional = close_px * size * qty if close_px > 0 else 0.0
     days_to_div = item.get("days_to_ex_div")
-    div_window = days_to_div is not None and int(days_to_div) >= 0 and int(days_to_div) <= int(
-        cfg.get("dividend_warn_days", 14)
-    )
+    div_window = days_to_div is not None and int(days_to_div) >= 0 and int(days_to_div) <= div_warn_days
 
-    # 组合资本上下文(可选;缺省不感知)
     capital_util_pct = item.get("capital_util_pct")
     try:
         capital_util_pct = float(capital_util_pct) if capital_util_pct is not None else None
@@ -383,18 +449,17 @@ def decide_position(
     if spot > 0 and strike > 0:
         moneyness = (strike - spot) / spot if side == "PUT" else (spot - strike) / spot
     moneyness_pct = moneyness * 100
-    deep_itm = bool(itm and (delta > 0.5 or moneyness_pct > deep_moneyness_pct))
+    deep_itm = bool(itm and (delta > deep_itm_delta or moneyness_pct > deep_moneyness_pct))
     shallow_itm = bool(
         itm and not deep_itm
-        and (moneyness_pct <= shallow_itm_pct and delta <= 0.55)
+        and (moneyness_pct <= shallow_itm_pct and delta <= shallow_delta_max)
     )
     early_assign = bool(
         side == "CALL"
         and (
-            (itm and (delta >= 0.8 or (div_window and delta >= 0.55)))
-            # 浅 ITM + 除息窗口:同样有提前行权风险
-            or (itm and shallow_itm and div_window and delta >= 0.45)
-            or (not itm and div_window and delta >= 0.70)
+            (itm and (delta >= ea_deep or (div_window and delta >= ea_div)))
+            or (itm and shallow_itm and div_window and delta >= ea_shallow)
+            or (not itm and div_window and delta >= ea_otm)
         )
     )
 
@@ -417,7 +482,7 @@ def decide_position(
     hold_for_theta = hold_meta["hold_for_theta"]
     underwater = bool(hold_meta.get("underwater"))
 
-    # 浮盈已极高且 DTE 仍明显长于临期窗口 → 落袋优先于继续拿 θ
+    # 浮盈≥max_hold 且 DTE>gamma → 落袋优先于吃 θ
     profit_cap_close = bool(
         profit_pct is not None
         and profit_pct >= max_hold_profit_pct
@@ -428,7 +493,7 @@ def decide_position(
     if profit_cap_close:
         hold_for_theta = False
 
-    # 薄 OTM:安全垫不足,高浮盈也不鼓励「死拿」到被扫到
+    # 薄 OTM + 已止盈 + 非临期 → 不鼓励死拿 θ
     if thin_otm and hold_for_theta and dte is not None and dte > gamma_dte and profit_hit:
         hold_for_theta = False
 
@@ -456,16 +521,16 @@ def decide_position(
         capital_tight=capital_tight,
         target_enabled=target_enabled,
         dte=dte if isinstance(dte, int) else None,
+        pos_cfg=cfg,
     )
     would_open = would_meta["would_open_today"]
     would_open_reasons = list(would_meta["would_open_reasons"] or [])
 
-    # 浮亏 OTM 且安全垫偏薄/临近 → 倾向 Roll 防守(不是「健康持有」)
+    # 浮亏 OTM + ≤hard_roll + 垫薄 → Roll 防守
     threatened_underwater = bool(
         underwater and not itm and dte is not None and dte <= hard_dte
-        and (thin_otm or (buffer is not None and buffer < 5.0))
+        and (thin_otm or (buffer is not None and buffer < threat_buf))
     )
-    # 21DTE:浮盈仓 — ITM/低效/薄垫;浮亏仓 — 受威胁才 roll
     needs_roll_near = bool(
         dte is not None
         and dte <= hard_dte
@@ -480,194 +545,237 @@ def decide_position(
 
     reasons: List[str] = []
     if underwater:
-        reasons.append(f"当前浮亏 {profit_pct}% (买回价高于开仓权利金)")
+        reasons.append(f"浮亏 {profit_pct}% (买回 ask > 开仓权利金)")
         if remaining_ann is not None:
             reasons.append(
-                f"剩余权利金仍高(折年化 {remaining_ann}%)=风险未消,不是健康收租信号"
+                f"剩余权利金折年化 {remaining_ann}% ≥风险未消(非健康收租)"
             )
     if profit_hit:
-        reasons.append(f"浮盈 {profit_pct}% ≥ 止盈目标 {profit_target}%")
+        reasons.append(f"浮盈 {profit_pct}% ≥ 硬止盈 {profit_target:g}%")
     elif soft_hit and low_yield:
-        reasons.append(f"浮盈 {profit_pct}% 达软止盈且剩余年化低")
+        reasons.append(
+            f"浮盈 {profit_pct}% ≥ 软止盈 {soft_profit:g}% 且剩余年化 {remaining_ann}% < 目标 {min_annualized}%"
+        )
     if deep_itm:
         reasons.append(
-            f"深度价内(Δ{delta:.2f}"
-            + (f",价内 {moneyness_pct:.1f}%" if moneyness_pct > 0 else "")
-            + ")"
+            f"深ITM:Δ{delta:.2f}> {deep_itm_delta:g} 或价内{moneyness_pct:.1f}%> {deep_moneyness_pct:g}%"
         )
     elif shallow_itm:
-        reasons.append(f"浅 ITM(Δ{delta:.2f},价内 {moneyness_pct:.1f}%)")
+        reasons.append(
+            f"浅ITM:价内{moneyness_pct:.1f}%≤{shallow_itm_pct:g}% 且Δ{delta:.2f}≤{shallow_delta_max:g}"
+        )
     elif itm:
-        reasons.append(f"已 ITM(Δ{delta:.2f})" if delta else "已 ITM")
+        reasons.append(f"ITM Δ{delta:.2f}" if delta else "ITM")
     if thin_otm and buffer is not None:
-        reasons.append(f"OTM 安全垫仅 {buffer}%,接近行权价")
+        reasons.append(f"OTM垫 {buffer}% < 薄垫阈值 {thin_otm_pct:g}%")
     if early_assign:
         if div_window:
-            reasons.append(f"CC 临近除息({days_to_div}天)且 ITM/高Δ,提前行权风险升高")
+            reasons.append(
+                f"CC除息窗≤{div_warn_days}天(剩{days_to_div}天)且Δ门槛触发,提前行权风险↑"
+            )
         else:
-            reasons.append("CC 深度价内,存在提前被行权风险(留意除息日)")
+            reasons.append(f"CC Δ≥{ea_deep:g} 深ITM,提前行权风险↑")
     if needs_roll_near:
-        reasons.append(f"DTE {dte} ≤ {hard_dte} 且未达止盈,建议处理 gamma/效率")
+        reasons.append(f"DTE {dte} ≤ 硬处理窗 {hard_dte} 且未硬止盈")
     if low_yield:
-        reasons.append(f"剩余年化 {remaining_ann}% < 目标 {min_annualized}%,担保金低效")
+        reasons.append(f"剩余年化 {remaining_ann}% < 目标 {min_annualized}% → 担保低效")
     if hold_for_theta and fee_trap:
-        reasons.append(f"买回名义仅 ${close_notional:.0f} < ${hold_meta['min_close_notional']:.0f},手续费/点差不划算")
+        reasons.append(
+            f"买回名义 ${close_notional:.0f} < ${hold_meta['min_close_notional']:.0f}(手续费陷阱)"
+        )
     elif hold_for_theta and residual_worth_keeping and remaining_ann is not None:
         reasons.append(
-            f"OTM 浮盈≥{hold_theta_min_profit}% 且剩余年化 {remaining_ann}% 仍体面,优先吃 θ(DTE {dte})"
+            f"吃θ:浮盈≥{hold_theta_min_profit:g}% 且剩余年化 {remaining_ann}%≥{rem_floor:g}% (DTE {dte}≤{hold_theta_max_dte}或临期)"
         )
     elif hold_for_theta:
-        reasons.append(f"临期 OTM 且浮盈≥{hold_theta_min_profit}%,可持有吃 theta")
+        reasons.append(
+            f"吃θ:临期(DTE≤{gamma_dte}) OTM 且浮盈≥{hold_theta_min_profit:g}%"
+        )
     if profit_cap_close:
-        reasons.append(f"浮盈 {profit_pct}% 已很高(≥{max_hold_profit_pct}%),倾向落袋")
+        reasons.append(f"浮盈 {profit_pct}% ≥ 过高持有 {max_hold_profit_pct:g}% 且 DTE>{gamma_dte} → 落袋")
     if capital_tight and (low_yield or soft_hit):
-        util_txt = f"{capital_util_pct:.0f}%" if capital_util_pct is not None else "偏高"
-        reasons.append(f"组合资金占用偏紧(利用率 {util_txt}),宜优先释放低效担保金")
+        util_txt = f"{capital_util_pct:.0f}%" if capital_util_pct is not None else f"≥{capital_tight_util:g}%"
+        reasons.append(f"资金紧(利用率 {util_txt}),优先释放低效担保")
 
-    # ── 决策优先级(数字越小越紧急) ──
+    # ── 决策树(量化序,命中即停) ──
     code: str = ACTION_NONE
     hint: Optional[str] = None
     priority = 9
     prefer_card: Optional[str] = None
     secondary_hint: Optional[str] = None
+    branch = "none"
 
+    # 1 风险:深 ITM
     if deep_itm:
+        branch = "deep_itm"
         code, priority = ACTION_ROLL_ADJUST, 1
         prefer_card = "adjust_strike"
-        if side == "PUT":
-            hint = "尽快 Roll down/out(深 ITM Put)或评估接货"
-        else:
-            hint = "尽快 Roll up/out(深 ITM Call)或评估交货"
+        hint = (
+            f"深ITM(Δ>{deep_itm_delta:g}/价内>{deep_moneyness_pct:g}%):Roll调strike或评估接货"
+            if side == "PUT"
+            else f"深ITM(Δ>{deep_itm_delta:g}/价内>{deep_moneyness_pct:g}%):Roll调strike或评估交货"
+        )
+    # 2 风险:临期 ITM
     elif itm and expiring:
+        branch = "prepare_assign"
         code, priority = ACTION_PREPARE_ASSIGN, 1
         prefer_card = "adjust_strike"
-        if side == "PUT":
-            hint = "临期 ITM Put:Roll down 或准备接货"
-        else:
-            hint = "临期 ITM Call:Roll up 或准备被叫走"
+        hint = (
+            f"临期ITM(DTE≤{gamma_dte}):Roll 或准备接货"
+            if side == "PUT"
+            else f"临期ITM(DTE≤{gamma_dte}):Roll 或准备被call"
+        )
+    # 3 风险:CC 提前行权
     elif early_assign:
+        branch = "early_assign"
         code, priority = ACTION_ROLL_ADJUST, 2
         prefer_card = "adjust_strike"
-        hint = "留意提前行权/除息,考虑 Roll 或平仓"
+        hint = "提前行权/除息风险:Roll或平仓"
+    # 4 效率:吃 θ(压过机械50%止盈)
     elif hold_for_theta:
+        branch = "hold_theta"
         code, priority = ACTION_HOLD_THETA, 5
         prefer_card = "no_roll"
         if fee_trap:
-            hint = "持有吃 theta(买回成本过低)"
+            hint = f"吃θ(买回<${hold_meta['min_close_notional']:.0f})"
         elif residual_worth_keeping:
-            hint = "持有吃 theta(剩余年化仍高)"
+            hint = f"吃θ(剩余年化≥{rem_floor:g}%)"
         else:
-            hint = "持有吃 theta(临期高浮盈)"
+            hint = f"吃θ(临期高浮盈≥{hold_theta_min_profit:g}%)"
         if profit_hit:
             secondary_hint = (
-                "资金紧时可主动止盈腾仓;否则可继续吃 θ"
+                f"已达硬止盈{profit_target:g}%;资金紧可平,否则可续吃θ"
                 if capital_tight
-                else "若需腾出仓位/换股,仍可止盈买回"
+                else f"已达硬止盈{profit_target:g}%;需腾仓仍可买回"
             )
+    # 5 效率:硬止盈 / 过高持有
     elif profit_hit or profit_cap_close:
+        branch = "close_profit"
         code, priority = ACTION_CLOSE, 2
         prefer_card = "no_roll"
-        if side == "CALL":
-            hint = "止盈平仓(结束 Call 义务,保留持股)"
+        if profit_cap_close and not profit_hit:
+            hint = f"过高持有(≥{max_hold_profit_pct:g}%)落袋"
+        elif side == "CALL":
+            hint = f"止盈(≥{profit_target:g}%)结束Call义务"
         else:
-            hint = "止盈平仓(释放担保金)"
+            hint = f"止盈(≥{profit_target:g}%)释放担保"
         if thin_otm:
-            secondary_hint = "OTM 安全垫薄,落袋后可再择机开仓"
+            secondary_hint = f"OTM垫<{thin_otm_pct:g}%,落袋后择机再开"
+    # 6 效率:软止盈+低效
     elif soft_hit and low_yield:
+        branch = "replace_soft"
         code, priority = ACTION_REPLACE, 3
         prefer_card = "no_roll"
-        if side == "CALL":
-            hint = "软止盈+换仓(结束低效 CC,便于再卖)"
-        else:
-            hint = "软止盈+换仓(释放担保金)"
+        hint = f"软止盈≥{soft_profit:g}%+剩余年化<{min_annualized}% → 换仓"
+    # 7 ≤硬处理窗
     elif needs_roll_near and itm:
+        branch = "roll_itm_near"
         code, priority = ACTION_ROLL_ADJUST, 2
         prefer_card = "adjust_strike"
-        if side == "PUT":
-            hint = f"ITM Put 且≤{hard_dte}DTE:优先 Roll out/down"
-        else:
-            hint = f"ITM Call 且≤{hard_dte}DTE:优先 Roll out/up"
+        hint = (
+            f"ITM且DTE≤{hard_dte}:Roll out/down"
+            if side == "PUT"
+            else f"ITM且DTE≤{hard_dte}:Roll out/up"
+        )
     elif needs_roll_near:
+        branch = "roll_near"
         code, priority = ACTION_ROLL, 3
         prefer_card = "roll_out"
-        hint = f"考虑 Roll out(≤{hard_dte}DTE"
+        bits = [f"DTE≤{hard_dte}"]
         if thin_otm:
-            hint += ",安全垫薄"
+            bits.append(f"垫<{thin_otm_pct:g}%")
         if low_yield:
-            hint += ",剩余年化低"
-        hint += ")"
+            bits.append("年化低")
+        if threatened_underwater:
+            bits.append("浮亏威胁")
+        hint = "Roll out(" + ",".join(bits) + ")"
+    # 8 纯低效
     elif low_yield:
+        branch = "replace_low_yield"
         code, priority = ACTION_REPLACE, 4
         prefer_card = "no_roll"
-        hint = "平仓换仓(剩余年化低)"
+        hint = f"剩余年化{remaining_ann}%<{min_annualized}% → 换仓"
+    # 9 超愿接 / 纪律硬否决 → 平
     elif underwater and not itm and strike_above_floor:
-        # 浮亏且 strike > 愿接最高价:死拿等于接受不愿接的货
+        branch = "close_above_floor"
         code, priority = ACTION_CLOSE, 3
         prefer_card = "no_roll"
-        hint = f"超过愿接价(strike>${floor_price:g}):不宜等接货,优先止损/Roll"
-        secondary_hint = "若仍想卖权:Roll down 到愿接价 floor 以下再开"
-        reasons.append(
-            f"愿接最高价 {floor_price:g},当前 strike {strike:g} 更高,被指派不符合预设愿接"
+        hint = f"strike>{floor_price:g}(愿接):不宜等接货,止损/Roll"
+        secondary_hint = f"若续做:Roll到 floor≤{floor_price:g} 再开"
+        reasons.append(f"愿接{floor_price:g} < strike{strike:g},指派不符预设")
+    elif underwater and not itm and would_open == "no":
+        # 量化:纪律不会新开 → 不沉没成本硬扛,主动 CLOSE
+        branch = "close_discipline_no"
+        code, priority = ACTION_CLOSE, 3
+        prefer_card = "no_roll"
+        hint = "纪律否决新开:优先买回/Roll,勿沉没成本硬扛"
+        secondary_hint = (
+            "趋势/规则已否决同类新开 — 持有=主动偏离"
+            if side == "PUT"
+            else "纪律否决下不宜继续裸露 Call 义务"
         )
+        reasons.append("would_open=no:以今日纪律不会新开此腿 → 建议 CLOSE")
+    # 10 浮亏 OTM(仍愿接区内)
     elif underwater and not itm:
-        # 浮亏但仍 OTM 且 strike 在底线内:持有=赌到期作废;绝非「健康收租」
+        branch = "underwater_hold"
         code, priority = ACTION_NONE, 6
         prefer_card = "no_roll"
         if side == "PUT":
-            hint = "浮亏持有(仍 OTM):确认愿按 strike 接货再拿"
-            secondary_hint = "若不愿接货或观点改变:止损买回或 Roll out/down"
+            hint = "浮亏OTM:确认愿按strike接货再拿"
+            secondary_hint = "不愿接:买回或 Roll out/down"
         else:
-            hint = "浮亏持有(仍 OTM):确认愿按 strike 交货再拿"
-            secondary_hint = "若不愿被 call 走:买回或 Roll out/up"
-        reasons.append(
-            "theta 仍对卖方有利,但浮亏未恢复;仅当标的逻辑与行权价仍可接受时持有"
-        )
-        if would_open == "no":
-            # 保持 NONE 不强制 CLOSE(strike>floor 已单独 CLOSE);升权+强调纪律否决
-            priority = 4
-            secondary_hint = (
-                "超过愿接价或纪律否决新开:不宜等接货,优先止损买回或 Roll,勿用沉没成本自我安慰"
-            )
-            reasons.append("以当前纪律不会新开此腿 — 继续持有=主动偏离策略")
-        elif would_open == "caution":
+            hint = "浮亏OTM:确认愿按strike交货再拿"
+            secondary_hint = "不愿被call:买回或 Roll out/up"
+        reasons.append("θ仍有利但浮亏;仅愿接/愿交时持有")
+        if would_open == "caution":
             priority = min(priority, 5)
-            reasons.append("纪律上对新开偏谨慎,持有需额外确认逻辑")
+            reasons.append("would_open=caution:持有需额外确认")
+    # 11 浅 ITM 观察
     elif shallow_itm and side == "PUT":
+        branch = "shallow_itm_put"
         code, priority = ACTION_NONE, 6
         prefer_card = None
-        hint = "浅 ITM Put:观察,未深价内不必强 Roll"
-        reasons.append("浅 ITM 可继续收 θ,设好接货预案即可")
+        hint = f"浅ITM(≤{shallow_itm_pct:g}%):观察,设接货预案"
+        reasons.append(f"价内≤{shallow_itm_pct:g}% 且Δ≤{shallow_delta_max:g},不强Roll")
     elif shallow_itm and side == "CALL":
+        branch = "shallow_itm_call"
         code, priority = ACTION_NONE, 6
         prefer_card = None
-        hint = "浅 ITM Call:观察,留意是否继续上穿"
-        reasons.append("浅 ITM CC 可继续收 θ,设好被 call 预案")
+        hint = f"浅ITM(≤{shallow_itm_pct:g}%):观察,设交货预案"
+        reasons.append(f"价内≤{shallow_itm_pct:g}% 且Δ≤{shallow_delta_max:g},不强Roll")
+    # 12 健康 OTM 临近
     elif dte is not None and dte <= hard_dte and not itm and residual_worth_keeping and not underwater:
-        # 浮盈 + 健康 OTM:临近但不强推 roll
+        branch = "healthy_near"
         code, priority = ACTION_NONE, 7
         prefer_card = "no_roll"
-        hint = "OTM 健康持有,临期再评估"
-        reasons.append(f"DTE {dte}≤{hard_dte} 但 OTM 且剩余年化尚可,无需强行 Roll")
+        hint = f"OTM健康(DTE≤{hard_dte},年化尚可):持有"
+        reasons.append(
+            f"DTE{dte}≤{hard_dte} 但OTM且剩余年化≥{rem_floor:g}%,不强Roll"
+        )
+    else:
+        branch = "idle"
 
-    # 资金紧:低效/换仓腿升权;不改变高优先级风险动作
+    # 资金紧:低效/换仓腿升权
     if capital_tight and code == ACTION_REPLACE:
         priority = max(2, priority - 1)
-        if side == "PUT":
-            hint = (hint or "换仓") + "·资金紧"
-        else:
-            hint = (hint or "换仓") + "·资金紧"
-    elif capital_tight and code == ACTION_CLOSE and not (profit_hit or profit_cap_close or strike_above_floor):
+        hint = (hint or "换仓") + f"·资金紧(≥{capital_tight_util:g}%)"
+    elif capital_tight and code == ACTION_CLOSE and not (
+        profit_hit or profit_cap_close or strike_above_floor or would_open == "no"
+    ):
         priority = max(2, priority - 1)
     elif capital_tight and code == ACTION_HOLD_THETA and profit_hit:
-        # 仍吃 θ,但排序略提前以便看见「可腾仓」
         priority = min(priority, 4)
 
     # 决策置信度 0–100:规则越硬、证据越足越高
     confidence = 50
     if code in (ACTION_ROLL_ADJUST, ACTION_PREPARE_ASSIGN) and (deep_itm or (itm and expiring)):
         confidence = 90
-    elif code == ACTION_CLOSE and (profit_hit or profit_cap_close or strike_above_floor):
-        confidence = 85 if strike_above_floor or profit_cap_close else 80
+    elif code == ACTION_CLOSE and (
+        profit_hit or profit_cap_close or strike_above_floor or branch == "close_discipline_no"
+    ):
+        confidence = 88 if branch == "close_discipline_no" else (
+            85 if strike_above_floor or profit_cap_close else 80
+        )
     elif code == ACTION_HOLD_THETA and residual_worth_keeping:
         confidence = 78
     elif code == ACTION_HOLD_THETA:
@@ -679,17 +787,14 @@ def decide_position(
     elif code == ACTION_REPLACE:
         confidence = 78 if capital_tight else 72
     elif code == ACTION_NONE and underwater:
-        confidence = 55  # 条件持有,依赖用户接货意愿
+        confidence = 55
     elif code == ACTION_NONE:
         confidence = 60
     elif early_assign:
         confidence = 82
     if thin_otm and code in (ACTION_HOLD_THETA, ACTION_NONE):
         confidence = max(40, confidence - 15)
-    # 纪律否决仅下调「仍建议持有」类置信;已 CLOSE/ROLL 与纪律一致则不降
-    if would_open == "no" and code in (ACTION_NONE, ACTION_HOLD_THETA) and underwater:
-        confidence = max(35, confidence - 15)
-    elif would_open == "yes" and underwater and code == ACTION_NONE:
+    if would_open == "yes" and underwater and code == ACTION_NONE:
         confidence = min(70, confidence + 5)
 
     # 接货/交货清单(ITM/临期/提前行权相关)
@@ -748,7 +853,27 @@ def decide_position(
         else:
             reasons.append(f"交货名义约 ${assign_checklist['assign_notional']:,.0f}(按 strike 卖股)")
 
+    quant_used = {
+        "profit_target_pct": profit_target,
+        "soft_profit_pct": soft_profit,
+        "max_hold_profit_pct": max_hold_profit_pct,
+        "hold_theta_min_profit_pct": hold_theta_min_profit,
+        "hold_theta_max_dte": hold_theta_max_dte,
+        "hold_theta_min_remaining_ann": rem_floor,
+        "hard_roll_dte": hard_dte,
+        "gamma_warn_dte": gamma_dte,
+        "shallow_itm_pct": shallow_itm_pct,
+        "deep_itm_moneyness_pct": deep_moneyness_pct,
+        "deep_itm_delta": deep_itm_delta,
+        "thin_otm_buffer_pct": thin_otm_pct,
+        "threat_otm_buffer_pct": threat_buf,
+        "min_close_notional": hold_meta["min_close_notional"],
+        "capital_tight_util_pct": capital_tight_util,
+        "min_annualized": min_annualized,
+    }
+
     tree = {
+        "branch": branch,
         "profit_hit": profit_hit,
         "soft_profit_hit": soft_hit,
         "hold_for_theta": hold_for_theta,
@@ -777,6 +902,7 @@ def decide_position(
         "capital_tight_util_pct": capital_tight_util,
         "would_open_today": would_open,
         "trend": trend,
+        "quant": quant_used,
     }
 
     return {
@@ -802,6 +928,8 @@ def decide_position(
         "action_priority": priority,
         "decision_confidence": confidence,
         "prefer_card": prefer_card,
+        "decision_branch": branch,
+        "quant_thresholds": quant_used,
         "reasons": reasons,
         "decision_tree": tree,
         "moneyness_pct": round(moneyness_pct, 2) if moneyness_pct else 0.0,

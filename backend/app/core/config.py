@@ -88,6 +88,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "min_close_notional": 20.0,
         "shallow_itm_pct": 1.5,
         "deep_itm_moneyness_pct": 3.0,
+        "deep_itm_delta": 0.50,
+        "threat_otm_buffer_pct": 5.0,  # 浮亏+≤21DTE 且垫薄 → Roll
+        "capital_tight_util_pct": 75.0,
         "alert_push_minutes": 0,  # 在场体检告警轮询间隔(分钟),0=关;事件变化才真推
     },
     # 推送策略(通知中心);与 wheel_position.notify_mode / alert_push 互补

@@ -20,7 +20,7 @@ def _item(**kw):
 def test_profit_hit():
     r = decide_position(_item(profit_pct=60.0), 15, 50)
     assert r["action_code"] == "CLOSE"
-    assert "止盈平仓" in (r["action_hint"] or "")
+    assert "止盈" in (r["action_hint"] or "")
     assert r["prefer_card"] == "no_roll"
 
 
@@ -110,7 +110,8 @@ def test_soft_profit_low_yield():
 def test_pure_low_yield():
     r = decide_position(_item(current_price=0.3, buyback_ask=0.3, profit_pct=10.0), 15, 50)
     assert r["action_code"] == "REPLACE"
-    assert r["action_hint"] == "平仓换仓(剩余年化低)"
+    assert "换仓" in (r["action_hint"] or "")
+    assert "年化" in (r["action_hint"] or "")
 
 
 def test_remaining_ann_uses_buyback_ask():
@@ -336,7 +337,7 @@ def test_would_open_no_strike_above_floor():
 
 
 def test_would_open_no_trend_down_underwater():
-    """浮亏 + 趋势 DOWN → 纪律否决;仍 NONE 但升权"""
+    """浮亏 + 趋势 DOWN → 纪律否决 → CLOSE(不沉没成本硬扛)"""
     r = decide_position(
         _item(
             side="PUT", strike=100, spot=105, dte=30, itm=False,
@@ -346,9 +347,19 @@ def test_would_open_no_trend_down_underwater():
         15, 50,
     )
     assert r["would_open_today"] == "no"
-    assert r["action_code"] == "NONE"
-    assert r["action_priority"] <= 4
-    assert any("纪律" in x or "DOWN" in x for x in r["reasons"] + r["would_open_reasons"])
+    assert r["action_code"] == "CLOSE"
+    assert r["decision_branch"] == "close_discipline_no"
+    assert r["action_priority"] <= 3
+    assert any("纪律" in x or "DOWN" in x or "would_open" in x for x in r["reasons"] + r["would_open_reasons"])
+
+
+def test_quant_thresholds_exposed():
+    r = decide_position(_item(profit_pct=60.0), 15, 50)
+    q = r.get("quant_thresholds") or {}
+    assert q.get("profit_target_pct") == 50
+    assert q.get("hard_roll_dte") == 21
+    assert q.get("gamma_warn_dte") == 7
+    assert r.get("decision_branch") == "close_profit"
 
 
 def test_would_open_yes_healthy_put():
