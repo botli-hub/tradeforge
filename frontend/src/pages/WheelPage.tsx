@@ -2871,6 +2871,10 @@ export default function WheelPage() {
             const sel = enabled.find(t => t.symbol === selectedSymbol) || enabled[0]
             const selCycles = [...(sel.active_cycles || [])].sort(
               (a, b) => (CYCLE_STATUS_ORDER[a.status] ?? 9) - (CYCLE_STATUS_ORDER[b.status] ?? 9))
+            // 默认展示排序第一的轮子明细;选中无效时回退第一位
+            const detailCycleId = (
+              selectedCycleId && selCycles.some(c => c.id === selectedCycleId)
+            ) ? selectedCycleId : (selCycles[0]?.id ?? null)
             return (
               <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 {/* ── 左:标的列表(窄屏自动占满整行堆叠) ── */}
@@ -2899,7 +2903,14 @@ export default function WheelPage() {
                     const hasProfit = cs.some(c => openChecks[c.id]?.profit_hit)
                     const isIdle = t.idle_days != null && t.idle_days >= 5
                     return (
-                      <div key={t.symbol} onClick={() => { setSelectedSymbol(t.symbol); setEditParams(null); setSelectedCycleId(null) }} style={{
+                      <div key={t.symbol} onClick={() => {
+                        setSelectedSymbol(t.symbol)
+                        setEditParams(null)
+                        // 切换标的时默认选中该标的排序第一的轮子
+                        const sorted = [...(t.active_cycles || [])].sort(
+                          (a, b) => (CYCLE_STATUS_ORDER[a.status] ?? 9) - (CYCLE_STATUS_ORDER[b.status] ?? 9))
+                        setSelectedCycleId(sorted[0]?.id ?? null)
+                      }} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         padding: '9px 10px', borderRadius: 6, cursor: 'pointer', marginBottom: 2,
                         background: isSel ? 'var(--accent)22' : 'transparent',
@@ -3085,13 +3096,13 @@ export default function WheelPage() {
                     const hasOpen = status === 'CSP_OPEN' || status === 'CC_OPEN'
                     return (
                       <div key={c.id} className="card"
-                        onClick={() => setSelectedCycleId(id => id === c.id ? null : c.id)}
+                        onClick={() => setSelectedCycleId(c.id)}
                         style={{
                           padding: '8px 12px', display: 'flex', gap: 12, alignItems: 'center',
                           borderLeft: `3px solid ${STAGE_COLORS[status]}`,
                           cursor: 'pointer',
-                          outline: selectedCycleId === c.id ? '1px solid var(--accent)' : 'none',
-                          background: selectedCycleId === c.id ? 'var(--accent)11' : undefined,
+                          outline: detailCycleId === c.id ? '1px solid var(--accent)' : 'none',
+                          background: detailCycleId === c.id ? 'var(--accent)11' : undefined,
                         }}>
                         {/* 左:信息区 */}
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -3239,30 +3250,31 @@ export default function WheelPage() {
                   })}
                   </div>
 
-                  {/* 交易明细面板 */}
-                  <div style={{ flex: selectedCycleId ? '0 0 400px' : '0 0 200px', minWidth: 0 }}>
+                  {/* 交易明细面板:默认展示排序第一的轮子,点击其它轮子切换 */}
+                  <div style={{ flex: detailCycleId ? '0 0 400px' : '0 0 200px', minWidth: 0 }}>
                     {(() => {
-                      const dc = selCycles.find(c => c.id === selectedCycleId)
+                      const dc = selCycles.find(c => c.id === detailCycleId)
                       if (selCycles.length === 0) return null
-                      if (!dc) return (
-                        <div className="card" style={{ padding: '20px 14px', color: 'var(--text-secondary)', fontSize: 12, textAlign: 'center' }}>
-                          ← 点击轮子查看交易明细
-                        </div>
-                      )
+                      if (!dc) return null
                       const cycleTrades = trades
                         .filter(t => t.cycle_id === dc.id)
                         .sort((a, b) => (a.traded_at < b.traded_at ? -1 : 1))
+                      const detailIdx = selCycles.findIndex(c => c.id === dc.id)
                       return (
                         <div className="card" style={{ padding: '10px 14px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                             <span style={{ fontSize: 13, fontWeight: 700 }}>
                               交易明细
                               <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
+                                {selCycles.length > 1 ? `#${detailIdx + 1} · ` : ''}
                                 {STAGE_LABELS[dc.status]} · 始于 {fmtDate(dc.started_at)} · {cycleTrades.length} 笔
                               </span>
                             </span>
-                            <button className="btn" style={{ fontSize: 11, padding: '1px 8px' }}
-                              onClick={() => setSelectedCycleId(null)}>关闭</button>
+                            {selCycles.length > 1 && (
+                              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                                点击左侧轮子切换
+                              </span>
+                            )}
                           </div>
                           {cycleTrades.length === 0 && (
                             <div style={{ color: 'var(--text-secondary)', fontSize: 12, padding: '8px 0' }}>暂无交易记录</div>
