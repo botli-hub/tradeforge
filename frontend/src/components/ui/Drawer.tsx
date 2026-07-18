@@ -39,8 +39,8 @@ export default function Drawer({ open, onClose, title, subtitle, children, mode 
       >
         <div className="drawer-header">
           <div>
-            <div style={{ fontWeight: 700, fontSize: 16 }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{subtitle}</div>}
+            <div style={{ fontWeight: 700, fontSize: 17 }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 2 }}>{subtitle}</div>}
           </div>
           <button type="button" className="btn-icon" aria-label="关闭" onClick={onClose}>✕</button>
         </div>

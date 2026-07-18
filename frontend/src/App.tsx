@@ -138,7 +138,7 @@ function App() {
             ))}
           </div>
           {mode === 'wheel' && (
-            <span className="desktop-only" style={{ fontSize: 11, color: 'var(--text-secondary)', marginLeft: 'auto', paddingRight: 8 }}>
+            <span className="desktop-only" style={{ fontSize: 13, color: 'var(--text-secondary)', marginLeft: 'auto', paddingRight: 8 }}>
               状态机 · 机会 · 台账 · 富途成交后登记
             </span>
           )}

@@ -370,7 +370,7 @@ export default function BacktestPage() {
         </div>
 
         {/* Coverage info strip */}
-        <div style={{ marginTop: 4, fontSize: 12 }}>
+        <div style={{ marginTop: 4, fontSize: 13 }}>
           {coverageLoading && <span style={{ color: 'var(--text-tertiary)' }}>查询本地数据范围...</span>}
           {!coverageLoading && coverage && coverage.bar_count > 0 && (
             <span style={{ color: 'var(--green)' }}>
@@ -456,13 +456,13 @@ export default function BacktestPage() {
                 <div className="metric-card" style={{ gridColumn: 'span 4', borderTop: '1px solid var(--border)', paddingTop: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
                     <div>
-                      <div className={`value ${result.metrics.buy_and_hold_return >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: 20 }}>
+                      <div className={`value ${result.metrics.buy_and_hold_return >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: 21 }}>
                         {formatPercent(result.metrics.buy_and_hold_return)}
                       </div>
                       <div className="label">买入持有基准</div>
                     </div>
                     <div>
-                      <div className={`value ${(result.metrics.total_return - result.metrics.buy_and_hold_return) >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: 20 }}>
+                      <div className={`value ${(result.metrics.total_return - result.metrics.buy_and_hold_return) >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: 21 }}>
                         {formatPercent(result.metrics.total_return - result.metrics.buy_and_hold_return)}
                       </div>
                       <div className="label">策略超额收益</div>
@@ -478,7 +478,7 @@ export default function BacktestPage() {
             <h4 style={{ marginBottom: 12 }}>资金曲线</h4>
             {equityCurve.length ? (
               <>
-                <div style={{ marginBottom: 10, color: 'var(--text-secondary)', fontSize: 13 }}>
+                <div style={{ marginBottom: 10, color: 'var(--text-secondary)', fontSize: 14 }}>
                   最新权益：<strong style={{ color: 'var(--text-primary)' }}>${formatNumber(latestEquity)}</strong>
                 </div>
                 <svg viewBox="0 0 840 280" style={{ width: '100%', height: 280, display: 'block' }}>
@@ -541,7 +541,7 @@ export default function BacktestPage() {
               {result.trades?.length ? (
                 <button
                   className="btn-outline"
-                  style={{ fontSize: 12, padding: '4px 14px' }}
+                  style={{ fontSize: 13, padding: '4px 14px' }}
                   onClick={() => {
                     const headers = ['#', '标的', '入场时间', '入场价', '出场时间', '出场价', '数量', '盈亏']
                     const rows = result.trades.map((t, i) => [

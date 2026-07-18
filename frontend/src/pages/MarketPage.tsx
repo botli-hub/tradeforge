@@ -451,12 +451,12 @@ export default function MarketPage() {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, alignItems: 'center' }}>
           <div>
-            <span style={{ fontSize: 24, fontWeight: 'bold' }}>{symbol}</span>
+            <span style={{ fontSize: 25, fontWeight: 'bold' }}>{symbol}</span>
             <span style={{ marginLeft: 10, color: 'var(--text-secondary)' }}>{quote?.name || symbol}</span>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 24 }}>${lastPrice?.toFixed?.(2) ?? '--'}</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{loading ? '加载中...' : `周期 ${timeframe}`}</div>
+            <div style={{ fontSize: 25 }}>${lastPrice?.toFixed?.(2) ?? '--'}</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{loading ? '加载中...' : `周期 ${timeframe}`}</div>
           </div>
         </div>
 

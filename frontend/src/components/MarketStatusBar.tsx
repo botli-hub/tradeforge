@@ -74,7 +74,7 @@ export default function MarketStatusBar(props: Props) {
           </select>
         </div>
         {signalInfo && (
-          <div style={{ marginTop: 12, color: 'var(--text-secondary)', fontSize: 13 }}>
+          <div style={{ marginTop: 12, color: 'var(--text-secondary)', fontSize: 14 }}>
             当前策略：<strong>{signalInfo.strategy_name}</strong> | 最新信号：<strong>{signalInfo.signal}</strong>
           </div>
         )}

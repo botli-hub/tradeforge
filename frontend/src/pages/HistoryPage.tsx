@@ -97,15 +97,15 @@ export default function HistoryPage() {
             <div className="label">每日执行时间</div>
           </div>
           <div className="metric-card">
-            <div className="value" style={{ fontSize: 15 }}>{schedulerStatus?.last_started_at || '--'}</div>
+            <div className="value" style={{ fontSize: 16 }}>{schedulerStatus?.last_started_at || '--'}</div>
             <div className="label">最近启动</div>
           </div>
           <div className="metric-card">
-            <div className="value" style={{ fontSize: 15 }}>{schedulerStatus?.next_run_at || '--'}</div>
+            <div className="value" style={{ fontSize: 16 }}>{schedulerStatus?.next_run_at || '--'}</div>
             <div className="label">下次执行</div>
           </div>
         </div>
-        <div style={{ marginTop: 14, color: 'var(--text-secondary)', fontSize: 13 }}>
+        <div style={{ marginTop: 14, color: 'var(--text-secondary)', fontSize: 14 }}>
           固定更新周期：<strong>1d / 1h / 30m / 5m / 1m</strong>
           　·　启动时自动检测缺失数据并补充
         </div>

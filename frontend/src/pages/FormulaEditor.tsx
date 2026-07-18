@@ -163,7 +163,7 @@ export default function FormulaEditor({
             borderRadius: 8,
             padding: 12,
             fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            fontSize: 13,
+            fontSize: 14,
             lineHeight: 1.6,
             resize: 'vertical'
           }}
@@ -182,7 +182,7 @@ export default function FormulaEditor({
                 <span>{p.default}</span>
               </div>
               <input type="range" min={p.min} max={p.max} defaultValue={p.default} style={{ width: '100%' }} />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#666' }}>
                 <span>{p.min}</span>
                 <span>{p.max}</span>
               </div>

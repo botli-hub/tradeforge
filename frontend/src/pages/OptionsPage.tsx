@@ -223,7 +223,7 @@ export default function OptionsPage() {
           </div>
         )}
         {chain && volProfile && (
-          <div className="status-line" style={{ marginTop: 8, fontSize: 12, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="status-line" style={{ marginTop: 8, fontSize: 13, display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
             <span>
               IV Rank：
               <b style={{ color: (volProfile.iv_rank ?? 0) >= 70 ? '#f87171' : (volProfile.iv_rank ?? 0) >= 50 ? '#fb923c' : undefined }}>
@@ -245,7 +245,7 @@ export default function OptionsPage() {
             )}
           </div>
         )}
-        {chain?.detail && <div style={{ marginTop: 10, color: '#ffb066', fontSize: 12 }}>{chain.detail}</div>}
+        {chain?.detail && <div style={{ marginTop: 10, color: '#ffb066', fontSize: 13 }}>{chain.detail}</div>}
       </div>
 
       {error && (

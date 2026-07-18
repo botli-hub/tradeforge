@@ -101,7 +101,7 @@ export default function SettingsPage() {
   return (
     <div className="page" style={{ maxWidth: 920 }}>
       <h2 style={{ marginBottom: 8 }}>设置</h2>
-      <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 16px' }}>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 16px' }}>
         按使用场景分区：Wheel 管盘中策略；研究管回测与前端行情；通用管密钥与后台连接。
       </p>
 
@@ -196,7 +196,7 @@ export default function SettingsPage() {
             {settings.marketDataSource === 'finnhub' && (
               <div className="settings-row">
                 <label>说明</label>
-                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                   Finnhub Key 在「通用」Tab 配置
                 </span>
               </div>
@@ -206,7 +206,7 @@ export default function SettingsPage() {
                 {testingMarket ? '测试中…' : '测试行情连接'}
               </button>
               {marketStatus && (
-                <span style={{ fontSize: 12, color: marketStatus.connected ? 'var(--green)' : 'var(--warning)', alignSelf: 'center' }}>
+                <span style={{ fontSize: 13, color: marketStatus.connected ? 'var(--green)' : 'var(--warning)', alignSelf: 'center' }}>
                   {marketStatus.connected ? `已连接 ${marketStatus.adapter}` : '未连接'}
                 </span>
               )}
@@ -261,7 +261,7 @@ export default function SettingsPage() {
               <button type="button" className="btn btn-secondary btn-sm" disabled={connectingTrading} onClick={handleDisconnectTrading}>
                 断开
               </button>
-              <span style={{ fontSize: 12, color: tradingConnected ? 'var(--green)' : 'var(--text-secondary)', alignSelf: 'center' }}>
+              <span style={{ fontSize: 13, color: tradingConnected ? 'var(--green)' : 'var(--text-secondary)', alignSelf: 'center' }}>
                 {tradingConnected ? '已连接' : '未连接'}
               </span>
             </div>
@@ -387,7 +387,7 @@ function BackendConfigCard({
         <>
           <div className="editor-section">
             <h4>Telegram 通知</h4>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
               敏感信息仅存本地数据库，不会进代码仓库。
             </p>
             <div className="settings-row">
@@ -428,7 +428,7 @@ function BackendConfigCard({
 
           <div className="editor-section">
             <h4>后台 OpenD（扫描/任务用）</h4>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
               与「研究」Tab 里前端行情 Host/Port 可分开配置；后台任务（触线/高分）读这里。
             </p>
             <div className="settings-row">
@@ -448,7 +448,7 @@ function BackendConfigCard({
         <>
           <div className="editor-section">
             <h4>触线扫描（EMA 时机）</h4>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
               对应机会里的「触线」来源：合约价摸到自身 EMA50/200。标的级 delta/年化在 Wheel→标的设置。
             </p>
 
@@ -456,8 +456,8 @@ function BackendConfigCard({
               marginBottom: 14, padding: '12px 14px', borderRadius: 10,
               border: '1px solid rgba(56,189,248,0.35)', background: 'rgba(56,189,248,0.08)',
             }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>Strike 扫描区间（相对现价）</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Strike 扫描区间（相对现价）</div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
                 只扫现价附近合约：区间 = 现价 × [1 − 下方%, 1 + 上方%]。
                 例：现价 100、下 20% / 上 10% → 扫 strike <b style={{ color: 'var(--text)' }}>80 ~ 110</b>。
                 CALL 另有 strike ≥ cost_basis。
@@ -478,7 +478,7 @@ function BackendConfigCard({
                   onChange={e => up('wheel_timing', 'strike_range_up', Math.max(0, Number(e.target.value) || 0) / 100)}
                 />
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+              <div style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>
                 当前：现价 × [1−{downPct}%, 1+{upPct}%] · 默认 20% / 10%
               </div>
             </div>
@@ -569,7 +569,7 @@ function BackendConfigCard({
 
           <div className="editor-section">
             <h4>高分扫描（截面打分）</h4>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
               机会里的「高分 / 优先」来源。按规则筛合约再综合打分。
             </p>
             <div className="settings-row">
@@ -649,7 +649,7 @@ function BackendConfigCard({
 
           <div className="editor-section">
             <h4>组合风控</h4>
-            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
               <b>组合净值</b>是账户总预算的<b>唯一入口</b>：Wheel 首页可用资金/建议张数、体检资金紧、
               优化页利用率均读此值。请勿在标的页另设「组合预算」。
               单标的上限在 <b>Wheel → 标的</b> 的 max_capital。
@@ -684,7 +684,7 @@ function BackendConfigCard({
       )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
           保存后立即生效 · 存本地数据库
         </span>
         <button type="button" className="btn btn-primary" onClick={save} disabled={saving}>

@@ -152,18 +152,18 @@ export default function StocksPage() {
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>市场筛选：</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 14 }}>市场筛选：</span>
           {MARKET_OPTS.map(m => (
             <button
               key={m}
               className={filter === m ? 'btn' : 'btn-outline'}
-              style={{ padding: '4px 14px', fontSize: 13 }}
+              style={{ padding: '4px 14px', fontSize: 14 }}
               onClick={() => setFilter(m)}
             >
               {m === 'ALL' ? '全部' : MARKET_LABEL[m]}
             </button>
           ))}
-          <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontSize: 13 }}>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-secondary)', fontSize: 14 }}>
             共 {displayed.length} 只 · 已启用 {displayed.filter(s => s.enabled).length} · 已订阅 {displayed.filter(s => s.subscribed).length}
           </span>
         </div>
@@ -175,7 +175,7 @@ export default function StocksPage() {
         return (
           <div key={market} className="card" style={{ marginBottom: 16 }}>
             <h3 style={{ marginBottom: 12 }}>{MARKET_LABEL[market]}</h3>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 15 }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)', borderBottom: '1px solid var(--border)' }}>
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>代码</th>
@@ -204,7 +204,7 @@ export default function StocksPage() {
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
                         <button
                           className="btn-outline"
-                          style={{ fontSize: 12, padding: '3px 10px' }}
+                          style={{ fontSize: 13, padding: '3px 10px' }}
                           disabled={busy[s.symbol]}
                           onClick={() => toggleEnabled(s)}
                         >
@@ -212,7 +212,7 @@ export default function StocksPage() {
                         </button>
                         <button
                           className="btn-outline"
-                          style={{ fontSize: 12, padding: '3px 10px' }}
+                          style={{ fontSize: 13, padding: '3px 10px' }}
                           disabled={busy[s.symbol]}
                           onClick={() => toggleSubscribed(s)}
                         >
@@ -220,7 +220,7 @@ export default function StocksPage() {
                         </button>
                         <button
                           className="btn-outline"
-                          style={{ fontSize: 12, padding: '3px 10px', color: '#e94560', borderColor: '#e94560' }}
+                          style={{ fontSize: 13, padding: '3px 10px', color: '#e94560', borderColor: '#e94560' }}
                           disabled={busy[s.symbol]}
                           onClick={() => handleDelete(s)}
                         >

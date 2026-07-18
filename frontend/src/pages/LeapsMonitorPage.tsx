@@ -19,7 +19,7 @@ function Badge({ level }: { level: string }) {
     <span style={{
       padding: '2px 8px',
       borderRadius: 4,
-      fontSize: 11,
+      fontSize: 13,
       fontWeight: 700,
       background: s.bg,
       color: s.color,
@@ -146,16 +146,16 @@ export default function LeapsMonitorPage() {
   return (
     <div style={{ padding: '20px 24px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontSize: 20 }}>LEAPS Put 信号监控</h2>
+        <h2 style={{ margin: 0, fontSize: 21 }}>LEAPS Put 信号监控</h2>
         <button
           onClick={() => handleScan()}
           disabled={scanning}
           className="btn btn-primary"
-          style={{ fontSize: 13, padding: '5px 14px' }}
+          style={{ fontSize: 14, padding: '5px 14px' }}
         >
           {scanning ? '扫描中...' : '手动扫描全部'}
         </button>
-        <button onClick={loadAll} disabled={loading} className="btn" style={{ fontSize: 13, padding: '5px 12px' }}>
+        <button onClick={loadAll} disabled={loading} className="btn" style={{ fontSize: 14, padding: '5px 12px' }}>
           刷新
         </button>
       </div>
@@ -171,7 +171,7 @@ export default function LeapsMonitorPage() {
             key={t}
             onClick={() => setTab(t)}
             style={{
-              padding: '8px 16px', cursor: 'pointer', fontSize: 13,
+              padding: '8px 16px', cursor: 'pointer', fontSize: 14,
               borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
               color: tab === t ? 'var(--accent)' : 'var(--text-secondary)',
             }}
@@ -192,16 +192,16 @@ export default function LeapsMonitorPage() {
               { label: '二级信号', value: signals.filter(s => s.signal_level === 'SECONDARY').length, sub: 'EMA200 触发' },
             ].map(({ label, value, sub }) => (
               <div key={label} className="card" style={{ padding: '16px 20px' }}>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>{label}</div>
-                <div style={{ fontSize: 28, fontWeight: 700 }}>{value}</div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 4 }}>{sub}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6 }}>{label}</div>
+                <div style={{ fontSize: 29, fontWeight: 700 }}>{value}</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>{sub}</div>
               </div>
             ))}
           </div>
 
           {status?.recent_signals && status.recent_signals.length > 0 && (
             <div>
-              <h3 style={{ fontSize: 14, marginBottom: 12 }}>最近信号</h3>
+              <h3 style={{ fontSize: 15, marginBottom: 12 }}>最近信号</h3>
               <SignalsTable signals={status.recent_signals} onResend={handleResend} />
             </div>
           )}
@@ -213,11 +213,11 @@ export default function LeapsMonitorPage() {
         <div>
           {/* 添加标的(候选来自股票池的美股/港股) */}
           <div className="card" style={{ padding: '14px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>添加标的</span>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>添加标的</span>
             <select
               value={addSymbol}
               onChange={e => setAddSymbol(e.target.value)}
-              style={{ width: 260, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
+              style={{ width: 260, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 14 }}
             >
               <option value="">选择标的…</option>
               {(() => {
@@ -264,17 +264,17 @@ export default function LeapsMonitorPage() {
               value={addFloor}
               onChange={e => setAddFloor(e.target.value)}
               placeholder="接货底线价"
-              style={{ width: 110, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13 }}
+              style={{ width: 110, padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 14 }}
               title="按个股填写接货底线"
             />
-            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }} disabled={adding || !addSymbol} onClick={handleAdd}>
+            <button className="btn btn-primary" style={{ fontSize: 14, padding: '5px 14px' }} disabled={adding || !addSymbol} onClick={handleAdd}>
               {adding ? '添加中...' : '添加'}
             </button>
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               从股票池候选下拉选择，共 {candidates.length} 个；已添加的不再显示
             </span>
           </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['标的', '名称', '接货底线价', '状态', '操作'].map(h => (
@@ -299,8 +299,8 @@ export default function LeapsMonitorPage() {
                           onChange={e => setEditingFloor(prev => ({ ...prev, [item.symbol]: e.target.value }))}
                           style={{ width: 90, padding: '3px 6px', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)' }}
                         />
-                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '3px 10px' }} onClick={() => handleSaveFloor(item.symbol)}>保存</button>
-                        <button className="btn" style={{ fontSize: 12, padding: '3px 8px' }} onClick={() => setEditingFloor(prev => { const n = { ...prev }; delete n[item.symbol]; return n })}>取消</button>
+                        <button className="btn btn-primary" style={{ fontSize: 13, padding: '3px 10px' }} onClick={() => handleSaveFloor(item.symbol)}>保存</button>
+                        <button className="btn" style={{ fontSize: 13, padding: '3px 8px' }} onClick={() => setEditingFloor(prev => { const n = { ...prev }; delete n[item.symbol]; return n })}>取消</button>
                       </div>
                     ) : (
                       <span style={{ cursor: 'pointer', color: 'var(--accent)' }} onClick={() => setEditingFloor(prev => ({ ...prev, [item.symbol]: String(item.floor_price) }))}>
@@ -317,14 +317,14 @@ export default function LeapsMonitorPage() {
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
                         className="btn"
-                        style={{ fontSize: 12, padding: '3px 10px' }}
+                        style={{ fontSize: 13, padding: '3px 10px' }}
                         onClick={() => handleToggleEnabled(item.symbol, item.enabled)}
                       >
                         {item.enabled ? '停用' : '启用'}
                       </button>
                       <button
                         className="btn btn-primary"
-                        style={{ fontSize: 12, padding: '3px 10px' }}
+                        style={{ fontSize: 13, padding: '3px 10px' }}
                         disabled={scanning}
                         onClick={() => handleScan(item.symbol)}
                       >
@@ -332,7 +332,7 @@ export default function LeapsMonitorPage() {
                       </button>
                       <button
                         className="btn"
-                        style={{ fontSize: 12, padding: '3px 10px', color: '#f87171' }}
+                        style={{ fontSize: 13, padding: '3px 10px', color: '#f87171' }}
                         onClick={() => handleDelete(item.symbol)}
                       >
                         删除
@@ -353,7 +353,7 @@ export default function LeapsMonitorPage() {
 
       {/* 冷却 */}
       {tab === 'cooldowns' && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
               {['合约', '标的', '冷却到期时间'].map(h => (
@@ -367,7 +367,7 @@ export default function LeapsMonitorPage() {
             )}
             {cooldowns.map(c => (
               <tr key={c.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 12 }}>{c.contract_code}</td>
+                <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 13 }}>{c.contract_code}</td>
                 <td style={{ padding: '10px 12px', fontWeight: 600 }}>{c.symbol}</td>
                 <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{formatDate(c.cooldown_until)}</td>
               </tr>
@@ -390,11 +390,11 @@ function SignalsTable({
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (signals.length === 0) {
-    return <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '20px 0' }}>暂无信号记录</div>
+    return <div style={{ color: 'var(--text-secondary)', fontSize: 14, padding: '20px 0' }}>暂无信号记录</div>
   }
 
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
       <thead>
         <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
           {['信号', '标的', '合约', 'IV Rank', '触发价/均线', '标的价', '时间', ''].map(h => (
@@ -412,7 +412,7 @@ function SignalsTable({
             >
               <td style={{ padding: '10px 12px' }}><Badge level={sig.signal_level} /></td>
               <td style={{ padding: '10px 12px', fontWeight: 600 }}>{sig.symbol}</td>
-              <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
+              <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontSize: 13, color: 'var(--text-secondary)' }}>
                 {formatExpiry(sig.contract_code.split('.').pop()?.slice(-12, -6) || '')} {sig.signal_level === 'SECONDARY' ? '🔥' : ''}
               </td>
               <td style={{ padding: '10px 12px' }}>
@@ -425,13 +425,13 @@ function SignalsTable({
               </td>
               <td style={{ padding: '10px 12px' }}>${sig.underlying_price}</td>
               <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                {sig.is_intraday && <span style={{ fontSize: 10, marginRight: 4, color: '#fb923c' }}>盘中</span>}
+                {sig.is_intraday && <span style={{ fontSize: 12, marginRight: 4, color: '#fb923c' }}>盘中</span>}
                 {formatDate(sig.created_at)}
               </td>
               <td style={{ padding: '10px 12px' }}>
                 <button
                   className="btn"
-                  style={{ fontSize: 11, padding: '2px 8px' }}
+                  style={{ fontSize: 13, padding: '2px 8px' }}
                   onClick={e => { e.stopPropagation(); onResend(sig.id) }}
                 >
                   推送
@@ -441,7 +441,7 @@ function SignalsTable({
             {expanded === sig.id && sig.suggestions.length > 0 && (
               <tr key={sig.id + '_detail'} style={{ background: 'var(--bg-secondary)' }}>
                 <td colSpan={8} style={{ padding: '12px 24px' }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>📋 建议交易（卖出虚值 put，delta 0.20~0.30）</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>📋 建议交易（卖出虚值 put，delta 0.20~0.30）</div>
                   <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                     {sig.suggestions.map(s => (
                       <div key={s.contract_code} style={{
@@ -452,8 +452,8 @@ function SignalsTable({
                         <div style={{ fontWeight: 700, marginBottom: 4 }}>${s.strike}P &nbsp; δ{s.delta}</div>
                         <div>权利金 <b>${s.premium}</b></div>
                         <div>年化 <b style={{ color: '#4ade80' }}>{s.annualized_yield}%</b></div>
-                        <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>接货成本 ${s.cost_basis}</div>
-                        <div style={{ color: 'var(--text-secondary)', fontSize: 11 }}>DTE {s.dte}天</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>接货成本 ${s.cost_basis}</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>DTE {s.dte}天</div>
                       </div>
                     ))}
                   </div>

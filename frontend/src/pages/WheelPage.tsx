@@ -210,7 +210,7 @@ type SemColor = keyof typeof C
 function Badge({ color, children, title }: { color: SemColor; children: any; title?: string }) {
   return (
     <span title={title} style={{
-      padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700,
+      padding: '0 7px', borderRadius: 8, fontSize: 12, fontWeight: 700,
       background: C[color] + '22', color: C[color], border: `1px solid ${C[color]}55`,
       whiteSpace: 'nowrap',
     }}>{children}</span>
@@ -220,15 +220,15 @@ function Badge({ color, children, title }: { color: SemColor; children: any; tit
 function Stat({ label, value, color }: { label: string; value: string; color?: SemColor }) {
   return (
     <div>
-      <div style={{ color: 'var(--text-secondary)', fontSize: 10 }}>{label}</div>
-      <div style={{ fontWeight: 600, fontSize: 12, color: color ? C[color] : 'var(--text)' }}>{value}</div>
+      <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{label}</div>
+      <div style={{ fontWeight: 600, fontSize: 13, color: color ? C[color] : 'var(--text)' }}>{value}</div>
     </div>
   )
 }
 
 function StatusDot({ ok, label }: { ok: boolean | null; label: string }) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: 'var(--text-secondary)' }}>
       <span style={{
         width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
         background: ok == null ? 'var(--border)' : ok ? C.green : C.red,
@@ -1075,7 +1075,7 @@ function fmtDate(iso: string | null | undefined) {
 function VolatilityBar({ v }: { v: VolatilityProfile }) {
   const spread = v.atm_iv != null && v.hv20 != null ? +(v.atm_iv - v.hv20).toFixed(1) : null
   return (
-    <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12, alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 13, alignItems: 'center' }}>
       <span>
         IV Rank{' '}
         <b style={{ color: (v.iv_rank ?? 0) >= 70 ? '#f87171' : (v.iv_rank ?? 0) >= 50 ? '#fb923c' : 'var(--text)' }}>
@@ -1107,14 +1107,14 @@ function StageIndicator({ status }: { status: string }) {
       {stages.map((s, i) => (
         <span key={s} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span style={{
-            padding: '1px 7px', borderRadius: 9, fontSize: 10,
+            padding: '1px 7px', borderRadius: 9, fontSize: 12,
             background: i === idx ? STAGE_COLORS[s] + '33' : 'transparent',
             color: i === idx ? STAGE_COLORS[s] : 'var(--text-secondary)',
             border: `1px solid ${i === idx ? STAGE_COLORS[s] : 'var(--border)'}`,
             fontWeight: i === idx ? 700 : 400,
             whiteSpace: 'nowrap',
           }}>{STAGE_LABELS[s]}</span>
-          {i < stages.length - 1 && <span style={{ color: 'var(--text-secondary)', fontSize: 9 }}>→</span>}
+          {i < stages.length - 1 && <span style={{ color: 'var(--text-secondary)', fontSize: 11 }}>→</span>}
         </span>
       ))}
     </div>
@@ -1243,7 +1243,7 @@ function TradeModal({
 
   const inputStyle = {
     width: '100%', padding: '6px 8px', background: 'var(--bg-secondary)',
-    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13,
+    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 14,
   } as const
 
   return (
@@ -1252,16 +1252,16 @@ function TradeModal({
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }} onClick={onClose}>
       <div className="modal-card" style={{ width: 440, maxWidth: '100%', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 16px', fontSize: 16 }}>登记交易 — {form.symbol}</h3>
+        <h3 style={{ margin: '0 0 16px', fontSize: 17 }}>登记交易 — {form.symbol}</h3>
         {err && <div className="alert alert-error" style={{ marginBottom: 12 }}>{err}</div>}
         <div style={{ display: 'grid', gap: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             类型
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
               {allowed.map(t => (
                 <button key={t} type="button" onClick={() => setForm(f => ({ ...f, trade_type: t }))}
                   style={{
-                    padding: '5px 12px', borderRadius: 14, fontSize: 12, cursor: 'pointer',
+                    padding: '5px 12px', borderRadius: 14, fontSize: 13, cursor: 'pointer',
                     border: `1px solid ${form.trade_type === t ? 'var(--accent)' : 'var(--border)'}`,
                     background: form.trade_type === t ? 'var(--accent)' : 'transparent',
                     color: form.trade_type === t ? '#fff' : 'var(--text)',
@@ -1273,7 +1273,7 @@ function TradeModal({
             </div>
           </div>
           {needContract && (
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               合约代码(选填,留空将按 Strike+到期日自动补全)
               <input value={form.contract_code} style={inputStyle} placeholder="留空自动生成,如 US.AAPL260821P00200000"
                 onChange={e => setForm(f => ({ ...f, contract_code: e.target.value }))}
@@ -1281,21 +1281,21 @@ function TradeModal({
                   ...f,
                   contract_code: normalizeContractCode(f.contract_code, f.symbol) || f.contract_code,
                 }))} />
-              {codeWarn && <div style={{ color: '#fb923c', fontSize: 11, marginTop: 4 }}>{codeWarn}</div>}
+              {codeWarn && <div style={{ color: '#fb923c', fontSize: 13, marginTop: 4 }}>{codeWarn}</div>}
             </label>
           )}
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '8px 10px', borderRadius: 6 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '8px 10px', borderRadius: 6 }}>
             最少填<strong>成交价</strong>+数量;合约代码建议填全以便体检与转化率。富途成交后在此登记即可驱动状态机。
           </div>
           {(needContract || ['ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type)) && (
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               行权价 Strike {['ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type) ? '(留空则用在场合约的)' : ''}
               <input type="number" value={form.strike} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, strike: e.target.value }))} />
             </label>
           )}
           {needContract && (
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               到期日
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
                 <input type="date" value={form.expiry} style={{ ...inputStyle, width: 150, cursor: 'pointer' }}
@@ -1305,7 +1305,7 @@ function TradeModal({
                   <button key={label} type="button" onClick={() => setForm(f => ({ ...f, expiry: val }))}
                     title={val}
                     style={{
-                      padding: '3px 8px', borderRadius: 10, fontSize: 11, cursor: 'pointer',
+                      padding: '3px 8px', borderRadius: 10, fontSize: 13, cursor: 'pointer',
                       border: `1px solid ${form.expiry === val ? 'var(--accent)' : 'var(--border)'}`,
                       color: form.expiry === val ? 'var(--accent)' : 'var(--text-secondary)',
                       background: 'transparent',
@@ -1318,7 +1318,7 @@ function TradeModal({
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
             {(needContract || form.trade_type === 'BUY_SHARES') && (
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                 {form.trade_type === 'BUY_SHARES' ? '股数' : '张数'}
                 <SelectNum
                   value={form.qty}
@@ -1329,34 +1329,34 @@ function TradeModal({
               </label>
             )}
             {needPrice && (
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                 {form.trade_type === 'SELL_SHARES' ? '每股卖价' : form.trade_type === 'BUY_SHARES' ? '每股成本' : '权利金/张'}
                 <input type="number" step="any" value={form.price} style={inputStyle}
                   placeholder="成交价"
                   onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
               </label>
             )}
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               手续费
               <SelectNum value={form.fee} options={FEE_OPTS} style={inputStyle}
                 onChange={v => setForm(f => ({ ...f, fee: v }))} />
             </label>
           </div>
           {needContract && (
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               合约乘数
               <SelectNum value={form.contract_size} options={CONTRACT_SIZE_OPTS} style={inputStyle}
                 onChange={v => setForm(f => ({ ...f, contract_size: v }))} />
             </label>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               成交时间
               <input type="datetime-local" value={form.traded_at} style={{ ...inputStyle, cursor: 'pointer' }}
                 onClick={e => { try { (e.currentTarget as HTMLInputElement).showPicker() } catch {} }}
                 onChange={e => setForm(f => ({ ...f, traded_at: e.target.value }))} />
             </label>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               备注
               <input value={form.note} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
@@ -1364,14 +1364,14 @@ function TradeModal({
           </div>
           {cashFlow != null && priceN > 0 && (
             <div style={{
-              padding: '8px 12px', borderRadius: 6, fontSize: 13,
+              padding: '8px 12px', borderRadius: 6, fontSize: 14,
               background: cashFlow >= 0 ? '#4ade8011' : '#f8717111',
               border: `1px solid ${cashFlow >= 0 ? '#4ade8044' : '#f8717144'}`,
             }}>
               本笔现金流:<b style={{ color: cashFlow >= 0 ? '#4ade80' : '#f87171' }}>
                 {cashFlow >= 0 ? '+' : ''}{cashFlow.toLocaleString('en-US', { maximumFractionDigits: 2 })}
               </b>
-              <span style={{ color: 'var(--text-secondary)', marginLeft: 8, fontSize: 11 }}>
+              <span style={{ color: 'var(--text-secondary)', marginLeft: 8, fontSize: 13 }}>
                 {isShares
                   ? `${qtyN} 股 × ${priceN}${form.trade_type === 'SELL_SHARES' ? ` − 手续费 ${feeN}` : ` + 手续费 ${feeN}`}`
                   : `${qtyN} 张 × ${priceN} × ${sizeN}${isSell ? ` − 手续费 ${feeN}` : ` + 手续费 ${feeN}`}`}
@@ -2221,7 +2221,7 @@ export default function WheelPage() {
 
   const inputStyle = {
     padding: '5px 8px', background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-    borderRadius: 4, color: 'var(--text)', fontSize: 13,
+    borderRadius: 4, color: 'var(--text)', fontSize: 14,
   } as const
 
   const manageCount = allOppRows.filter(r => r.kind === 'MANAGE').length
@@ -2251,7 +2251,7 @@ export default function WheelPage() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0 }}>Wheel</h2>
         <button type="button" className="btn btn-sm btn-secondary" onClick={loadAll} title="刷新台账与标的">刷新</button>
-        <span style={{ display: 'flex', gap: 12, alignItems: 'center', marginLeft: 'auto', fontSize: 12, color: 'var(--text-secondary)' }}>
+        <span style={{ display: 'flex', gap: 12, alignItems: 'center', marginLeft: 'auto', fontSize: 13, color: 'var(--text-secondary)' }}>
           <StatusDot ok={opendOk} label="富途" />
           <StatusDot ok={tgOk} label="TG" />
           {(() => {
@@ -2282,14 +2282,14 @@ export default function WheelPage() {
         <div className="banner error">
           <span style={{ flex: 1 }}>{error}</span>
           <button type="button" className="btn btn-sm btn-secondary" onClick={loadAll}>重试</button>
-          <span style={{ fontSize: 11, opacity: 0.85 }}>{scanFailureHint(error).tips.join(' · ')}</span>
+          <span style={{ fontSize: 13, opacity: 0.85 }}>{scanFailureHint(error).tips.join(' · ')}</span>
         </div>
       )}
 
       {showOnboard && (
         <div className="panel" style={{ borderColor: 'rgba(56,189,248,0.35)' }}>
           <div className="panel-title">👋 3 步上手</div>
-          <ol style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+          <ol style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
             <li>标的里添加代码并设愿接最高价(Put 行权价上限,不是止损)</li>
             <li>机会扫描 → 优先 → 备忘 → 富途成交</li>
             <li>今日「待登记」填成交价，驱动状态机</li>
@@ -2331,7 +2331,7 @@ export default function WheelPage() {
             { label: '利润达标', value: String(profitHits.length) },
           ].map(m => (
             <div key={m.label} className="metric-card">
-              <div className="value" style={{ fontSize: 18 }}>{m.value}</div>
+              <div className="value" style={{ fontSize: 19 }}>{m.value}</div>
               <div className="label">{m.label}</div>
             </div>
           ))}
@@ -2354,7 +2354,7 @@ export default function WheelPage() {
             {t.label}
           </button>
         ))}
-        <span className="desktop-only" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-tertiary)', alignSelf: 'center' }}>
+        <span className="desktop-only" style={{ marginLeft: 'auto', fontSize: 13, color: 'var(--text-tertiary)', alignSelf: 'center' }}>
           快捷键 1/2/3 · J/K · Enter · C · ? · /
         </span>
       </div>
@@ -2480,7 +2480,7 @@ export default function WheelPage() {
           {/* 今日待办流: P0 该管 → P1 开仓 → P2 待登记 */}
           <div className="panel" style={{ borderColor: 'rgba(0,200,5,0.28)' }}>
             <div className="panel-title" style={{ marginBottom: 4 }}>今日待办</div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
               先处理持仓，再开新仓，最后清登记队列
             </div>
             {putBlocked && (
@@ -2580,7 +2580,7 @@ export default function WheelPage() {
                     )
                   })()}
                   {serverOpps?.headline && (
-                    <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{serverOpps.headline}</div>
+                    <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-tertiary)' }}>{serverOpps.headline}</div>
                   )}
                 </div>
               </div>
@@ -2615,11 +2615,11 @@ export default function WheelPage() {
           {!!scanStatus?.report?.length && !timingScanning && (
             <div className="panel">
               <div className="panel-title" style={{ marginBottom: 8 }}>触线扫描诊断</div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
                 触发 {scanStatus.signals_found ?? 0} 条
                 {scanStatus.finished_at ? ` · ${String(scanStatus.finished_at).slice(11, 19)}` : ''}
               </div>
-              <div style={{ maxHeight: 220, overflow: 'auto', fontSize: 12 }}>
+              <div style={{ maxHeight: 220, overflow: 'auto', fontSize: 13 }}>
                 {(scanStatus.report || []).map((row, i) => {
                   const skipped = row.expiries_skipped || []
                   const scanned = row.expiries_scanned || []
@@ -2713,7 +2713,7 @@ export default function WheelPage() {
               )}
             </div>
             {pendingQueue.length === 0 ? (
-              <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>队列空。机会点「登记」会自动入队。</div>
+              <div style={{ fontSize: 14, color: 'var(--text-secondary)' }}>队列空。机会点「登记」会自动入队。</div>
             ) : (
               pendingQueue.map(p => (
                 <div key={p.id} className={`opp-row ${pendingLeaving === p.id ? 'pending-done' : ''}`}>
@@ -2798,11 +2798,11 @@ export default function WheelPage() {
             if (total === 0) return null
             return (
               <div className="card" style={{ padding: '10px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 13, fontWeight: 700 }}>⚡ 今日行动</span>
+                <span style={{ fontSize: 14, fontWeight: 700 }}>⚡ 今日行动</span>
                 {items.filter(([, , n]) => n > 0).map(([key, label, n, color]) => (
                   <button key={key} onClick={() => setActionFilter(f => f === key ? null : key)}
                     style={{
-                      padding: '3px 12px', borderRadius: 12, fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                      padding: '3px 12px', borderRadius: 12, fontSize: 13, cursor: 'pointer', fontWeight: 600,
                       background: actionFilter === key ? C[color] : C[color] + '18',
                       color: actionFilter === key ? '#111' : C[color],
                       border: `1px solid ${C[color]}66`,
@@ -2811,15 +2811,15 @@ export default function WheelPage() {
                   </button>
                 ))}
                 {actionFilter && (
-                  <button className="btn" style={{ fontSize: 11, padding: '2px 10px' }} onClick={() => setActionFilter(null)}>清除过滤</button>
+                  <button className="btn" style={{ fontSize: 13, padding: '2px 10px' }} onClick={() => setActionFilter(null)}>清除过滤</button>
                 )}
-                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>点击类别过滤左侧标的</span>
+                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>点击类别过滤左侧标的</span>
               </div>
             )
           })()}
 
           {targets.filter(t => t.enabled).length === 0 && (
-            <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '20px 0' }}>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 14, padding: '20px 0' }}>
               还没有启用的 wheel 标的,去「标的设置」添加(候选来自股票池美股/港股)
             </div>
           )}
@@ -2860,10 +2860,10 @@ export default function WheelPage() {
               enabled = enabled.filter(match)
             }
             if (enabled.length === 0) return (
-              <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '16px 0' }}>
+              <div style={{ color: 'var(--text-secondary)', fontSize: 14, padding: '16px 0' }}>
                 没有匹配的标的
                 {(actionFilter || symbolQuery) && (
-                  <button className="btn" style={{ fontSize: 11, padding: '2px 10px', marginLeft: 8 }}
+                  <button className="btn" style={{ fontSize: 13, padding: '2px 10px', marginLeft: 8 }}
                     onClick={() => { setActionFilter(null); setSymbolQuery('') }}>清除筛选</button>
                 )}
               </div>
@@ -2880,13 +2880,13 @@ export default function WheelPage() {
                 {/* ── 左:标的列表(窄屏自动占满整行堆叠) ── */}
                 <div className="card" style={{ flex: '1 0 250px', maxWidth: 320, minWidth: 220, padding: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px 8px' }}>
-                    <span style={{ fontSize: 11, color: 'var(--text-secondary)', flexShrink: 0 }}>标的({enabled.length})</span>
+                    <span style={{ fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0 }}>标的({enabled.length})</span>
                     <select value={symbolQuery} onChange={e => {
                       setSymbolQuery(e.target.value)
                       if (e.target.value) setSelectedSymbol(e.target.value)
                     }}
                       style={{
-                        width: '100%', minWidth: 0, padding: '2px 8px', fontSize: 11,
+                        width: '100%', minWidth: 0, padding: '2px 8px', fontSize: 13,
                         background: 'var(--bg-secondary)', border: '1px solid var(--border)',
                         borderRadius: 4, color: 'var(--text)',
                       }}>
@@ -2917,11 +2917,11 @@ export default function WheelPage() {
                         borderLeft: `3px solid ${isSel ? 'var(--accent)' : 'transparent'}`,
                       }}>
                         <div style={{ minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <div style={{ fontWeight: 700, fontSize: 15, display: 'flex', alignItems: 'center', gap: 5 }}>
                             {t.symbol}
-                            {hasWarn && <span title="临期或ITM" style={{ fontSize: 11 }}>⚠</span>}
-                            {hasProfit && <span title="浮盈达标,可平仓" style={{ fontSize: 11 }}>💰</span>}
-                            {isIdle && <span title={`空转 ${t.idle_days} 天`} style={{ fontSize: 11 }}>⏸</span>}
+                            {hasWarn && <span title="临期或ITM" style={{ fontSize: 13 }}>⚠</span>}
+                            {hasProfit && <span title="浮盈达标,可平仓" style={{ fontSize: 13 }}>💰</span>}
+                            {isIdle && <span title={`空转 ${t.idle_days} 天`} style={{ fontSize: 13 }}>⏸</span>}
                           </div>
                           <div style={{ marginTop: 3 }}>
                             <TargetPriceStrip
@@ -2932,7 +2932,7 @@ export default function WheelPage() {
                               suggestedDelta={t.suggested_floor_delta}
                             />
                           </div>
-                          <div style={{ fontSize: 10, marginTop: 2, color: 'var(--text-secondary)' }}>
+                          <div style={{ fontSize: 12, marginTop: 2, color: 'var(--text-secondary)' }}>
                             <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : undefined }}>
                               占用 ${fmtMoney(targetCapital(cs))}
                               {(t.max_capital ?? 0) > 0 && `/${fmtMoney(t.max_capital)}`}
@@ -2944,7 +2944,7 @@ export default function WheelPage() {
                         </div>
                         <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
                           {cs.length === 0 ? (
-                            <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>未开轮</span>
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>未开轮</span>
                           ) : cs.map(c => (
                             <span key={c.id} title={STAGE_LABELS[c.status]} style={{
                               width: 9, height: 9, borderRadius: '50%',
@@ -2963,9 +2963,9 @@ export default function WheelPage() {
                   <div className="card" style={{ padding: '10px 16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                        <span style={{ fontWeight: 700, fontSize: 17 }}>{sel.symbol}</span>
+                        <span style={{ fontWeight: 700, fontSize: 18 }}>{sel.symbol}</span>
                         {sel.volatility_brief && (sel.volatility_brief.atm_iv != null || sel.volatility_brief.hv20 != null) && (
-                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
+                          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}
                             title={`预期IV:最近一次ATM隐含波动率快照(${sel.volatility_brief.iv_date || '--'});实际IV:20日历史波动率;IVR:IV在自身252日历史中的百分位${sel.volatility_brief.iv_rank_source === 'hv_proxy' ? '(IV历史不足,HV近似)' : ''}`}>
                             IV <b style={{ color: 'var(--text)' }}>{sel.volatility_brief.atm_iv != null ? sel.volatility_brief.atm_iv.toFixed(1) : '--'}</b>
                             {' / HV '}<b style={{ color: 'var(--text)' }}>{sel.volatility_brief.hv20 != null ? sel.volatility_brief.hv20.toFixed(1) : '--'}</b>
@@ -2974,7 +2974,7 @@ export default function WheelPage() {
                               <b style={{ color: sel.volatility_brief.iv_rank >= 70 ? '#f87171' : sel.volatility_brief.iv_rank >= 50 ? '#fb923c' : 'var(--text)' }}>
                                 {sel.volatility_brief.iv_rank.toFixed(0)}
                               </b>
-                              {sel.volatility_brief.iv_rank_source === 'hv_proxy' && <span style={{ fontSize: 10 }}>≈</span>}
+                              {sel.volatility_brief.iv_rank_source === 'hv_proxy' && <span style={{ fontSize: 12 }}>≈</span>}
                             </>}
                           </span>
                         )}
@@ -2987,7 +2987,7 @@ export default function WheelPage() {
                               suggested={sel.suggested_floor}
                               suggestedDelta={sel.suggested_floor_delta}
                             />
-                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                               Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
                               {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
                               {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
@@ -2998,19 +2998,19 @@ export default function WheelPage() {
                               dte_max: String(sel.dte_max), min_annualized: String(sel.min_annualized),
                             })} style={{
                               border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer',
-                              borderRadius: 6, padding: '1px 8px', fontSize: 11, color: 'var(--accent)',
+                              borderRadius: 6, padding: '1px 8px', fontSize: 13, color: 'var(--accent)',
                             }}>✎ 编辑</button>
                           </>
                         )}
                         {sel.idle_days != null && sel.idle_days >= 5 && !editParams && (
-                          <span style={{ fontSize: 12, color: '#fb923c' }}>⏸ 空转 {sel.idle_days} 天</span>
+                          <span style={{ fontSize: 13, color: '#fb923c' }}>⏸ 空转 {sel.idle_days} 天</span>
                         )}
                       </div>
                       {!editParams && (
                         <div style={{ display: 'flex', gap: 8 }}>
-                          <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 14px' }}
+                          <button className="btn btn-primary" style={{ fontSize: 13, padding: '4px 14px' }}
                             disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'put')}>找 Put</button>
-                          <button className="btn" style={{ fontSize: 12, padding: '4px 14px', color: 'var(--accent)' }}
+                          <button className="btn" style={{ fontSize: 13, padding: '4px 14px', color: 'var(--accent)' }}
                             onClick={() => setTradeModal({
                               initial: { symbol: sel.symbol, trade_type: 'SELL_PUT' },
                               status: 'NONE', newCycle: true,
@@ -3022,13 +3022,13 @@ export default function WheelPage() {
                     </div>
                     {editParams && (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
-                        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}
+                        <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}
                           title="真被指派时最多愿付的股价;此后卖Put的strike不得超过此价">
                           愿接价$
                           <input type="number" step="any" value={editParams.floor_price} style={{
                             display: 'block', width: 90, padding: '4px 6px', marginTop: 2,
                             background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                            borderRadius: 4, color: 'var(--text)', fontSize: 12,
+                            borderRadius: 4, color: 'var(--text)', fontSize: 13,
                           }} onChange={e => setEditParams(f => f ? { ...f, floor_price: e.target.value } : f)} />
                         </label>
                         {([
@@ -3038,7 +3038,7 @@ export default function WheelPage() {
                           ['DTE max', 'dte_max', DTE_OPTS],
                           ['年化≥%', 'min_annualized', ANN_OPTS],
                         ] as [string, keyof NonNullable<typeof editParams>, number[]][]).map(([lab, key, opts]) => (
-                          <label key={key} style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                          <label key={key} style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                             {lab}
                             <SelectNum
                               value={editParams[key]}
@@ -3046,13 +3046,13 @@ export default function WheelPage() {
                               style={{
                                 display: 'block', width: 72, padding: '4px 6px', marginTop: 2,
                                 background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                                borderRadius: 4, color: 'var(--text)', fontSize: 12,
+                                borderRadius: 4, color: 'var(--text)', fontSize: 13,
                               }}
                               onChange={v => setEditParams(f => f ? { ...f, [key]: v } : f)}
                             />
                           </label>
                         ))}
-                        <button className="btn btn-primary" style={{ fontSize: 12, padding: '4px 14px' }}
+                        <button className="btn btn-primary" style={{ fontSize: 13, padding: '4px 14px' }}
                           disabled={savingParams} onClick={async () => {
                             setSavingParams(true)
                             setError(null)
@@ -3074,7 +3074,7 @@ export default function WheelPage() {
                               setSavingParams(false)
                             }
                           }}>{savingParams ? '保存中...' : '保存'}</button>
-                        <button className="btn" style={{ fontSize: 12, padding: '4px 14px' }}
+                        <button className="btn" style={{ fontSize: 13, padding: '4px 14px' }}
                           onClick={() => setEditParams(null)}>取消</button>
                       </div>
                     )}
@@ -3084,7 +3084,7 @@ export default function WheelPage() {
                   <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                   <div style={{ flex: '1 1 420px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {selCycles.length === 0 && (
-                    <div className="card" style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 13 }}>
+                    <div className="card" style={{ padding: '20px 16px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: 14 }}>
                       该标的还没有进行中的轮子 —— 点「找 Put」筛选合约,成交后回来登记开轮
                     </div>
                   )}
@@ -3109,7 +3109,7 @@ export default function WheelPage() {
                           {/* 行1:流程 + 徽章 + 汇总 chips */}
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             {selCycles.length > 1 && (
-                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>#{idx + 1}</span>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)' }}>#{idx + 1}</span>
                             )}
                             <StageIndicator status={status} />
                             {check?.itm && <Badge color="red">ITM</Badge>}
@@ -3152,7 +3152,7 @@ export default function WheelPage() {
                             {status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3 && (
                               <Badge color="orange" title="持股但未挂 Call,theta 收入在流失">🪑 裸奔 {c.uncovered_days} 天</Badge>
                             )}
-                            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                               {c.shares > 0 && <>持股 {c.shares} @ ${fmt(c.share_cost)}{' · '}</>}
                               {c.cost_basis != null && <>CB <b style={{ color: '#4ade80' }}>${fmt(c.cost_basis)}</b>{' · '}</>}
                               累计权利金 <b style={{ color: (c.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(c.total_premium)}</b>
@@ -3164,13 +3164,13 @@ export default function WheelPage() {
                               title={c.open_contract_code || undefined}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
                                 <span style={{
-                                  padding: '0 7px', borderRadius: 8, fontSize: 10, fontWeight: 700,
+                                  padding: '0 7px', borderRadius: 8, fontSize: 12, fontWeight: 700,
                                   background: (c.open_option_type === 'PUT' ? '#38bdf8' : '#a78bfa') + '22',
                                   color: c.open_option_type === 'PUT' ? '#38bdf8' : '#a78bfa',
                                   border: `1px solid ${c.open_option_type === 'PUT' ? '#38bdf8' : '#a78bfa'}55`,
                                 }}>{c.open_option_type}</span>
-                                <b style={{ fontSize: 13 }}>${fmt(c.open_strike)}</b>
-                                <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                                <b style={{ fontSize: 14 }}>${fmt(c.open_strike)}</b>
+                                <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                                   {(c.open_expiry || '').slice(5)} · <b style={{ color: dteVal != null && dteVal <= 7 ? '#fb923c' : 'var(--text)' }}>{dteVal != null ? `${dteVal}天` : '--'}</b>
                                   {(c.open_qty || 1) > 1 && <> · {c.open_qty}张</>}
                                 </span>
@@ -3201,7 +3201,7 @@ export default function WheelPage() {
                                       background: profitPct >= profitTarget ? '#4ade80' : '#38bdf8',
                                     }} />
                                   </div>
-                                  <span style={{ fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>止盈 {profitPct}/{profitTarget}%</span>
+                                  <span style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>止盈 {profitPct}/{profitTarget}%</span>
                                 </div>
                               )}
                             </div>
@@ -3214,15 +3214,15 @@ export default function WheelPage() {
                           flexShrink: 0, width: 84, borderLeft: '1px solid var(--border)', paddingLeft: 10,
                         }}>
                           {status === 'IDLE' && (
-                            <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
+                            <button className="btn btn-primary" style={{ fontSize: 13, padding: '3px 0', width: '100%' }}
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'put', c.id)}>找 Put</button>
                           )}
                           {status === 'HOLDING' && (
-                            <button className="btn btn-primary" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
+                            <button className="btn btn-primary" style={{ fontSize: 13, padding: '3px 0', width: '100%' }}
                               disabled={suggestLoading} onClick={() => handleSuggest(sel.symbol, 'call', c.id)}>找 Call</button>
                           )}
                           {hasOpen && check?.profit_hit && (
-                            <button className="btn" style={{ fontSize: 11, padding: '3px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
+                            <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%', color: '#4ade80', fontWeight: 700 }}
                               onClick={() => setTradeModal({
                                 initial: {
                                   symbol: sel.symbol,
@@ -3237,10 +3237,10 @@ export default function WheelPage() {
                             </button>
                           )}
                           {hasOpen && (
-                            <button className="btn" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
+                            <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%' }}
                               disabled={rollLoading} onClick={() => handleRoll(c.id)}>看 Roll</button>
                           )}
-                          <button className="btn" style={{ fontSize: 11, padding: '3px 0', width: '100%' }}
+                          <button className="btn" style={{ fontSize: 13, padding: '3px 0', width: '100%' }}
                             onClick={() => setTradeModal({ initial: { symbol: sel.symbol }, status, cycleId: c.id })}>
                             登记交易
                           </button>
@@ -3263,39 +3263,39 @@ export default function WheelPage() {
                       return (
                         <div className="card" style={{ padding: '10px 14px' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                            <span style={{ fontSize: 13, fontWeight: 700 }}>
+                            <span style={{ fontSize: 14, fontWeight: 700 }}>
                               交易明细
-                              <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
+                              <span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
                                 {selCycles.length > 1 ? `#${detailIdx + 1} · ` : ''}
                                 {STAGE_LABELS[dc.status]} · 始于 {fmtDate(dc.started_at)} · {cycleTrades.length} 笔
                               </span>
                             </span>
                             {selCycles.length > 1 && (
-                              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
+                              <span style={{ fontSize: 13, color: 'var(--text-tertiary)' }}>
                                 点击左侧轮子切换
                               </span>
                             )}
                           </div>
                           {cycleTrades.length === 0 && (
-                            <div style={{ color: 'var(--text-secondary)', fontSize: 12, padding: '8px 0' }}>暂无交易记录</div>
+                            <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '8px 0' }}>暂无交易记录</div>
                           )}
                           {cycleTrades.map(t => {
                             const cf = tradeCashFlow(t)
                             return (
                               <div key={t.id} style={{
                                 display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-                                padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12,
+                                padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 13,
                               }}>
                                 <div style={{ minWidth: 0 }}>
                                   <div>
                                     <b>{TRADE_LABELS[t.trade_type]}</b>
                                     {t.is_roll && (
-                                      <span style={{ padding: '0 6px', borderRadius: 7, fontSize: 9, fontWeight: 700, background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55', marginLeft: 6 }}
+                                      <span style={{ padding: '0 6px', borderRadius: 7, fontSize: 11, fontWeight: 700, background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55', marginLeft: 6 }}
                                         title="同日买回+再卖出,识别为一次 Roll">Roll</span>
                                     )}
-                                    <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 8 }}>{fmtDate(t.traded_at)}</span>
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: 13, marginLeft: 8 }}>{fmtDate(t.traded_at)}</span>
                                   </div>
-                                  <div style={{ color: 'var(--text-secondary)', fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                     {t.strike != null && <>${fmt(t.strike)}</>}
                                     {t.expiry && <>{' · '}{String(t.expiry).slice(5, 10)}到期</>}
                                     {t.qty > 0 && t.price > 0 && <>{' · '}{t.qty}{['BUY_SHARES', 'SELL_SHARES'].includes(t.trade_type) ? '股' : '张'} × ${fmt(t.price)}</>}
@@ -3305,19 +3305,19 @@ export default function WheelPage() {
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                                   {cf != null && (
-                                    <span style={{ fontSize: 12, fontWeight: 700, color: cf >= 0 ? '#4ade80' : '#f87171', whiteSpace: 'nowrap' }}>
+                                    <span style={{ fontSize: 13, fontWeight: 700, color: cf >= 0 ? '#4ade80' : '#f87171', whiteSpace: 'nowrap' }}>
                                       {cf >= 0 ? '+' : ''}{fmtMoney(Math.abs(cf)) === '0' ? cf.toFixed(2) : (cf < 0 ? '-' : '') + fmtMoney(Math.abs(cf))}
                                     </span>
                                   )}
-                                  <button className="btn" style={{ fontSize: 11, padding: '1px 7px' }}
+                                  <button className="btn" style={{ fontSize: 13, padding: '1px 7px' }}
                                     onClick={() => setEditTrade(t)}>✎</button>
-                                  <button className="btn" style={{ fontSize: 11, padding: '1px 7px', color: '#f87171' }}
+                                  <button className="btn" style={{ fontSize: 13, padding: '1px 7px', color: '#f87171' }}
                                     onClick={() => handleDeleteTrade(t)}>🗑</button>
                                 </div>
                               </div>
                             )
                           })}
-                          <div style={{ display: 'flex', gap: 14, fontSize: 11, color: 'var(--text-secondary)', paddingTop: 8 }}>
+                          <div style={{ display: 'flex', gap: 14, fontSize: 13, color: 'var(--text-secondary)', paddingTop: 8 }}>
                             <span>累计权利金 <b style={{ color: (dc.total_premium ?? 0) > 0 ? '#4ade80' : 'var(--text)' }}>${fmt(dc.total_premium)}</b></span>
                             <span>手续费 ${fmt(dc.total_fees)}</span>
                             {dc.cost_basis != null && <span>Cost Basis ${fmt(dc.cost_basis)}</span>}
@@ -3345,7 +3345,7 @@ export default function WheelPage() {
               <span className="panel-title" style={{ margin: 0, flex: 1 }}>
                 机会
                 {serverOpps?.headline && (
-                  <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-secondary)', marginLeft: 10 }}>
+                  <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--text-secondary)', marginLeft: 10 }}>
                     {serverOpps.headline}
                     {serverOpps.summary != null && (
                       <> · 可做 {serverOpps.summary.actionable} · 双满足 {serverOpps.summary.dual}</>
@@ -3460,7 +3460,7 @@ export default function WheelPage() {
             {!!scanStatus?.report?.length && !timingScanning && (
               <div className="banner info" style={{ marginBottom: 10, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
                 <div style={{ fontWeight: 600 }}>触线诊断 · 触发 {scanStatus.signals_found ?? 0}</div>
-                <div style={{ fontSize: 11, maxHeight: 140, overflow: 'auto' }}>
+                <div style={{ fontSize: 13, maxHeight: 140, overflow: 'auto' }}>
                   {(scanStatus.report || []).filter(r => (r.signals || 0) === 0 || (r.expiries_skipped || []).length > 0 || r.note).slice(0, 12).map((row, i) => (
                     <div key={i} style={{ marginBottom: 4 }}>
                       <strong>{row.symbol}</strong> {row.side}
@@ -3652,7 +3652,7 @@ export default function WheelPage() {
                             <li key={`k${i}`} style={{ color: 'var(--warning)' }}>门槛: {k}</li>
                           ))}
                         </ul>
-                        <div style={{ marginTop: 6, fontSize: 11 }}>
+                        <div style={{ marginTop: 6, fontSize: 13 }}>
                           买价(bid)={row.bid ?? '无'}
                           {row.trigger_price != null && <> · 触线价={fmt(row.trigger_price, 4)}(合约K线，非卖价)</>}
                           {' · '}Δ={row.delta ?? '无'} · DTE={row.dte ?? '无'}
@@ -3667,7 +3667,7 @@ export default function WheelPage() {
                 <div style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   flexWrap: 'wrap', gap: 8, marginTop: 12, paddingTop: 10,
-                  borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)',
+                  borderTop: '1px solid var(--border)', fontSize: 13, color: 'var(--text-secondary)',
                 }}>
                   <span>
                     共 {filteredOppRows.length} 条
@@ -3686,7 +3686,7 @@ export default function WheelPage() {
                         onChange={e => { setOppPageSize(Number(e.target.value)); setOppPage(1); setRowCursor(0) }}
                         style={{
                           padding: '2px 6px', background: 'var(--bg-secondary)',
-                          border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 12,
+                          border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13,
                         }}
                       >
                         {[10, 15, 20, 30, 50].map(n => (
@@ -3754,7 +3754,7 @@ export default function WheelPage() {
               </div>
               <div className="filter-group">
                 <label className="group-label">开关</label>
-                <div style={{ display: 'grid', gap: 8, fontSize: 13 }}>
+                <div style={{ display: 'grid', gap: 8, fontSize: 14 }}>
                   <label><input type="checkbox" checked={oppStateAware} onChange={e => setOppStateAware(e.target.checked)} /> 状态过滤</label>
                   <label><input type="checkbox" checked={oppHideBlocked} onChange={e => setOppHideBlocked(e.target.checked)} /> 隐藏风控阻断</label>
                   <label><input type="checkbox" checked={oppHideUntradeable} onChange={e => setOppHideUntradeable(e.target.checked)} /> 隐藏不可交易</label>
@@ -3786,10 +3786,10 @@ export default function WheelPage() {
       {/* ── 触线档案(EMA 触线持久化) ── */}
       {tab === 'timing' && (
         <div>
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
             EMA 触线落库档案：按合约去重合并，最近发现倒序。盘中开仓请用「机会」Tab。
           </div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['最近发现', '方向', '标的', '合约', 'Strike', '到期(DTE)', '触发价', 'Δ', '年化%', '触及均线', 'IV分位', '标的价', '次数', '首次发现', '操作'].map(h => (
@@ -3806,20 +3806,20 @@ export default function WheelPage() {
                   <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{fmtDate(item.last_seen)}</td>
                   <td style={{ padding: '7px 10px' }}>
                     <span style={{
-                      padding: '1px 8px', borderRadius: 4, fontWeight: 700, fontSize: 11,
+                      padding: '1px 8px', borderRadius: 4, fontWeight: 700, fontSize: 13,
                       background: item.side === 'PUT' ? '#38bdf822' : '#fbbf2422',
                       color: item.side === 'PUT' ? '#38bdf8' : '#fbbf24',
                     }}>{item.side === 'PUT' ? '卖Put' : '卖Call'}</span>
                   </td>
                   <td style={{ padding: '7px 10px', fontWeight: 600 }}>{item.symbol}</td>
-                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11 }}>{item.contract_code}</td>
+                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 13 }}>{item.contract_code}</td>
                   <td style={{ padding: '7px 10px' }}>{item.strike != null ? `$${fmt(item.strike)}` : '--'}</td>
                   <td style={{ padding: '7px 10px', whiteSpace: 'nowrap' }}>{item.expiry || '--'}{item.dte != null ? `(${item.dte}天)` : ''}</td>
                   <td style={{ padding: '7px 10px' }}>
                     ${fmt(item.trigger_price)}
                     {!!item.below_floor && (
                       <span title="现价已进入愿接区,指派概率升(不是禁止信号)"
-                        style={{ color: '#fb923c', fontSize: 10, marginLeft: 4 }}>愿接区·风险升</span>
+                        style={{ color: '#fb923c', fontSize: 12, marginLeft: 4 }}>愿接区·风险升</span>
                     )}
                   </td>
                   <td style={{ padding: '7px 10px' }}>{item.delta != null ? item.delta.toFixed(2) : '--'}</td>
@@ -3832,7 +3832,7 @@ export default function WheelPage() {
                   <td style={{ padding: '7px 10px', textAlign: 'center' }}>{item.times_triggered}</td>
                   <td style={{ padding: '7px 10px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{fmtDate(item.first_seen)}</td>
                   <td style={{ padding: '7px 10px' }}>
-                    <button className="btn btn-primary" style={{ fontSize: 11, padding: '2px 10px' }}
+                    <button className="btn btn-primary" style={{ fontSize: 13, padding: '2px 10px' }}
                       onClick={() => setTradeModal({
                         initial: {
                           symbol: item.symbol,
@@ -3852,13 +3852,13 @@ export default function WheelPage() {
             </tbody>
           </table>
           {timingHistory && timingHistory.total > timingHistory.page_size && (
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, fontSize: 13 }}>
-              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 14, fontSize: 14 }}>
+              <button className="btn" style={{ fontSize: 13, padding: '3px 12px' }}
                 disabled={historyPage <= 1} onClick={() => setHistoryPage(p => p - 1)}>上一页</button>
               <span style={{ color: 'var(--text-secondary)' }}>
                 第 {timingHistory.page} / {Math.ceil(timingHistory.total / timingHistory.page_size)} 页 · 共 {timingHistory.total} 条
               </span>
-              <button className="btn" style={{ fontSize: 12, padding: '3px 12px' }}
+              <button className="btn" style={{ fontSize: 13, padding: '3px 12px' }}
                 disabled={historyPage >= Math.ceil(timingHistory.total / timingHistory.page_size)}
                 onClick={() => setHistoryPage(p => p + 1)}>下一页</button>
             </div>
@@ -3870,23 +3870,23 @@ export default function WheelPage() {
       {tab === 'ledger' && (
         <div>
           {/* 绩效复盘 */}
-          <div className="card" style={{ padding: '12px 16px', marginBottom: 16, fontSize: 13 }}>
+          <div className="card" style={{ padding: '12px 16px', marginBottom: 16, fontSize: 14 }}>
             <b>经营面板</b>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, marginTop: 10 }}>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>资金利用率</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>资金利用率</div>
                 <div style={{ fontWeight: 700 }}>{(ops.utilization * 100).toFixed(0)}%</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>平均轮转天数</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>平均轮转天数</div>
                 <div style={{ fontWeight: 700 }}>{ops.turn_days != null ? fmt(ops.turn_days, 0) : '--'}</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>本月平仓腿占比</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>本月平仓腿占比</div>
                 <div style={{ fontWeight: 700 }}>{ops.early_close_share != null ? `${(ops.early_close_share * 100).toFixed(0)}%` : '--'}</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>触线转化(30d)</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>触线转化(30d)</div>
                 <div style={{ fontWeight: 700, color: C.green }}>
                   {stats?.conversion
                     ? `${stats.conversion.converted_30d}/${stats.conversion.signal_count_30d} (${stats.conversion.rate_pct}%)`
@@ -3894,18 +3894,18 @@ export default function WheelPage() {
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>空转 / 裸奔</div>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>空转 / 裸奔</div>
                 <div style={{ fontWeight: 700 }}>{ops.idle_count} / {ops.uncovered_count}</div>
               </div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
               转化低=信号噪音或登记缺合约代码。周转天数偏高=平仓/Roll 偏慢。利用率过低=资金空转。
             </div>
           </div>
           {stats?.monthly_premium && stats.monthly_premium.length > 0 && (
             <div style={{ display: 'flex', gap: 16, marginBottom: 24, flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <div className="card" style={{ padding: '12px 16px', flex: '1 1 320px', minWidth: 0 }}>
-                <h3 style={{ fontSize: 13, margin: '0 0 10px' }}>月度净权利金</h3>
+                <h3 style={{ fontSize: 14, margin: '0 0 10px' }}>月度净权利金</h3>
                 <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 90 }}>
                   {(() => {
                     const mp = stats.monthly_premium!
@@ -3913,13 +3913,13 @@ export default function WheelPage() {
                     return mp.map(m => (
                       <div key={m.ym} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, minWidth: 0 }}
                         title={`${m.ym}:$${fmt(m.premium)}`}>
-                        <span style={{ fontSize: 9, color: m.premium >= 0 ? C.green : C.red }}>{fmtMoney(Math.abs(m.premium))}</span>
+                        <span style={{ fontSize: 11, color: m.premium >= 0 ? C.green : C.red }}>{fmtMoney(Math.abs(m.premium))}</span>
                         <div style={{
                           width: '70%', borderRadius: '3px 3px 0 0',
                           height: Math.max(Math.abs(m.premium) / maxAbs * 60, 2),
                           background: m.premium >= 0 ? C.green : C.red, opacity: 0.85,
                         }} />
-                        <span style={{ fontSize: 9, color: 'var(--text-secondary)' }}>{m.ym.slice(5)}</span>
+                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{m.ym.slice(5)}</span>
                       </div>
                     ))
                   })()}
@@ -3927,8 +3927,8 @@ export default function WheelPage() {
               </div>
               {stats.symbol_ranking && stats.symbol_ranking.length > 0 && (
                 <div className="card" style={{ padding: '12px 16px', flex: '1 1 380px', minWidth: 0 }}>
-                  <h3 style={{ fontSize: 13, margin: '0 0 8px' }}>标的收益排行<span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>谁值得继续轮,谁该踢出池子</span></h3>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>标的收益排行<span style={{ fontSize: 13, fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>谁值得继续轮,谁该踢出池子</span></h3>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
                       <tr style={{ color: 'var(--text-secondary)' }}>
                         {['标的', '净权利金', '已实现盈亏', '完成轮数', '参与天数'].map(h => (
@@ -3952,8 +3952,8 @@ export default function WheelPage() {
               )}
             </div>
           )}
-          <h3 style={{ fontSize: 14, marginBottom: 10 }}>周期({cycles.length})</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 28 }}>
+          <h3 style={{ fontSize: 15, marginBottom: 10 }}>周期({cycles.length})</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14, marginBottom: 28 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['标的', '状态', '持股', 'Cost Basis', '净权利金', '已实现盈亏', '开始', '结束', '天数'].map(h => (
@@ -3981,8 +3981,8 @@ export default function WheelPage() {
             </tbody>
           </table>
 
-          <h3 style={{ fontSize: 14, marginBottom: 10 }}>交易明细({trades.length})</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <h3 style={{ fontSize: 15, marginBottom: 10 }}>交易明细({trades.length})</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['时间', '标的', '类型', '合约/Strike', '张数', '价格', '手续费', '备注', '操作'].map(h => (
@@ -3999,11 +3999,11 @@ export default function WheelPage() {
                   <td style={{ padding: '7px 10px' }}>
                     {TRADE_LABELS[t.trade_type]}
                     {t.is_roll && (
-                      <span style={{ padding: '0 6px', borderRadius: 7, fontSize: 9, fontWeight: 700, background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55', marginLeft: 6 }}
+                      <span style={{ padding: '0 6px', borderRadius: 7, fontSize: 11, fontWeight: 700, background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55', marginLeft: 6 }}
                         title="同日买回+再卖出,识别为一次 Roll">Roll</span>
                     )}
                   </td>
-                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 11 }}>
+                  <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 13 }}>
                     {t.contract_code || (t.strike ? `$${fmt(t.strike)}` : '--')}
                   </td>
                   <td style={{ padding: '7px 10px' }}>{t.qty}</td>
@@ -4012,15 +4012,15 @@ export default function WheelPage() {
                   <td style={{ padding: '7px 10px', color: 'var(--text-secondary)' }}>{t.note || ''}</td>
                   <td style={{ padding: '7px 10px' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn" style={{ fontSize: 11, padding: '2px 8px' }} onClick={() => setEditTrade(t)}>编辑</button>
-                      <button className="btn" style={{ fontSize: 11, padding: '2px 8px', color: '#f87171' }} onClick={() => handleDeleteTrade(t)}>删除</button>
+                      <button className="btn" style={{ fontSize: 13, padding: '2px 8px' }} onClick={() => setEditTrade(t)}>编辑</button>
+                      <button className="btn" style={{ fontSize: 13, padding: '2px 8px', color: '#f87171' }} onClick={() => handleDeleteTrade(t)}>删除</button>
                     </div>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 8 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 8 }}>
             修改或删除任意一笔后,所属周期会按剩余交易按时间顺序重新计算;若剩余序列不合法(如删掉卖出腿但保留行权腿)会拒绝并保持原样
           </div>
         </div>
@@ -4030,12 +4030,12 @@ export default function WheelPage() {
       {tab === 'targets' && (
         <div>
           <div className="card" style={{ padding: '14px 18px', marginBottom: 16 }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: 14 }}>策略模板</h3>
+            <h3 style={{ margin: '0 0 10px', fontSize: 15 }}>策略模板</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
               {(Object.keys(STRATEGY_TEMPLATES) as RiskTier[]).map(tier => (
                 <button key={tier} type="button" className="btn"
                   style={{
-                    fontSize: 12, fontWeight: riskTier === tier ? 700 : 400,
+                    fontSize: 13, fontWeight: riskTier === tier ? 700 : 400,
                     borderColor: riskTier === tier ? 'var(--accent)' : undefined,
                     background: riskTier === tier ? 'var(--accent)' : undefined,
                     color: riskTier === tier ? '#fff' : undefined,
@@ -4045,13 +4045,13 @@ export default function WheelPage() {
                   {STRATEGY_TEMPLATES[tier].label}
                 </button>
               ))}
-              <span style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center' }}>
+              <span style={{ fontSize: 13, color: 'var(--text-secondary)', alignSelf: 'center' }}>
                 {STRATEGY_TEMPLATES[riskTier].desc}
               </span>
             </div>
             <div style={{
               display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10,
-              fontSize: 12, color: 'var(--text-secondary)',
+              fontSize: 13, color: 'var(--text-secondary)',
               padding: '8px 10px', borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--border)',
             }}>
               <span>
@@ -4066,7 +4066,7 @@ export default function WheelPage() {
               <button
                 type="button"
                 className="btn btn-sm"
-                style={{ fontSize: 11 }}
+                style={{ fontSize: 13 }}
                 onClick={() => {
                   // 跳转设置:用 hash / 自定义事件;无路由时提示
                   window.dispatchEvent(new CustomEvent('tradeforge:navigate', { detail: { page: 'settings', section: 'wheel' } }))
@@ -4077,7 +4077,7 @@ export default function WheelPage() {
               </button>
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-              <button className="btn" style={{ fontSize: 12 }}
+              <button className="btn" style={{ fontSize: 13 }}
                 onClick={async () => {
                   const tpl = STRATEGY_TEMPLATES[riskTier]
                   let n = 0
@@ -4097,13 +4097,13 @@ export default function WheelPage() {
                 套用到全部标的
               </button>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               开仓规则(delta/DTE/年化) · 管理规则(止盈/Roll) · 通知见设置页。模板只改标的筛选参数,不改历史台账。
             </div>
           </div>
 
           <div className="card" style={{ padding: '14px 18px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>添加标的</span>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>添加标的</span>
             <select
               value={addSymbol}
               onChange={e => setAddSymbol(e.target.value)}
@@ -4175,16 +4175,16 @@ export default function WheelPage() {
             <input type="number" step="any" value={addFloor} onChange={e => setAddFloor(e.target.value)}
               placeholder="愿接最高价" style={{ ...inputStyle, width: 110 }}
               title="被指派时最多愿付的股价(Put strike上限),不是止损线" />
-            <button className="btn btn-primary" style={{ fontSize: 13, padding: '5px 14px' }}
+            <button className="btn btn-primary" style={{ fontSize: 14, padding: '5px 14px' }}
               disabled={adding || !addSymbol} onClick={handleAddTarget}>
               {adding ? '添加中...' : '添加'}
             </button>
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               美股/港股均来自股票池；已添加的灰显不可选；未启用的也可直接加入 Wheel
             </span>
           </div>
 
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['标的', '现价 · 愿接 · 参考', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
@@ -4218,7 +4218,7 @@ export default function WheelPage() {
         mode="auto"
       >
         {suggestLoading && !suggest && (
-          <div style={{ color: 'var(--warning)', fontSize: 13 }}>正在拉取期权链并筛选…</div>
+          <div style={{ color: 'var(--warning)', fontSize: 14 }}>正在拉取期权链并筛选…</div>
         )}
         {suggest && (
           <div>
@@ -4228,7 +4228,7 @@ export default function WheelPage() {
               </div>
             )}
             {(suggest.earnings_warn || suggest.delta_preference || suggest.trend_warning) && (
-              <div style={{ display: 'flex', gap: 12, fontSize: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 12, fontSize: 13, marginBottom: 10, flexWrap: 'wrap' }}>
                 {suggest.earnings_warn && (
                   <span style={{ color: '#fb923c' }}>
                     ⚠ 财报 {suggest.earnings_date}(距今 {suggest.days_to_earnings} 天)
@@ -4249,7 +4249,7 @@ export default function WheelPage() {
               </EmptyState>
             ) : (
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, minWidth: 640 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 640 }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                       {['合约', 'Strike', 'Δ', 'DTE', 'Bid', '点差%', '年化%', ...(suggest.side === 'PUT' ? ['年化·保'] : []), '分', 'OI', ''].map(h => (
@@ -4260,7 +4260,7 @@ export default function WheelPage() {
                   <tbody>
                     {suggest.suggestions.map(s => (
                       <tr key={s.contract_code} style={{ borderBottom: '1px solid var(--border)' }}>
-                        <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>
+                        <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontSize: 13, color: 'var(--text-secondary)' }}>
                           {s.contract_code}
                           {s.covers_earnings && <span style={{ color: '#fb923c', marginLeft: 4 }}>财报</span>}
                         </td>
@@ -4321,7 +4321,7 @@ export default function WheelPage() {
                 </table>
               </div>
             )}
-            <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 10 }}>
+            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 10 }}>
               筛选来自标的设置 · 先在富途成交再登记实际价
             </div>
           </div>
@@ -4464,7 +4464,7 @@ export default function WheelPage() {
             <div className="manage-modal card" onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 17 }}>
                     {mc.symbol} {isCall ? 'Covered Call' : 'Cash-Secured Put'} ${mc.strike}
                   </h3>
                   <div className="manage-modal-meta" style={{ marginTop: 8, marginBottom: 0 }}>
@@ -4492,7 +4492,7 @@ export default function WheelPage() {
                 <div className="manage-primary-title">
                   推荐 · {preferLabel}
                   {conf != null && (
-                    <span style={{ fontSize: 11, fontWeight: 600, marginLeft: 8, opacity: 0.85 }}
+                    <span style={{ fontSize: 13, fontWeight: 600, marginLeft: 8, opacity: 0.85 }}
                       title="规则把握度,非胜率预测">
                       把握 {conf}%
                     </span>
@@ -4691,7 +4691,7 @@ function RollModal({ data, onClose, onSaved }: {
 
   const inputStyle = {
     width: 90, padding: '4px 6px', background: 'var(--bg-secondary)',
-    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 12,
+    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13,
   } as const
 
   async function submitRoll() {
@@ -4728,8 +4728,8 @@ function RollModal({ data, onClose, onSaved }: {
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#0009', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
       <div className="modal-card" style={{ width: 640, maxWidth: '100%', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>Roll 对比 — {data.symbol} {data.side}</h3>
-        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
+        <h3 style={{ margin: '0 0 6px', fontSize: 17 }}>Roll 对比 — {data.symbol} {data.side}</h3>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
           当前 ${fmt(data.current.strike)} {data.current.expiry}(DTE {data.current.dte ?? '--'}) ·
           开仓 ${fmt(data.current.open_price)} · 买回约 ${fmt(data.current.buyback_ask)} · δ{data.current.delta}
         </div>
@@ -4737,31 +4737,31 @@ function RollModal({ data, onClose, onSaved }: {
           <div style={{
             marginBottom: 10, padding: '8px 12px', borderRadius: 8,
             background: 'var(--green-dim, #22c55e18)', border: '1px solid var(--green, #22c55e55)',
-            fontSize: 13,
+            fontSize: 14,
           }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>
               决策建议 · {prefer ? (preferLabel[prefer] || prefer) : '见详情'}
             </div>
             {data.decision?.headline && <div>{data.decision.headline}</div>}
             {data.decision?.detail && (
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>{data.decision.detail}</div>
+              <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>{data.decision.detail}</div>
             )}
           </div>
         )}
         {err && <div className="alert alert-error" style={{ marginBottom: 10 }}>{err}</div>}
         {(data.warnings?.length ?? 0) > 0 && (
-          <div style={{ marginBottom: 10, padding: '6px 10px', background: '#fb923c11', border: '1px solid #fb923c55', borderRadius: 6, fontSize: 12, color: '#fb923c' }}>
+          <div style={{ marginBottom: 10, padding: '6px 10px', background: '#fb923c11', border: '1px solid #fb923c55', borderRadius: 6, fontSize: 13, color: '#fb923c' }}>
             {data.warnings!.map((w, i) => <div key={i}>⚠ {w}</div>)}
           </div>
         )}
 
         {data.candidates.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary)', fontSize: 13, padding: '10px 0' }}>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 14, padding: '10px 0' }}>
             没有找到相近 delta 的下期合约(可先手动平仓,再用助手找新合约)
             {prefer === 'no_roll' && ' · 当前决策更倾向止盈/持有,可不 roll'}
           </div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 12 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 12 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['', '合约编号', 'Strike', '到期', 'DTE', 'δ', 'Bid', '净收权利金/张', '新仓年化%'].map(h => (
@@ -4779,7 +4779,7 @@ function RollModal({ data, onClose, onSaved }: {
                   <td style={{ padding: '6px 8px' }}>
                     <input type="radio" checked={selected === c.contract_code} readOnly />
                   </td>
-                  <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, color: 'var(--text-secondary)' }}>{c.contract_code}</td>
+                  <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 13, color: 'var(--text-secondary)' }}>{c.contract_code}</td>
                   <td style={{ padding: '6px 8px', fontWeight: 600 }}>${fmt(c.strike)}</td>
                   <td style={{ padding: '6px 8px' }}>{c.expiry}</td>
                   <td style={{ padding: '6px 8px' }}>{c.dte}</td>
@@ -4795,7 +4795,7 @@ function RollModal({ data, onClose, onSaved }: {
           </table>
         )}
 
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, marginBottom: 14 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', fontSize: 13, marginBottom: 14 }}>
           <label>买回价 <input type="number" style={inputStyle} value={buyback} onChange={e => setBuyback(e.target.value)} /></label>
           <label>新卖价 <input type="number" style={inputStyle} value={newPrice} onChange={e => setNewPrice(e.target.value)} /></label>
           <label>手续费/腿 <input type="number" style={inputStyle} value={fee} onChange={e => setFee(e.target.value)} /></label>
@@ -4803,7 +4803,7 @@ function RollModal({ data, onClose, onSaved }: {
             <span>本次 Roll 净{parseFloat(netCredit) >= 0 ? '收' : '付'} <b style={{ color: parseFloat(netCredit) >= 0 ? '#4ade80' : '#f87171' }}>${netCredit}</b>/张</span>
           )}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
           在富途完成两笔交易后,按实际成交价修改上方数值再点登记;将在同一轮内记两条腿(买回+卖出)
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -4840,7 +4840,7 @@ function EditTradeModal({ trade, onClose, onSaved }: {
 
   const inputStyle = {
     width: '100%', padding: '6px 8px', background: 'var(--bg-secondary)',
-    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13,
+    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 14,
   } as const
 
   async function submit() {
@@ -4874,13 +4874,13 @@ function EditTradeModal({ trade, onClose, onSaved }: {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }} onClick={onClose}>
       <div className="modal-card" style={{ width: 460, maxWidth: '100%', maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
-        <h3 style={{ margin: '0 0 6px', fontSize: 16 }}>编辑交易 — {trade.symbol}</h3>
-        <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 14 }}>
+        <h3 style={{ margin: '0 0 6px', fontSize: 17 }}>编辑交易 — {trade.symbol}</h3>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 14 }}>
           保存后所属周期将按时间顺序重放重算;不合法的修改会被拒绝
         </div>
         {err && <div className="alert alert-error" style={{ marginBottom: 12 }}>{err}</div>}
         <div style={{ display: 'grid', gap: 12 }}>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             类型
             <select value={form.trade_type} style={inputStyle}
               onChange={e => setForm(f => ({ ...f, trade_type: e.target.value as WheelTradeType }))}>
@@ -4890,25 +4890,25 @@ function EditTradeModal({ trade, onClose, onSaved }: {
             </select>
           </label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               合约代码
               <input value={form.contract_code} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, contract_code: e.target.value }))} />
             </label>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               Strike
               <input type="number" value={form.strike} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, strike: e.target.value }))} />
             </label>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               到期日
               <input type="date" value={(form.expiry || '').slice(0, 10)} style={{ ...inputStyle, cursor: 'pointer' }}
                 onClick={e => { try { (e.currentTarget as HTMLInputElement).showPicker() } catch {} }}
                 onChange={e => setForm(f => ({ ...f, expiry: e.target.value }))} />
             </label>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               成交时间
               <input type="datetime-local" value={(form.traded_at || '').slice(0, 16)} style={{ ...inputStyle, cursor: 'pointer' }}
                 onClick={e => { try { (e.currentTarget as HTMLInputElement).showPicker() } catch {} }}
@@ -4916,28 +4916,28 @@ function EditTradeModal({ trade, onClose, onSaved }: {
             </label>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 8 }}>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               张数
               <SelectNum value={form.qty} options={QTY_CONTRACT_OPTS} style={inputStyle}
                 onChange={v => setForm(f => ({ ...f, qty: v }))} />
             </label>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               价格
               <input type="number" step="any" value={form.price} style={inputStyle}
                 onChange={e => setForm(f => ({ ...f, price: e.target.value }))} />
             </label>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               手续费
               <SelectNum value={form.fee} options={FEE_OPTS} style={inputStyle}
                 onChange={v => setForm(f => ({ ...f, fee: v }))} />
             </label>
-            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+            <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               合约乘数
               <SelectNum value={form.contract_size} options={CONTRACT_SIZE_OPTS} style={inputStyle}
                 onChange={v => setForm(f => ({ ...f, contract_size: v }))} />
             </label>
           </div>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             备注
             <input value={form.note} style={inputStyle}
               onChange={e => setForm(f => ({ ...f, note: e.target.value }))} />
@@ -4973,7 +4973,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
 
   const inputStyle = {
     width: 64, padding: '3px 6px', background: 'var(--bg-secondary)',
-    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 12,
+    border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)', fontSize: 13,
   } as const
 
   async function save() {
@@ -4999,7 +4999,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
       <tr style={{ borderBottom: '1px solid var(--border)' }}>
         <td style={{ padding: '8px 10px' }}>
           <span style={{ fontWeight: 600 }}>{target.symbol}</span>
-          <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 6 }}>{target.name}</span>
+          <span style={{ color: 'var(--text-secondary)', fontSize: 13, marginLeft: 6 }}>{target.name}</span>
         </td>
         <td style={{ padding: '8px 10px' }}>
           <TargetPriceStrip
@@ -5018,9 +5018,9 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
         </td>
         <td style={{ padding: '8px 10px' }}>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button className="btn" style={{ fontSize: 12, padding: '2px 8px' }} onClick={() => setEditing(true)}>编辑</button>
-            <button className="btn" style={{ fontSize: 12, padding: '2px 8px' }} onClick={onToggle}>{target.enabled ? '停用' : '启用'}</button>
-            <button className="btn" style={{ fontSize: 12, padding: '2px 8px', color: '#f87171' }} onClick={onDelete}>删除</button>
+            <button className="btn" style={{ fontSize: 13, padding: '2px 8px' }} onClick={() => setEditing(true)}>编辑</button>
+            <button className="btn" style={{ fontSize: 13, padding: '2px 8px' }} onClick={onToggle}>{target.enabled ? '停用' : '启用'}</button>
+            <button className="btn" style={{ fontSize: 13, padding: '2px 8px', color: '#f87171' }} onClick={onDelete}>删除</button>
           </div>
         </td>
       </tr>
@@ -5029,7 +5029,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
 
   return (
     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
-      <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 11 }}>{err}</div>}</td>
+      <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 13 }}>{err}</div>}</td>
       <td style={{ padding: '8px 10px' }}>
         <div style={{ marginBottom: 4 }}>
           <TargetPriceStrip
@@ -5040,7 +5040,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
             suggestedDelta={target.suggested_floor_delta}
           />
         </div>
-        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+        <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
           改愿接{' '}
           <input type="number" step="any" style={inputStyle} value={form.floor_price}
             onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
@@ -5072,8 +5072,8 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
       <td style={{ padding: '8px 10px' }}></td>
       <td style={{ padding: '8px 10px' }}>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn btn-primary" style={{ fontSize: 12, padding: '2px 8px' }} onClick={save}>保存</button>
-          <button className="btn" style={{ fontSize: 12, padding: '2px 8px' }} onClick={() => setEditing(false)}>取消</button>
+          <button className="btn btn-primary" style={{ fontSize: 13, padding: '2px 8px' }} onClick={save}>保存</button>
+          <button className="btn" style={{ fontSize: 13, padding: '2px 8px' }} onClick={() => setEditing(false)}>取消</button>
         </div>
       </td>
     </tr>

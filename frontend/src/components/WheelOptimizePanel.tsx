@@ -177,21 +177,21 @@ export default function WheelOptimizePanel() {
   return (
     <div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 12 }}>
+        <button className="btn" onClick={load} disabled={loading} style={{ fontSize: 13 }}>
           {loading ? '加载中…' : '刷新优化数据'}
         </button>
-        <button className="btn" onClick={doReconcile} style={{ fontSize: 12 }}>富途对账</button>
-        <button className="btn" onClick={pushAlerts} style={{ fontSize: 12 }}>推送持仓告警</button>
-        {msg && <span style={{ fontSize: 12, color: C.blue }}>{msg}</span>}
+        <button className="btn" onClick={doReconcile} style={{ fontSize: 13 }}>富途对账</button>
+        <button className="btn" onClick={pushAlerts} style={{ fontSize: 13 }}>推送持仓告警</button>
+        {msg && <span style={{ fontSize: 13, color: C.blue }}>{msg}</span>}
       </div>
       {err && <div className="alert alert-error" style={{ marginBottom: 12 }}>{err}</div>}
 
       {/* 策略档位 */}
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
-          <div style={{ fontWeight: 700, fontSize: 13 }}>策略档位</div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>策略档位</div>
           {profiles?.active && (
-            <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
               {profileMeta(profiles.active).hint}
             </span>
           )}
@@ -227,7 +227,7 @@ export default function WheelOptimizePanel() {
                   borderRadius: 8,
                   border: 'none',
                   cursor: active ? 'default' : 'pointer',
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: active ? 700 : 500,
                   background: active ? meta.color : 'transparent',
                   color: active ? '#0a0a0a' : 'var(--text-secondary)',
@@ -243,12 +243,12 @@ export default function WheelOptimizePanel() {
 
       {/* 组合资金 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>组合资金</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>组合资金</div>
         {portfolio ? (
           <>
             {(portfolio.notes || []).length > 0 && (
               <div style={{
-                marginBottom: 10, padding: '8px 10px', borderRadius: 6, fontSize: 12,
+                marginBottom: 10, padding: '8px 10px', borderRadius: 6, fontSize: 13,
                 border: `1px solid ${C.orange}55`, background: C.orange + '14', color: C.orange,
               }}>
                 {(portfolio.notes as string[]).map((n, i) => <div key={i}>⚠ {n}</div>)}
@@ -258,11 +258,11 @@ export default function WheelOptimizePanel() {
                 </div>
               </div>
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 10, fontSize: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 10, fontSize: 13 }}>
               <div>
                 净值参考{' '}
                 <b>{portfolio.equity != null ? fmt(portfolio.equity, 0) : '未设置'}</b>
-                <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                   {portfolio.equity_source === 'config' ? '来自设置·组合净值'
                     : portfolio.equity_source === 'max_capital_sum' ? '各标的 max_capital 之和'
                     : '请设置净值或 max_capital'}
@@ -270,7 +270,7 @@ export default function WheelOptimizePanel() {
               </div>
               <div>
                 已占用 <b>{fmt(portfolio.total_committed, 0)}</b>
-                <div style={{ fontSize: 10, color: 'var(--text-secondary)' }}>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                   CSP {fmt(portfolio.csp_collateral, 0)} + 持股 {fmt(portfolio.holding_cost, 0)}
                 </div>
               </div>
@@ -293,12 +293,12 @@ export default function WheelOptimizePanel() {
               <div>全 assign 压力 <b>{fmt(portfolio.assignment_stress, 0)}</b></div>
             </div>
             {(portfolio.violations || []).length > 0 && (
-              <div style={{ marginTop: 8, fontSize: 12, color: C.red }}>
+              <div style={{ marginTop: 8, fontSize: 13, color: C.red }}>
                 ⚠ 超限: {(portfolio.violations as any[]).map(v => v.symbol).join(', ')}
               </div>
             )}
             <div style={{ marginTop: 10, maxHeight: 200, overflow: 'auto' }}>
-              <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+              <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
                     <th>标的</th><th>占用</th><th>CSP</th><th>持股</th><th>上限</th><th>余量</th><th>净值%</th>
@@ -326,48 +326,48 @@ export default function WheelOptimizePanel() {
               </table>
             </div>
           </>
-        ) : <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>暂无数据</div>}
+        ) : <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无数据</div>}
       </div>
 
       {/* 压力测试 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>下跌压力测试</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>下跌压力测试</div>
         {stress?.scenarios ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10 }}>
             {stress.scenarios.map((sc: any) => (
               <div key={sc.shock_pct} style={{
-                padding: 10, borderRadius: 6, border: `1px solid ${C.orange}44`, background: C.orange + '11', fontSize: 12,
+                padding: 10, borderRadius: 6, border: `1px solid ${C.orange}44`, background: C.orange + '11', fontSize: 13,
               }}>
                 <div style={{ fontWeight: 700, color: C.orange }}>标的 {sc.shock_pct}%</div>
                 <div>CSP 变 ITM: <b>{sc.csp_itm_count}</b></div>
                 <div>接货资金: <b>{fmt(sc.assign_capital_needed, 0)}</b></div>
                 <div>总占用估: <b>{fmt(sc.total_capital_if_assigned, 0)}</b></div>
                 {(sc.itm_positions || []).slice(0, 4).map((p: any) => (
-                  <div key={p.cycle_id || p.symbol} style={{ color: 'var(--text-secondary)', fontSize: 11 }}>
+                  <div key={p.cycle_id || p.symbol} style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
                     {p.symbol} K{p.strike} → {fmt(p.assign_cost, 0)}
                   </div>
                 ))}
               </div>
             ))}
           </div>
-        ) : <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>暂无在场 CSP 或无日K</div>}
-        {stress?.note && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>{stress.note}</div>}
+        ) : <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无在场 CSP 或无日K</div>}
+        {stress?.note && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>{stress.note}</div>}
       </div>
 
       {/* 相关性 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>高相关标的(≥0.7 慎同时卖 Put)</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>高相关标的(≥0.7 慎同时卖 Put)</div>
         {(corr?.high_corr || []).length ? (
-          <div style={{ fontSize: 12 }}>
+          <div style={{ fontSize: 13 }}>
             {corr.high_corr.map((p: any) => (
               <span key={p.a + p.b} style={{
                 display: 'inline-block', margin: '0 8px 6px 0', padding: '2px 8px',
-                borderRadius: 10, background: C.red + '22', color: C.red, fontSize: 11,
+                borderRadius: 10, background: C.red + '22', color: C.red, fontSize: 13,
               }}>{p.a}↔{p.b} {p.corr}</span>
             ))}
           </div>
         ) : (
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
             无高相关对(需足够本地日K)
           </div>
         )}
@@ -375,14 +375,14 @@ export default function WheelOptimizePanel() {
 
       {/* 准入评分 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>标的准入评分</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>标的准入评分</div>
         {admission?.floor_glossary && (
-          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.45 }}>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8, lineHeight: 1.45 }}>
             {admission.floor_glossary}
           </div>
         )}
         <div style={{ maxHeight: 280, overflow: 'auto' }}>
-          <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse' }}>
+          <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
                 <th>标的</th><th>分</th><th>建议</th><th>激进度</th>
@@ -399,7 +399,7 @@ export default function WheelOptimizePanel() {
                       <button
                         type="button"
                         className="btn"
-                        style={{ fontSize: 11, padding: '0 4px', fontWeight: 600 }}
+                        style={{ fontSize: 13, padding: '0 4px', fontWeight: 600 }}
                         title="展开分项"
                         onClick={() => setAdmissionExpand(e => e === r.symbol ? null : r.symbol)}
                       >
@@ -430,14 +430,14 @@ export default function WheelOptimizePanel() {
                     </td>
                     <td style={{ color: 'var(--text-secondary)', maxWidth: 160 }}>{(r.tags || []).join(' · ')}</td>
                     <td>
-                      <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }}
+                      <button className="btn" style={{ fontSize: 12, padding: '1px 6px' }}
                         title="市场结构参考,需确认后写入"
                         onClick={() => applyFloor(r.symbol)}>参考愿接价</button>
                     </td>
                   </tr>
                   {admissionExpand === r.symbol && (
                     <tr>
-                      <td colSpan={8} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 11 }}>
+                      <td colSpan={8} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 13 }}>
                         <div style={{ marginBottom: 4, color: 'var(--text-secondary)' }}>
                           主分=趋势/波动/IV/历史/数据 · floor 仅轻提示 · 点标的展开
                         </div>
@@ -476,11 +476,11 @@ export default function WheelOptimizePanel() {
 
       {/* 愿接价变更日志 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>愿接价变更记录</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>愿接价变更记录</div>
         {floorLog.length === 0 ? (
-          <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>暂无记录(修改/应用参考愿接价后出现)</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无记录(修改/应用参考愿接价后出现)</div>
         ) : (
-          <div style={{ maxHeight: 140, overflow: 'auto', fontSize: 11 }}>
+          <div style={{ maxHeight: 140, overflow: 'auto', fontSize: 13 }}>
             {floorLog.map((x: any) => (
               <div key={x.id} style={{ display: 'flex', gap: 10, padding: '3px 0', borderBottom: '1px solid var(--border)' }}>
                 <span style={{ fontWeight: 600, width: 56 }}>{x.symbol}</span>
@@ -497,9 +497,9 @@ export default function WheelOptimizePanel() {
 
       {/* 策略体检 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>策略体检(归因)</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>策略体检(归因)</div>
         {health ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(110px,1fr))', gap: 8, fontSize: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(110px,1fr))', gap: 8, fontSize: 13 }}>
             <div>已结束轮 <b>{health.closed_cycles}</b></div>
             <div>胜率 <b style={{ color: C.green }}>{fmt(health.win_rate)}%</b></div>
             <div>净权利金 <b>{fmt(health.premium_net_total, 0)}</b></div>
@@ -510,9 +510,9 @@ export default function WheelOptimizePanel() {
             <div>Call走率 <b>{health.called_away_rate != null ? (health.called_away_rate * 100).toFixed(1) + '%' : '--'}</b></div>
           </div>
         ) : null}
-        {health?.tip && <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 6 }}>{health.tip}</div>}
+        {health?.tip && <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 6 }}>{health.tip}</div>}
         {(health?.symbol_heat || []).length > 0 && (
-          <div style={{ marginTop: 8, fontSize: 11 }}>
+          <div style={{ marginTop: 8, fontSize: 13 }}>
             标的热力(差→好): {(health.symbol_heat as any[]).slice(0, 8).map(h => (
               <span key={h.symbol} style={{
                 marginRight: 8, color: h.realized_pnl < 0 ? C.red : C.green,
@@ -525,7 +525,7 @@ export default function WheelOptimizePanel() {
       {/* 对账结果 */}
       {reconcile && (
         <div style={card}>
-          <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>
+          <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>
             富途对账结果
             {reconcile.summary && (
               <span style={{ fontWeight: 400, color: 'var(--text-secondary)', marginLeft: 8 }}>
@@ -535,7 +535,7 @@ export default function WheelOptimizePanel() {
           </div>
           {(reconcile.diffs || []).map((d: any, i: number) => (
             <div key={i} style={{
-              fontSize: 12, padding: '4px 0', borderBottom: '1px solid var(--border)',
+              fontSize: 13, padding: '4px 0', borderBottom: '1px solid var(--border)',
               color: d.severity === 'warning' ? C.orange : 'var(--text)',
             }}>
               [{d.type}] {d.message}
@@ -543,20 +543,20 @@ export default function WheelOptimizePanel() {
           ))}
           {(reconcile.drafts || []).length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 12, marginBottom: 6 }}>登记草稿(请核对价格后应用):</div>
+              <div style={{ fontSize: 13, marginBottom: 6 }}>登记草稿(请核对价格后应用):</div>
               {(reconcile.drafts as any[]).map((d, i) => (
                 <div key={i} style={{
-                  display: 'flex', gap: 8, alignItems: 'center', fontSize: 11, marginBottom: 4,
+                  display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, marginBottom: 4,
                 }}>
                   <code style={{ flex: 1 }}>{d.trade_type} {d.symbol} {d.contract_code || ''} @{d.price}</code>
-                  <button className="btn" style={{ fontSize: 10, padding: '2px 8px' }}
+                  <button className="btn" style={{ fontSize: 12, padding: '2px 8px' }}
                     onClick={() => applyDraft(d)}>登记</button>
                 </div>
               ))}
             </div>
           )}
           {(reconcile.futu?.errors || []).length > 0 && (
-            <div style={{ fontSize: 11, color: C.orange, marginTop: 6 }}>
+            <div style={{ fontSize: 13, color: C.orange, marginTop: 6 }}>
               {reconcile.futu.errors.join('; ')}
             </div>
           )}
@@ -565,28 +565,28 @@ export default function WheelOptimizePanel() {
 
       {/* 回测 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13 }}>Wheel 规则回测(合成权利金近似)</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>Wheel 规则回测(合成权利金近似)</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <input value={btSymbol} onChange={e => setBtSymbol(e.target.value)}
             style={{ width: 100, padding: '4px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)' }}
             placeholder="AAPL" />
-          <button className="btn" style={{ fontSize: 12 }} onClick={runBt} disabled={btLoading}>
+          <button className="btn" style={{ fontSize: 13 }} onClick={runBt} disabled={btLoading}>
             {btLoading ? '回测中…' : '运行回测'}
           </button>
         </div>
         {btResult && (
           btResult.ok ? (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(100px,1fr))', gap: 8, fontSize: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(100px,1fr))', gap: 8, fontSize: 13 }}>
               <div>CAGR <b style={{ color: C.green }}>{fmt(btResult.cagr_pct)}%</b></div>
               <div>总收益 <b>{fmt(btResult.total_return_pct)}%</b></div>
               <div>最大回撤 <b style={{ color: C.red }}>{fmt(btResult.max_drawdown_pct)}%</b></div>
               <div>终值 <b>{fmt(btResult.final_equity, 0)}</b></div>
               <div>Assign <b>{btResult.assign_count}</b></div>
               <div>交易数 <b>{btResult.trade_count}</b></div>
-              <div style={{ gridColumn: '1/-1', fontSize: 11, color: 'var(--text-secondary)' }}>{btResult.note}</div>
+              <div style={{ gridColumn: '1/-1', fontSize: 13, color: 'var(--text-secondary)' }}>{btResult.note}</div>
             </div>
           ) : (
-            <div style={{ fontSize: 12, color: C.red }}>{btResult.error || '失败'}</div>
+            <div style={{ fontSize: 13, color: C.red }}>{btResult.error || '失败'}</div>
           )
         )}
       </div>
