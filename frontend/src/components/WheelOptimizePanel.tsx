@@ -415,7 +415,16 @@ export default function WheelOptimizePanel() {
                         : r.aggressiveness === '保守' || r.aggressiveness === '偏保守' ? C.blue
                           : 'var(--text-secondary)',
                     }}>{r.aggressiveness || '--'}</td>
-                    <td style={{ color: 'var(--text-secondary)', maxWidth: 220 }}>{(r.tags || []).join(' · ')}</td>
+                    <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}
+                      title="智能参考愿接价(不自动写库)">
+                      {r.metrics?.suggested_floor != null
+                        ? `$${fmt(r.metrics.suggested_floor)}`
+                        : '--'}
+                      {r.metrics?.floor_price != null && r.metrics?.suggested_floor != null && (
+                        <span style={{ opacity: 0.7 }}> / 现设 ${fmt(r.metrics.floor_price)}</span>
+                      )}
+                    </td>
+                    <td style={{ color: 'var(--text-secondary)', maxWidth: 180 }}>{(r.tags || []).join(' · ')}</td>
                     <td>
                       <button className="btn" style={{ fontSize: 10, padding: '1px 6px' }}
                         title="市场结构参考,需确认后写入"
@@ -423,10 +432,10 @@ export default function WheelOptimizePanel() {
                     </td>
                   </tr>
                   {admissionExpand === r.symbol && (
-                    <tr key={`${r.symbol}-detail`}>
-                      <td colSpan={6} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 11 }}>
+                    <tr>
+                      <td colSpan={7} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 11 }}>
                         <div style={{ marginBottom: 4, color: 'var(--text-secondary)' }}>
-                          主分=趋势/波动/IV/历史/数据 · floor 仅轻提示 · 点行展开
+                          主分=趋势/波动/IV/历史/数据 · floor 仅轻提示 · 点标的展开
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                           {(r.factor_detail?.length
@@ -445,13 +454,12 @@ export default function WheelOptimizePanel() {
                             )
                           })}
                         </div>
-                        {r.metrics?.floor_price != null && (
-                          <div style={{ marginTop: 6, opacity: 0.9 }}>
-                            愿接价 ${r.metrics.floor_price}
-                            {r.metrics.spot != null && ` · 现价 $${Number(r.metrics.spot).toFixed(2)}`}
-                            {r.metrics.floor_spot_ratio != null && ` · floor/spot=${r.metrics.floor_spot_ratio}`}
-                          </div>
-                        )}
+                        <div style={{ marginTop: 6, opacity: 0.9 }}>
+                          愿接 ${r.metrics?.floor_price ?? '--'}
+                          {r.metrics?.suggested_floor != null && ` · 智能参考 $${fmt(r.metrics.suggested_floor)}`}
+                          {r.metrics?.spot != null && ` · 现价 $${Number(r.metrics.spot).toFixed(2)}`}
+                          {r.metrics?.floor_spot_ratio != null && ` · floor/spot=${r.metrics.floor_spot_ratio}`}
+                        </div>
                       </td>
                     </tr>
                   )}
