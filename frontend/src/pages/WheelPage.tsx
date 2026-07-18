@@ -161,6 +161,48 @@ function fmtSuggestedFloor(t: {
   return { price, deltaTxt: dTxt, delta: dOk ? d : null, note: t.suggested_floor_note || null }
 }
 
+/** 现价 · 愿接 · 参考 — 全站统一顺序与样式 */
+function TargetPriceStrip({
+  spot,
+  floor,
+  suggested,
+  suggestedDelta,
+  size = 'md',
+  showLabels = true,
+}: {
+  spot?: number | null
+  floor?: number | null
+  suggested?: number | null
+  suggestedDelta?: number | null
+  size?: 'sm' | 'md' | 'lg'
+  showLabels?: boolean
+}) {
+  const sf = fmtSuggestedFloor({
+    suggested_floor: suggested,
+    suggested_floor_delta: suggestedDelta ?? (
+      suggested != null && floor != null ? Number(suggested) - Number(floor) : null
+    ),
+  })
+  const refClass = sf?.delta == null ? 'ps-ref-flat'
+    : Math.abs(sf.delta) < 0.5 ? 'ps-ref-flat'
+      : sf.delta > 0 ? 'ps-ref-up' : 'ps-ref-down'
+  const sz = size === 'sm' ? 'compact' : size === 'lg' ? 'lg' : ''
+  return (
+    <span className={`price-strip ${sz}`.trim()} title="现价=日K收盘 · 愿接=你的最高接货价 · 参考=市场结构建议">
+      <span className="ps-item">
+        {showLabels && '现价 '}<b>${spot != null && Number.isFinite(Number(spot)) ? fmt(Number(spot)) : '--'}</b>
+      </span>
+      <span className="ps-item">
+        {showLabels && '愿接 '}<b>${floor != null && Number.isFinite(Number(floor)) ? fmt(Number(floor)) : '--'}</b>
+      </span>
+      <span className={`ps-item ${refClass}`}>
+        {showLabels && '参考 '}
+        <b>{sf ? `$${fmt(sf.price)}${sf.deltaTxt}` : '--'}</b>
+      </span>
+    </span>
+  )
+}
+
 // ── 颜色语义:绿=收益/安全 橙=注意 红=风险 蓝=信息 紫=中性标记 ──────────────────
 const C = { green: '#4ade80', orange: '#fb923c', red: '#f87171', blue: '#38bdf8', purple: '#a78bfa' } as const
 type SemColor = keyof typeof C
@@ -2260,15 +2302,17 @@ export default function WheelPage() {
         </div>
       )}
 
-      {/* 组合摘要 — 默认折叠 */}
+      {/* 组合摘要 — 今日三问优先:该管 / 优先 / 可用 / 压力 */}
       <div className="metric-row">
+        <span className={`metric-chip ${manageCount > 0 ? 'warn' : 'ok'}`}><span>该管</span><b>{manageCount}</b></span>
+        <span className="metric-chip"><span>优先开</span><b>{priorityCount}</b></span>
         <span className={`metric-chip ${ops.available > 0 ? 'ok' : 'warn'}`}><span>可用</span><b>${fmtMoney(ops.available)}</b></span>
-        <span className={`metric-chip ${pendingQueue.length ? 'warn' : ''}`}><span>待登记</span><b>{pendingQueue.length}</b></span>
         <span className={`metric-chip ${putBlocked ? 'danger' : ''}`}><span>压力</span><b>{putBlocked ? '高·停Put' : '正常'}</b></span>
-        <span className="metric-chip"><span>优先</span><b>{priorityCount}</b></span>
-        <span className="metric-chip"><span>该管</span><b>{manageCount}</b></span>
+        {pendingQueue.length > 0 && (
+          <span className="metric-chip warn"><span>待登记</span><b>{pendingQueue.length}</b></span>
+        )}
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCockpitOpen(v => !v)}>
-          {cockpitOpen ? '收起指标' : '展开指标'}
+          {cockpitOpen ? '收起指标' : '更多指标'}
         </button>
       </div>
       {cockpitOpen && (
@@ -2433,88 +2477,139 @@ export default function WheelPage() {
             </div>
           )}
 
-          {/* 先管后开:决策摘要 */}
-          <div className="panel" style={{ borderColor: 'var(--green, #22c55e55)' }}>
-            <div className="panel-title" style={{ marginBottom: 8 }}>今日决策</div>
+          {/* 今日待办流: P0 该管 → P1 开仓 → P2 待登记 */}
+          <div className="panel" style={{ borderColor: 'rgba(0,200,5,0.28)' }}>
+            <div className="panel-title" style={{ marginBottom: 4 }}>今日待办</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+              先处理持仓，再开新仓，最后清登记队列
+            </div>
             {putBlocked && (
-              <div className="banner error" style={{ marginBottom: 8 }}>
+              <div className="banner error" style={{ marginBottom: 10 }}>
                 组合压力高:已暂停新开 Put
                 {serverOpps?.portfolio?.utilization_pct != null
                   && ` · 利用率 ${fmt(serverOpps.portfolio.utilization_pct, 0)}%`}
               </div>
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>① 先处理持仓</div>
-                {(() => {
-                  const m = allOppRows.filter(r => r.kind === 'MANAGE' && r.actionable !== false)
-                    .sort((a, b) => (a.action_priority ?? 9) - (b.action_priority ?? 9))[0]
-                  if (!m) return <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无紧急管理项</div>
-                  return (
-                    <div className="opp-row" style={{ margin: 0 }}>
-                      <div className="opp-row-main">
-                        <div className="opp-row-title">
-                          <Badge color="orange">{m.tags[0] || '该管'}</Badge>
-                          {m.symbol} {m.side}
+            <div className="home-todo">
+              {/* P0 */}
+              <div className="home-todo-step p0">
+                <div className="home-todo-num">1</div>
+                <div>
+                  <div className="home-todo-label">P0 · 必须处理持仓</div>
+                  {(() => {
+                    const list = allOppRows.filter(r => r.kind === 'MANAGE')
+                      .sort((a, b) => (a.action_priority ?? 9) - (b.action_priority ?? 9))
+                      .slice(0, 3)
+                    if (!list.length) return <div className="home-todo-empty">暂无紧急项 — 持仓健康</div>
+                    return list.map(m => (
+                      <div key={m.id} className="opp-row" style={{ margin: '0 0 6px' }}>
+                        <div className="opp-row-main">
+                          <div className="opp-row-title">
+                            <Badge color={m.categories.includes('CLOSE') ? 'green' : 'orange'}>
+                              {m.tags[0] || '该管'}
+                            </Badge>
+                            {m.symbol} {m.side}
+                            {m.strike != null && <span style={{ opacity: 0.7 }}>${m.strike}</span>}
+                          </div>
+                          <div className="opp-row-meta">
+                            <span>{m.action_hint || m.headline}</span>
+                            {m.dte != null && <span>DTE {m.dte}</span>}
+                            {m.profit_pct != null && <span>浮盈 {m.profit_pct}%</span>}
+                          </div>
                         </div>
-                        <div className="opp-row-meta">
-                          <span>{m.action_hint || m.headline}</span>
+                        <div className="opp-row-actions">
+                          {m.actionable !== false && (
+                            <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(m)}>
+                              {(m.action_code === 'ROLL' || m.action_code === 'ROLL_ADJUST' || m.action_code === 'PREPARE_ASSIGN')
+                                ? '看 Roll' : '处理'}
+                            </button>
+                          )}
                         </div>
                       </div>
-                      <div className="opp-row-actions">
-                        <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(m)}>
-                          {(m.action_code === 'ROLL' || m.action_code === 'ROLL_ADJUST' || m.action_code === 'PREPARE_ASSIGN') ? '看 Roll' : '处理'}
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })()}
+                    ))
+                  })()}
+                  {manageCount > 3 && (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('MANAGE') }}>
+                      全部 {manageCount} 项 →
+                    </button>
+                  )}
+                </div>
               </div>
-              <div>
-                <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 6 }}>② 再考虑开仓(主推)</div>
-                {(() => {
-                  if (putBlocked) {
-                    return <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>压力解除前不推新 Put</div>
-                  }
-                  const openPick = (serverOpps?.primary_picks || [])
-                    .filter(p => p.actionable && !(putBlocked && p.side === 'PUT'))
-                    .map(serverOppToRow)[0]
-                    || allOppRows.find(r => r.kind === 'OPEN' && r.is_top_pick && r.tradeable)
-                    || allOppRows.find(r => r.kind === 'OPEN' && (r.trade_tier === 'PRIORITY' || r.trade_tier === 'QUEUE') && r.tradeable)
-                  if (!openPick) {
+              {/* P1 */}
+              <div className="home-todo-step p1">
+                <div className="home-todo-num">2</div>
+                <div>
+                  <div className="home-todo-label">P1 · 优先开仓</div>
+                  {(() => {
+                    if (putBlocked) {
+                      return <div className="home-todo-empty">压力解除前不推新 Put · 可看 CC 或触线</div>
+                    }
+                    const openPick = (serverOpps?.primary_picks || [])
+                      .filter(p => p.actionable && !(putBlocked && p.side === 'PUT'))
+                      .map(serverOppToRow)[0]
+                      || allOppRows.find(r => r.kind === 'OPEN' && r.is_top_pick && r.tradeable)
+                      || allOppRows.find(r => r.kind === 'OPEN' && (r.trade_tier === 'PRIORITY' || r.trade_tier === 'QUEUE') && r.tradeable)
+                    if (!openPick) {
+                      return (
+                        <div className="home-todo-empty">
+                          暂无主推{' '}
+                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleOpportunityScan()}>扫机会</button>
+                        </div>
+                      )
+                    }
+                    const sk = signalKindLabel(resolveOppSignalKind(openPick))
                     return (
-                      <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                        暂无主推 · <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleOpportunityScan()}>扫机会</button>
+                      <div className="opp-row" style={{ margin: 0 }}>
+                        <div className="opp-row-main">
+                          <div className="opp-row-title">
+                            <Badge color="green">主推</Badge>
+                            <Badge color={sk.color}>{sk.text}</Badge>
+                            {openPick.symbol} {openPick.side}
+                            {openPick.strike != null && <span style={{ opacity: 0.75 }}>${openPick.strike}</span>}
+                          </div>
+                          <div className="opp-row-meta">
+                            {openPick.annualized != null && <span>年化 {fmt(openPick.annualized, 1)}%</span>}
+                            {openPick.bid != null && <span>bid {fmt(openPick.bid, 2)}</span>}
+                            {openPick.dte != null && <span>DTE {openPick.dte}</span>}
+                          </div>
+                        </div>
+                        <div className="opp-row-actions">
+                          <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(openPick)}>登记</button>
+                        </div>
                       </div>
                     )
-                  }
-                  const sk = signalKindLabel(resolveOppSignalKind(openPick))
-                  return (
+                  })()}
+                  {serverOpps?.headline && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-tertiary)' }}>{serverOpps.headline}</div>
+                  )}
+                </div>
+              </div>
+              {/* P2 */}
+              <div className="home-todo-step p2">
+                <div className="home-todo-num">3</div>
+                <div>
+                  <div className="home-todo-label">P2 · 待登记队列</div>
+                  {pendingQueue.length === 0 ? (
+                    <div className="home-todo-empty">队列为空</div>
+                  ) : (
                     <div className="opp-row" style={{ margin: 0 }}>
                       <div className="opp-row-main">
                         <div className="opp-row-title">
-                          <Badge color="orange">主推</Badge>
-                          <Badge color={sk.color}>{sk.text}</Badge>
-                          {openPick.symbol} {openPick.side}
-                          {openPick.strike != null && <span style={{ opacity: 0.75 }}>${openPick.strike}</span>}
+                          <Badge color="blue">待登记</Badge>
+                          {pendingQueue.length} 笔备忘
                         </div>
                         <div className="opp-row-meta">
-                          {openPick.annualized != null && <span>年化 {fmt(openPick.annualized, 1)}%</span>}
-                          {openPick.bid != null && <span>bid {fmt(openPick.bid, 2)}</span>}
-                          {openPick.dte != null && <span>DTE {openPick.dte}</span>}
+                          <span>{pendingQueue.slice(0, 3).map(p => p.symbol).join(' · ')}{pendingQueue.length > 3 ? '…' : ''}</span>
                         </div>
                       </div>
                       <div className="opp-row-actions">
-                        <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(openPick)}>登记</button>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTab('opps')}>去清</button>
                       </div>
                     </div>
-                  )
-                })()}
+                  )}
+                </div>
               </div>
             </div>
-            {serverOpps?.headline && (
-              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--text-secondary)' }}>{serverOpps.headline}</div>
-            )}
           </div>
 
           {!!scanStatus?.report?.length && !timingScanning && (
@@ -2557,59 +2652,6 @@ export default function WheelPage() {
               </div>
             </div>
           )}
-
-          <div className="panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="panel-title" style={{ margin: 0 }}>必须处理</div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('MANAGE') }}>全部</button>
-            </div>
-            {manageCount === 0 ? (
-              <EmptyState title="暂无紧急管理项" description="没有临期/达标/裸奔/空转需要立刻处理" />
-            ) : (
-              allOppRows.filter(r => r.kind === 'MANAGE').slice(0, 5).map(r => (
-                <div key={r.id} className="opp-row">
-                  <div className="opp-row-main">
-                    <div className="opp-row-title">
-                      <Badge color={r.categories.includes('CLOSE') ? 'green' : 'orange'}>
-                        {r.categories.includes('CLOSE') ? '平仓' : r.categories.includes('ROLL') ? 'Roll'
-                          : r.categories.includes('LOW_YIELD') ? '换仓'
-                            : r.categories.includes('UNCOVERED') ? '裸奔' : '空转'}
-                      </Badge>
-                      {r.symbol}
-                    </div>
-                    <div className="opp-row-meta">
-                      <span>{r.headline || r.action_hint}</span>
-                      {r.remaining_annualized != null && <span>剩余年化 {fmt(r.remaining_annualized, 1)}%</span>}
-                      {r.check?.replace_hint && (
-                        <span style={{ opacity: 0.9, color: 'var(--accent, #38bdf8)' }}>
-                          {r.check.replace_hint}
-                        </span>
-                      )}
-                      {r.check?.would_open_today === 'no' && (
-                        <span style={{ color: C.red }}>规则已否决新开</span>
-                      )}
-                      {r.check?.assign_checklist && (r.action_code === 'PREPARE_ASSIGN' || r.check.itm) && (
-                        <span style={{ color: C.orange }}>
-                          {r.side === 'PUT' ? '接货' : '交货'}名义 $
-                          {fmt(r.check.assign_checklist.assign_notional, 0)}
-                          {r.check.assign_checklist.floor_ok === false ? ' · 超过愿接价' : ''}
-                        </span>
-                      )}
-                      {r.decision_why?.[0] && <span style={{ opacity: 0.85 }}>{r.decision_why[0]}</span>}
-                    </div>
-                  </div>
-                  <div className="opp-row-actions">
-                    {r.actionable !== false && (
-                      <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>
-                        {(r.action_code === 'ROLL' || r.action_code === 'ROLL_ADJUST' || r.action_code === 'PREPARE_ASSIGN')
-                          ? '看 Roll' : '处理'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
 
           <div className="panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -2870,37 +2912,24 @@ export default function WheelPage() {
                             {hasProfit && <span title="浮盈达标,可平仓" style={{ fontSize: 11 }}>💰</span>}
                             {isIdle && <span title={`空转 ${t.idle_days} 天`} style={{ fontSize: 11 }}>⏸</span>}
                           </div>
-                          <div style={{ fontSize: 10, marginTop: 1 }}>
-                            <span style={{ color: 'var(--text)', fontWeight: 600 }} title="现价(本地日K收盘)">
-                              现价 ${t.spot != null ? fmt(t.spot) : '--'}
-                            </span>
-                            <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : 'var(--text-secondary)', marginLeft: 8 }}>
+                          <div style={{ marginTop: 3 }}>
+                            <TargetPriceStrip
+                              size="sm"
+                              spot={t.spot}
+                              floor={t.floor_price}
+                              suggested={t.suggested_floor}
+                              suggestedDelta={t.suggested_floor_delta}
+                            />
+                          </div>
+                          <div style={{ fontSize: 10, marginTop: 2, color: 'var(--text-secondary)' }}>
+                            <span style={{ color: targetCapital(cs) > 0 ? '#38bdf8' : undefined }}>
                               占用 ${fmtMoney(targetCapital(cs))}
-                              {(t.max_capital ?? 0) > 0 && <span style={{ color: 'var(--text-secondary)' }}>/{fmtMoney(t.max_capital)}</span>}
+                              {(t.max_capital ?? 0) > 0 && `/${fmtMoney(t.max_capital)}`}
                             </span>
-                            <span style={{ color: (premiumBySymbol[t.symbol] || 0) > 0 ? '#4ade80' : 'var(--text-secondary)', marginLeft: 8 }}>
+                            <span style={{ marginLeft: 8, color: (premiumBySymbol[t.symbol] || 0) > 0 ? '#4ade80' : undefined }}>
                               权利金 ${fmtMoney(premiumBySymbol[t.symbol] || 0)}
                             </span>
                           </div>
-                          {(() => {
-                            const sf = fmtSuggestedFloor(t)
-                            if (!sf) return (
-                              <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 1 }}>
-                                愿接 ${fmt(t.floor_price)} · 参考 --
-                              </div>
-                            )
-                            const dColor = sf.delta == null ? 'var(--text-secondary)'
-                              : Math.abs(sf.delta) < 0.5 ? 'var(--text-secondary)'
-                                : sf.delta > 0 ? C.orange : C.blue
-                            return (
-                              <div style={{ fontSize: 10, marginTop: 1, color: 'var(--text-secondary)' }}
-                                title="智能参考愿接价(市场结构,非自动写入)">
-                                愿接 ${fmt(t.floor_price)}
-                                {' · 参考 '}
-                                <span style={{ color: dColor, fontWeight: 600 }}>${fmt(sf.price)}{sf.deltaTxt}</span>
-                              </div>
-                            )
-                          })()}
                         </div>
                         <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
                           {cs.length === 0 ? (
@@ -2924,9 +2953,6 @@ export default function WheelPage() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                         <span style={{ fontWeight: 700, fontSize: 17 }}>{sel.symbol}</span>
-                        <span style={{ fontSize: 14, color: 'var(--text)' }} title="现价(本地日K收盘)">
-                          ${sel.spot != null ? fmt(sel.spot) : '--'}
-                        </span>
                         {sel.volatility_brief && (sel.volatility_brief.atm_iv != null || sel.volatility_brief.hv20 != null) && (
                           <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
                             title={`预期IV:最近一次ATM隐含波动率快照(${sel.volatility_brief.iv_date || '--'});实际IV:20日历史波动率;IVR:IV在自身252日历史中的百分位${sel.volatility_brief.iv_rank_source === 'hv_proxy' ? '(IV历史不足,HV近似)' : ''}`}>
@@ -2943,25 +2969,15 @@ export default function WheelPage() {
                         )}
                         {!editParams && (
                           <>
-                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}
-                              title="愿接最高价:被指派时最多愿付的股价;Put strike必须≤此价;Call用成本底线">
-                              愿接 <b style={{ color: 'var(--text)' }}>${fmt(sel.floor_price)}</b>
-                              {(() => {
-                                const sf = fmtSuggestedFloor(sel)
-                                if (!sf) return <> · 参考 --</>
-                                const dColor = sf.delta == null ? 'var(--text-secondary)'
-                                  : Math.abs(sf.delta) < 0.5 ? 'var(--text-secondary)'
-                                    : sf.delta > 0 ? C.orange : C.blue
-                                return (
-                                  <>
-                                    {' · 参考 '}
-                                    <b style={{ color: dColor }} title="智能参考愿接价(市场结构)">
-                                      ${fmt(sf.price)}{sf.deltaTxt}
-                                    </b>
-                                  </>
-                                )
-                              })()}
-                              {' · '}Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
+                            <TargetPriceStrip
+                              size="lg"
+                              spot={sel.spot}
+                              floor={sel.floor_price}
+                              suggested={sel.suggested_floor}
+                              suggestedDelta={sel.suggested_floor_delta}
+                            />
+                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                              Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
                               {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
                               {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
                             </span>
@@ -4159,19 +4175,15 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '现价', '愿接价', '智能参考愿接价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '现价 · 愿接 · 参考', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
-                    title={
-                      h === '智能参考愿接价' ? '市场结构参考(EMA/低点/ATR),不自动写库'
-                        : h === '现价' ? '本地日K最后收盘价'
-                          : undefined
-                    }
+                    title={h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
                   >{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {targets.length === 0 && <tr><td colSpan={10} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
+              {targets.length === 0 && <tr><td colSpan={8} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
               {targets.map(t => (
                 <TargetRow key={t.symbol} target={t} onSaved={loadAll}
                   onToggle={() => handleToggleTarget(t)} onDelete={() => handleDeleteTarget(t.symbol)} />
@@ -4354,14 +4366,12 @@ export default function WheelPage() {
         <RollModal data={rollData} onClose={() => setRollData(null)} onSaved={loadAll} />
       )}
 
-      {/* 该管三选一:放任到期 / 买回 / Roll — 文案与推荐按 PUT(CSP) vs CALL(CC) 分叉 */}
+      {/* 管理决策弹窗 — 分层:主建议 / 详情折叠 / 三选一 */}
       {manageCompare && (() => {
         const mc = manageCompare
         const isCall = mc.side === 'CALL'
         const code = (mc.action_code || '').toUpperCase()
-        // 决策树主建议 → 高亮哪张卡
         const underwater = mc.profit_pct != null && mc.profit_pct < 0
-        // 与 action_code 对齐:NONE/HOLD_THETA → 持有/放任;勿默认高亮买回
         const prefer: 'expire' | 'close' | 'roll' =
           code === 'HOLD_THETA' || code === 'NONE' ? 'expire'
             : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
@@ -4370,320 +4380,268 @@ export default function WheelPage() {
         const buy = fmt(mc.buyback_ask || mc.current_price)
         const expireBody = isCall
           ? (mc.itm
-            ? '到期若仍 ITM:正股可能被 call 走(交货)。只有当你愿意按 strike 卖出持股、且不急着用覆盖股时再放任。'
+            ? '到期若仍 ITM:正股可能被 call 走。仅当你愿意按 strike 交货时再放任。'
             : underwater
-              ? '仍 OTM:到期作废可收回当前浮亏。前提是你仍愿按 strike 交货;否则应买回或 Roll,而不是「赌一把」。'
-              : 'OTM 到期作废,你留下持股并吃光剩余权利金。临期 OTM 且买回摩擦大时,往往优于付点差止盈。')
+              ? '仍 OTM:到期作废可收回浮亏。确认愿按 strike 交货;否则买回或 Roll。'
+              : 'OTM 到期作废,留下持股吃光剩余权利金。临期且买回摩擦大时往往优于硬止盈。')
           : (mc.itm
-            ? '到期若仍 ITM:可能被指派接货(按 strike 买进正股)。确认愿意接货且有资金,再放任;否则优先 Roll/平仓。'
+            ? '到期若仍 ITM:可能被指派接货。确认愿接货且有资金,再放任;否则 Roll/平仓。'
             : underwater
-              ? '仍 OTM:到期作废可收回当前浮亏。前提是你仍愿按 strike 接货;若不愿接货,应止损买回或 Roll,不要误当成「健康收租」。'
-              : 'OTM 到期作废,现金担保释放。临期 OTM 且买回摩擦大时,可放任吃 θ。')
+              ? '仍 OTM:到期作废可收回浮亏。确认愿按 strike 接货;否则止损买回或 Roll。'
+              : 'OTM 到期作废,现金担保释放。临期 OTM 可放任吃 θ。')
+        // Put 止盈=腾担保;Call 止盈=结束义务/上行 — 勿混用「腾资金」
         const closeBody = isCall
           ? (underwater
-            ? `成本约 $${buy}/股;确认亏损约 ${mc.profit_pct}%。结束 Call 义务、保留持股;适合观点改变或不愿被 call 走。`
-            : `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。结束 Call 义务、保留持股,便于再卖下一轮 CC 或调仓。`)
+            ? `买回约 $${buy}/股,确认亏损约 ${mc.profit_pct}%。结束 Call 义务、保留持股(不释放大额现金)。`
+            : `买回约 $${buy}/股,落袋浮盈 ${mc.profit_pct ?? '--'}%。结束 Call 义务、拿回上行空间;持股占用仍在,不是腾担保金。`)
           : (underwater
-            ? `成本约 $${buy}/股;确认亏损约 ${mc.profit_pct}%。释放 CSP 担保;适合不愿在 ${mc.strike} 接货或要腾资金。`
-            : `成本约 $${buy}/股权利金;落袋浮盈 ${mc.profit_pct ?? '--'}%。释放 CSP 现金担保,便于再开新 Put 或换标的。`)
+            ? `买回约 $${buy}/股,确认亏损约 ${mc.profit_pct}%。释放 CSP 担保;适合不愿在 ${mc.strike} 接货或要腾资金。`
+            : `买回约 $${buy}/股,落袋浮盈 ${mc.profit_pct ?? '--'}%。释放 CSP 现金担保,便于再开 Put 或换标的。`)
         const rollBody = isCall
           ? (underwater
-            ? '买回当前 + 卖更远/更高 strike:用时间换空间,仍想持股收租时常用防守。'
-            : '买回当前 Call + 卖更远到期(可同 strike 或 roll up)。适合仍想持有正股收租、但当前 DTE/ITM 风险不舒服。')
+            ? '买回 + 卖更远/更高 strike:用时间换空间,仍想持股收租时的防守。'
+            : '买回 + 卖更远到期(可 roll up)。仍想持股收租、但 DTE/ITM 不舒服时用。')
           : (underwater
-            ? '买回当前 + 卖更远/更低 strike:经典 CSP 防守,推迟接货、摊薄成本;确认仍愿接货再 roll。'
-            : '买回当前 Put + 卖更远到期(可同 strike 或 roll down)。适合仍想赚权利金、但临期/ITM 风险上升、尚未想接货。')
-        const cardStyle = (key: 'expire' | 'close' | 'roll', accent?: string) => ({
-          border: prefer === key
-            ? `2px solid ${accent || C.green}`
-            : '1px solid var(--border)',
-          borderRadius: 8,
-          padding: 12,
-          background: prefer === key ? `${accent || C.green}14` : undefined,
-        })
+            ? '买回 + 卖更远/更低 strike:经典 CSP 防守;确认仍愿接货再 roll。'
+            : '买回 + 卖更远到期(可 roll down)。临期/ITM 风险升、尚未想接货时用。')
+        const preferLabel = prefer === 'expire' ? '放任到期' : prefer === 'close' ? '买回平仓' : 'Roll 展期'
+        const primaryWhy = (mc.reasons && mc.reasons[0])
+          || (isCall && prefer === 'close' && !underwater
+            ? '权利金目标已达成;Call 买回结束义务,不显著降低组合占用。'
+            : !isCall && prefer === 'close' && !underwater
+              ? '权利金目标已达成,买回可释放担保金周转。'
+              : (mc.action_hint || '按规则建议操作'))
+        const conf = mc.decision_confidence
+        const doPrimary = () => {
+          if (prefer === 'expire') {
+            setTradeModal({
+              initial: {
+                symbol: mc.symbol, trade_type: 'EXPIRE', contract_code: mc.contract_code,
+                strike: String(mc.strike), expiry: mc.expiry?.slice(0, 10) || '',
+                note: isCall ? 'CC 放任到期' : 'CSP 放任到期',
+              },
+              status: isCall ? 'CC_OPEN' : 'CSP_OPEN', cycleId: mc.cycle_id,
+            })
+            setManageCompare(null)
+          } else if (prefer === 'close') {
+            setTradeModal({
+              initial: {
+                symbol: mc.symbol,
+                trade_type: isCall ? 'BUY_CALL_CLOSE' : 'BUY_PUT_CLOSE',
+                contract_code: mc.contract_code, strike: String(mc.strike),
+                expiry: mc.expiry?.slice(0, 10) || '',
+                price: String(mc.buyback_ask || mc.current_price || ''), qty: '1',
+                note: isCall ? 'CC 买回平仓' : 'CSP 买回平仓',
+              },
+              status: isCall ? 'CC_OPEN' : 'CSP_OPEN', cycleId: mc.cycle_id,
+            })
+            setManageCompare(null)
+          } else {
+            const id = mc.cycle_id
+            const pref = mc.prefer_card
+            setManageCompare(null)
+            if (id) handleRoll(id, pref)
+          }
+        }
+        const nextLegs = (code === 'CLOSE' || code === 'REPLACE')
+          ? pickReplaceCandidates(serverOpps, mc, 2) : []
+        const putBlk = !!(mc.portfolio_put_blocked || serverOpps?.summary?.portfolio_put_blocked
+          || portfolioContext?.portfolio_put_blocked)
         return (
-        <div style={{
-          position: 'fixed', inset: 0, background: '#0009', zIndex: 110,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }} onClick={() => setManageCompare(null)}>
-          <div className="card" style={{ width: 640, maxWidth: '96%', maxHeight: '85vh', overflow: 'auto', padding: 18 }}
-            onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
-              <h3 style={{ margin: 0, fontSize: 16 }}>
-                {mc.symbol} {isCall ? 'Covered Call' : 'Cash-Secured Put'} ${mc.strike} 决策
-              </h3>
-              <button className="btn" style={{ fontSize: 12 }} onClick={() => setManageCompare(null)}>关闭</button>
-            </div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-              合约 {mc.contract_code} · DTE {mc.dte ?? '--'}
-              · 浮盈 {mc.profit_pct ?? '--'}% · 剩余年化 {mc.remaining_annualized ?? '--'}%
-              · 买回约 ${buy}
-              {mc.itm ? ' · ITM' : ' · OTM'}
-              {mc.floor_price != null && mc.floor_price > 0 && ` · 愿接 $${mc.floor_price}`}
-              {mc.strike_above_floor && ' · 超过愿接价'}
-              {mc.capital_tight && (
-                <span style={{ color: C.orange }}>
-                  {' · 资金紧'}
-                  {mc.capital_util_pct != null ? ` ${Math.round(mc.capital_util_pct)}%` : ''}
-                </span>
-              )}
-            </div>
-            {mc.action_hint && (() => {
-              const conf = mc.decision_confidence
-              const confColor = conf == null ? 'var(--text-secondary)'
-                : conf >= 80 ? C.green : conf >= 65 ? C.orange : 'var(--text-secondary)'
-              const confLabel = conf == null ? null
-                : conf >= 80 ? '高' : conf >= 65 ? '中' : '偏低'
-              return (
-              <div style={{
-                marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 13,
-                background: underwater || code === 'CLOSE' || code === 'ROLL_ADJUST' || code === 'REPLACE'
-                  ? 'var(--orange-dim, #f59e0b18)'
-                  : 'var(--green-dim, #22c55e18)',
-                border: `1px solid ${underwater || code === 'CLOSE' || code === 'ROLL_ADJUST' || code === 'REPLACE'
-                  ? 'var(--orange, #f59e0b55)'
-                  : 'var(--green, #22c55e55)'}`,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
-                  <span><b>主建议:</b> {mc.action_hint}</span>
+          <div className="manage-modal-overlay" onClick={() => setManageCompare(null)}>
+            <div className="manage-modal card" onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16 }}>
+                    {mc.symbol} {isCall ? 'Covered Call' : 'Cash-Secured Put'} ${mc.strike}
+                  </h3>
+                  <div className="manage-modal-meta" style={{ marginTop: 8, marginBottom: 0 }}>
+                    <span className="manage-chip">{mc.itm ? 'ITM' : 'OTM'}</span>
+                    <span className="manage-chip">DTE <strong>{mc.dte ?? '--'}</strong></span>
+                    <span className="manage-chip">浮盈 <strong>{mc.profit_pct ?? '--'}%</strong></span>
+                    <span className="manage-chip">买回 <strong>${buy}</strong></span>
+                    {mc.remaining_annualized != null && (
+                      <span className="manage-chip">剩余年化 <strong>{mc.remaining_annualized}%</strong></span>
+                    )}
+                    {mc.capital_tight && (
+                      <span className="manage-chip warn">
+                        资金紧{mc.capital_util_pct != null ? ` ${Math.round(mc.capital_util_pct)}%` : ''}
+                        {isCall ? ' · 对 CC 不释放担保' : ''}
+                      </span>
+                    )}
+                    {mc.strike_above_floor && <span className="manage-chip warn">超过愿接价</span>}
+                  </div>
+                </div>
+                <button type="button" className="btn btn-sm" onClick={() => setManageCompare(null)}>关闭</button>
+              </div>
+
+              {/* 主区:一个推荐 + 一句 why + 主 CTA */}
+              <div className={`manage-primary ${prefer !== 'expire' || underwater ? 'warn' : ''}`}>
+                <div className="manage-primary-title">
+                  推荐 · {preferLabel}
                   {conf != null && (
-                    <span style={{
-                      fontSize: 11, fontWeight: 600, color: confColor, whiteSpace: 'nowrap',
-                      padding: '1px 6px', borderRadius: 4,
-                      border: `1px solid ${confColor}66`,
-                    }} title="规则证据充分度,非胜率预测">
-                      置信 {conf}%{confLabel ? ` · ${confLabel}` : ''}
+                    <span style={{ fontSize: 11, fontWeight: 600, marginLeft: 8, opacity: 0.85 }}
+                      title="规则把握度,非胜率预测">
+                      把握 {conf}%
                     </span>
                   )}
                 </div>
-                {mc.reasons?.[0] ? (
-                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>{mc.reasons[0]}</div>
-                ) : null}
-                {mc.secondary_hint && (
-                  <div style={{ marginTop: 4, fontSize: 12, opacity: 0.9 }}>
-                    备选: {mc.secondary_hint}
-                  </div>
-                )}
-              </div>
-              )
-            })()}
-            {/* 今天还会开吗 */}
-            {mc.would_open_today && (
-              <div style={{
-                marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
-                background: mc.would_open_today === 'no' ? '#f8717118'
-                  : mc.would_open_today === 'yes' ? '#22c55e14'
-                    : 'var(--bg-secondary)',
-                border: `1px solid ${mc.would_open_today === 'no' ? C.red + '66'
-                  : mc.would_open_today === 'yes' ? C.green + '66' : 'var(--border)'}`,
-              }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                  今天还会开吗 ·{' '}
-                  {mc.would_open_today === 'yes' ? '规则仍会开'
-                    : mc.would_open_today === 'no' ? '规则已否决'
-                      : mc.would_open_today === 'caution' ? '谨慎'
-                        : '数据不足'}
-                </div>
-                <div style={{ color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-                  {(mc.would_open_reasons && mc.would_open_reasons[0])
-                    || (mc.would_open_today === 'no'
-                      ? '以当前纪律不会新开此腿;继续持有=主动偏离策略'
-                      : '对照开仓纪律的反事实检验')}
-                </div>
-              </div>
-            )}
-            {/* 接货/交货清单 */}
-            {mc.assign_checklist && (code === 'PREPARE_ASSIGN' || code === 'ROLL_ADJUST' || mc.itm) && (() => {
-              const cl = mc.assign_checklist!
-              const isPut = (cl.side || mc.side) === 'PUT'
-              return (
-                <div style={{
-                  marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
-                  background: 'var(--orange-dim, #f59e0b14)', border: `1px solid ${C.orange}55`,
-                }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6, color: C.orange }}>
-                    {isPut ? '接货清单(签合同前确认)' : '交货清单(被 call 前确认)'}
-                  </div>
-                  <div style={{ marginBottom: 8, padding: '6px 8px', borderRadius: 6, background: 'var(--bg-secondary)', lineHeight: 1.5 }}>
-                    <b>先答三问:</b>
-                    <div>① 愿按 strike ${mc.strike} {isPut ? '接货' : '交货'}吗?</div>
-                    <div>② {isPut
-                      ? (cl.floor_ok === false
-                        ? <span style={{ color: C.red }}>愿接价未通过(strike &gt; floor)</span>
-                        : cl.floor_ok === true
-                          ? <span style={{ color: C.green }}>在愿接价内(floor OK)</span>
-                          : '愿接价未设置,请自行确认')
-                      : 'Call 看成本底线,与 CSP floor 无关'}</div>
-                    <div>③ 接后/交后集中度与下一步可接受吗?
-                      {cl.post_holding_pct != null ? ` (约净值 ${cl.post_holding_pct}%)` : ''}
-                    </div>
-                  </div>
-                  <ul style={{ margin: '0 0 6px', paddingLeft: 18, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                    <li>
-                      {isPut ? '接货名义' : '交货名义'}{' '}
-                      <b style={{ color: 'var(--text)' }}>
-                        ${fmt(cl.assign_notional, 0)}
-                      </b>
-                      {cl.collateral_covers && isPut && ' · CSP 担保通常已覆盖(担保→正股,一般不必再掏同等现金)'}
-                    </li>
-                    {isPut && cl.floor_ok != null && (
-                      <li style={{ color: cl.floor_ok ? C.green : C.red }}>
-                        愿接最高价: {cl.floor_ok ? 'OK' : '未通过·不宜等接货'}
-                        {cl.floor_price != null && ` (floor $${cl.floor_price}, strike $${cl.strike ?? mc.strike})`}
-                      </li>
-                    )}
-                    {cl.post_holding_pct != null && (
-                      <li>接货后约占净值 <b>{cl.post_holding_pct}%</b></li>
-                    )}
-                    {cl.over_symbol_cap && (
-                      <li style={{ color: C.red }}>可能超过该标的 max_capital 上限</li>
-                    )}
-                    {cl.next_step_hint && <li>下一步: {cl.next_step_hint}</li>}
-                    {(cl.notes || []).slice(0, 3).map((n, i) => (
-                      <li key={i}>{n}</li>
-                    ))}
-                  </ul>
-                  <div style={{ opacity: 0.85 }}>
-                    愿意 → 可放任/准备指派;不愿意 → 优先 Roll 或买回
-                  </div>
-                </div>
-              )
-            })()}
-            {(code === 'CLOSE' || code === 'REPLACE') && (() => {
-              const nextLegs = pickReplaceCandidates(serverOpps, mc, 2)
-              const putBlocked = !!(mc.portfolio_put_blocked || serverOpps?.summary?.portfolio_put_blocked
-                || portfolioContext?.portfolio_put_blocked)
-              return (
-                <div style={{
-                  marginBottom: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12,
-                  background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                }}>
-                  <div style={{ fontWeight: 600, marginBottom: 6, color: C.blue }}>平仓后 · 下一腿</div>
-                  {mc.replace_hint && (
-                    <div style={{ marginBottom: 6, color: 'var(--text-secondary)' }}>{mc.replace_hint}</div>
+                <div className="manage-primary-why">
+                  <b>{mc.action_hint || preferLabel}</b>
+                  <div style={{ marginTop: 4 }}>{primaryWhy}</div>
+                  {mc.secondary_hint && (
+                    <div style={{ marginTop: 4, opacity: 0.9 }}>备选: {mc.secondary_hint}</div>
                   )}
-                  {mc.freed_capital_est != null && mc.freed_capital_est > 0 && (
-                    <div style={{ marginBottom: 6, opacity: 0.9 }}>
-                      约释放担保 <b>${fmt(mc.freed_capital_est, 0)}</b>
+                </div>
+                <button type="button" className="btn btn-primary" style={{ width: '100%' }}
+                  disabled={prefer === 'roll' && rollLoading}
+                  onClick={doPrimary}>
+                  {prefer === 'expire' ? '登记到期' : prefer === 'close' ? '登记买回' : '打开 Roll 对比'}
+                </button>
+              </div>
+
+              {/* 详情折叠 */}
+              <details className="manage-details">
+                <summary>详情与纪律</summary>
+                <div className="manage-details-body">
+                  <div style={{ marginBottom: 6 }}>合约 {mc.contract_code || '—'}</div>
+                  {mc.would_open_today && (
+                    <div style={{ marginBottom: 8 }}>
+                      <b>今天还会开吗 · </b>
+                      {mc.would_open_today === 'yes' ? '规则仍会开'
+                        : mc.would_open_today === 'no' ? '规则已否决'
+                          : mc.would_open_today === 'caution' ? '谨慎' : '数据不足'}
+                      <div style={{ marginTop: 2 }}>
+                        {(mc.would_open_reasons && mc.would_open_reasons[0])
+                          || '对照开仓纪律的反事实检验'}
+                      </div>
                     </div>
                   )}
-                  {nextLegs.length === 0 ? (
-                    <div style={{ color: 'var(--text-secondary)' }}>
-                      {putBlocked
-                        ? '组合已停新 Put(利用率/行权压力)。可先空仓,或扫描后看 CC/触线。'
-                        : '暂无缓存机会 — 请先在「机会」页扫描,再回来看下一腿。'}
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      {nextLegs.map(({ opp, putBlocked: blocked, capitalEst }) => (
-                        <div key={opp.id || opp.contract_code || `${opp.symbol}-${opp.strike}`}
-                          style={{
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
-                            opacity: blocked ? 0.55 : 1,
-                            padding: '4px 0',
-                            borderTop: '1px solid var(--border)',
-                          }}>
-                          <div>
-                            <b>{opp.symbol}</b> {opp.side}
-                            {opp.strike != null && ` $${opp.strike}`}
-                            {opp.expiry && ` · ${(opp.expiry || '').slice(0, 10)}`}
-                            {opp.annualized != null && ` · 年化 ${fmt(opp.annualized, 0)}%`}
-                            {capitalEst != null && ` · 约占 $${fmt(capitalEst, 0)}`}
-                            {blocked && <span style={{ color: C.orange }}> · 停 Put</span>}
-                          </div>
+                  {(mc.reasons || []).slice(0, 4).map((r, i) => (
+                    <div key={i} style={{ marginBottom: 2 }}>· {r}</div>
+                  ))}
+                  {mc.assign_checklist && (code === 'PREPARE_ASSIGN' || code === 'ROLL_ADJUST' || mc.itm) && (() => {
+                    const cl = mc.assign_checklist!
+                    const isPut = (cl.side || mc.side) === 'PUT'
+                    return (
+                      <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                        <b>{isPut ? '接货清单' : '交货清单'}</b>
+                        <div>① 愿按 strike ${mc.strike} {isPut ? '接货' : '交货'}吗?</div>
+                        <div>② {isPut
+                          ? (cl.floor_ok === false ? '愿接价未通过' : cl.floor_ok === true ? '在愿接价内' : '愿接价未设')
+                          : 'Call 看成本底线,与 floor 无关'}</div>
+                        <div>③ 集中度/下一步可接受吗?
+                          {cl.post_holding_pct != null ? ` (约净值 ${cl.post_holding_pct}%)` : ''}
+                        </div>
+                        <div style={{ marginTop: 4 }}>
+                          {isPut ? '接货' : '交货'}名义 ${fmt(cl.assign_notional, 0)}
+                          {cl.collateral_covers && isPut ? ' · 担保通常已覆盖' : ''}
+                        </div>
+                        {cl.next_step_hint && <div style={{ marginTop: 2 }}>{cl.next_step_hint}</div>}
+                      </div>
+                    )
+                  })()}
+                  {(code === 'CLOSE' || code === 'REPLACE') && (
+                    <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+                      <b>平仓后 · 下一腿</b>
+                      {isCall && (
+                        <div style={{ marginTop: 2 }}>CC 买回主要结束义务,不显著释放组合现金占用。</div>
+                      )}
+                      {mc.replace_hint && <div style={{ marginTop: 2 }}>{mc.replace_hint}</div>}
+                      {mc.freed_capital_est != null && mc.freed_capital_est > 0 && (
+                        <div style={{ marginTop: 2 }}>约释放担保 <b>${fmt(mc.freed_capital_est, 0)}</b></div>
+                      )}
+                      {nextLegs.length === 0 ? (
+                        <div style={{ marginTop: 4 }}>
+                          {putBlk ? '组合已停新 Put。' : '暂无缓存机会,可先扫描。'}
+                        </div>
+                      ) : nextLegs.map(({ opp, putBlocked: blocked }) => (
+                        <div key={opp.id || `${opp.symbol}-${opp.strike}`} style={{ marginTop: 4, opacity: blocked ? 0.55 : 1 }}>
+                          {opp.symbol} {opp.side}
+                          {opp.strike != null && ` $${opp.strike}`}
+                          {opp.annualized != null && ` · 年化 ${fmt(opp.annualized, 0)}%`}
+                          {blocked && ' · 停 Put'}
                         </div>
                       ))}
+                      <button type="button" className="btn btn-sm" style={{ marginTop: 8 }}
+                        onClick={() => {
+                          setManageCompare(null)
+                          setTab('opps')
+                          setOppCatFilter('PRIORITY')
+                        }}>去看机会</button>
                     </div>
                   )}
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    style={{ marginTop: 8, fontSize: 12 }}
-                    onClick={() => {
-                      setManageCompare(null)
-                      setTab('opps')
-                      setOppCatFilter('PRIORITY')
-                    }}
-                  >
-                    去看机会
-                  </button>
                 </div>
-              )
-            })()}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-              <div style={cardStyle('expire')}>
-                <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                  ① 放任到期{prefer === 'expire' ? ' · 推荐' : ''}
+              </details>
+
+              {/* 三选一:其它方案 */}
+              <details className="manage-details" open>
+                <summary>全部方案(三选一)</summary>
+                <div className="manage-details-body">
+                  <div className="manage-alt-grid">
+                    <div className={`manage-alt-card ${prefer === 'expire' ? 'preferred' : ''}`}>
+                      <h4>① 放任到期{prefer === 'expire' ? ' · 推荐' : ''}</h4>
+                      <p>{expireBody}</p>
+                      <button type="button" className={`btn ${prefer === 'expire' ? 'btn-primary' : ''} btn-sm`} style={{ width: '100%' }}
+                        onClick={() => {
+                          setTradeModal({
+                            initial: {
+                              symbol: mc.symbol, trade_type: 'EXPIRE', contract_code: mc.contract_code,
+                              strike: String(mc.strike), expiry: mc.expiry?.slice(0, 10) || '',
+                              note: isCall ? 'CC 放任到期' : 'CSP 放任到期',
+                            },
+                            status: isCall ? 'CC_OPEN' : 'CSP_OPEN', cycleId: mc.cycle_id,
+                          })
+                          setManageCompare(null)
+                        }}>登记到期</button>
+                    </div>
+                    <div className={`manage-alt-card ${prefer === 'close' ? 'preferred' : ''}`}>
+                      <h4 style={{ color: prefer === 'close' ? C.green : undefined }}>
+                        ② 买回平仓{prefer === 'close' ? ' · 推荐' : ''}
+                      </h4>
+                      <p>
+                        {closeBody}
+                        {mc.remaining_annualized != null && mc.remaining_annualized < 15 && ' 剩余年化偏低。'}
+                      </p>
+                      <button type="button" className={`btn ${prefer === 'close' ? 'btn-primary' : ''} btn-sm`} style={{ width: '100%' }}
+                        onClick={() => {
+                          setTradeModal({
+                            initial: {
+                              symbol: mc.symbol,
+                              trade_type: isCall ? 'BUY_CALL_CLOSE' : 'BUY_PUT_CLOSE',
+                              contract_code: mc.contract_code, strike: String(mc.strike),
+                              expiry: mc.expiry?.slice(0, 10) || '',
+                              price: String(mc.buyback_ask || mc.current_price || ''), qty: '1',
+                              note: isCall ? 'CC 买回平仓' : 'CSP 买回平仓',
+                            },
+                            status: isCall ? 'CC_OPEN' : 'CSP_OPEN', cycleId: mc.cycle_id,
+                          })
+                          setManageCompare(null)
+                        }}>登记买回</button>
+                    </div>
+                    <div className={`manage-alt-card ${prefer === 'roll' ? 'preferred roll' : ''}`}>
+                      <h4 style={{ color: prefer === 'roll' ? C.orange : undefined }}>
+                        ③ Roll 展期{prefer === 'roll' ? ' · 推荐' : ''}
+                      </h4>
+                      <p>
+                        {rollBody}
+                        {isCall && mc.itm && ' ITM 可考虑 roll up/out。'}
+                        {!isCall && mc.itm && ' ITM 可考虑 roll down/out。'}
+                      </p>
+                      <button type="button" className={`btn ${prefer === 'roll' ? 'btn-primary' : ''} btn-sm`}
+                        style={{ width: '100%' }} disabled={rollLoading}
+                        onClick={() => {
+                          const id = mc.cycle_id
+                          const pref = mc.prefer_card
+                          setManageCompare(null)
+                          if (id) handleRoll(id, pref)
+                        }}>打开 Roll 对比</button>
+                    </div>
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  {expireBody}
-                </div>
-                <button className="btn" style={{ fontSize: 12, width: '100%' }}
-                  onClick={() => {
-                    setTradeModal({
-                      initial: {
-                        symbol: mc.symbol,
-                        trade_type: 'EXPIRE',
-                        contract_code: mc.contract_code,
-                        strike: String(mc.strike),
-                        expiry: mc.expiry?.slice(0, 10) || '',
-                        note: isCall ? 'CC 放任到期' : 'CSP 放任到期',
-                      },
-                      status: isCall ? 'CC_OPEN' : 'CSP_OPEN',
-                      cycleId: mc.cycle_id,
-                    })
-                    setManageCompare(null)
-                  }}>登记到期</button>
-              </div>
-              <div style={cardStyle('close', C.green)}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: C.green }}>
-                  ② 买回平仓{prefer === 'close' ? ' · 推荐' : ''}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  {closeBody}
-                  {mc.remaining_annualized != null && mc.remaining_annualized < 15
-                    && ' 剩余年化偏低,更宜平仓换仓。'}
-                </div>
-                <button className={`btn ${prefer === 'close' ? 'btn-primary' : ''}`} style={{ fontSize: 12, width: '100%' }}
-                  onClick={() => {
-                    setTradeModal({
-                      initial: {
-                        symbol: mc.symbol,
-                        trade_type: isCall ? 'BUY_CALL_CLOSE' : 'BUY_PUT_CLOSE',
-                        contract_code: mc.contract_code,
-                        strike: String(mc.strike),
-                        expiry: mc.expiry?.slice(0, 10) || '',
-                        price: String(mc.buyback_ask || mc.current_price || ''),
-                        qty: '1',
-                        note: isCall ? 'CC 买回平仓' : 'CSP 买回平仓',
-                      },
-                      status: isCall ? 'CC_OPEN' : 'CSP_OPEN',
-                      cycleId: mc.cycle_id,
-                    })
-                    setManageCompare(null)
-                  }}>登记买回</button>
-              </div>
-              <div style={cardStyle('roll', C.orange)}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: C.orange }}>
-                  ③ Roll 展期{prefer === 'roll' ? ' · 推荐' : ''}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: 10 }}>
-                  {rollBody}
-                  {isCall && mc.itm && ' ITM CC 可考虑 roll up/out 降被 call 概率。'}
-                  {!isCall && mc.itm && ' ITM Put 可考虑 roll down/out 降接货概率。'}
-                </div>
-                <button className={`btn ${prefer === 'roll' ? 'btn-primary' : ''}`} style={{ fontSize: 12, width: '100%' }}
-                  disabled={rollLoading}
-                  onClick={() => {
-                    const id = mc.cycle_id
-                    const pref = mc.prefer_card
-                    setManageCompare(null)
-                    if (id) handleRoll(id, pref)
-                  }}>打开 Roll 对比</button>
-              </div>
+              </details>
             </div>
           </div>
-        </div>
         )
       })()}
     </div>
@@ -5025,25 +4983,19 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
   }
 
   if (!editing) {
-    const sf = fmtSuggestedFloor(target)
-    const dColor = sf?.delta == null ? 'var(--text)'
-      : Math.abs(sf.delta) < 0.5 ? 'var(--text-secondary)'
-        : sf.delta > 0 ? C.orange : C.blue
     return (
       <tr style={{ borderBottom: '1px solid var(--border)' }}>
         <td style={{ padding: '8px 10px' }}>
           <span style={{ fontWeight: 600 }}>{target.symbol}</span>
           <span style={{ color: 'var(--text-secondary)', fontSize: 11, marginLeft: 6 }}>{target.name}</span>
         </td>
-        <td style={{ padding: '8px 10px', fontWeight: 600 }} title="现价(本地日K收盘)">
-          {target.spot != null ? `$${fmt(target.spot)}` : '--'}
-        </td>
-        <td style={{ padding: '8px 10px' }} title="愿接最高价(Put strike上限)">
-          ${fmt(target.floor_price)}
-        </td>
-        <td style={{ padding: '8px 10px', color: dColor }}
-          title="智能参考愿接价(市场结构,非自动写入);括号为相对当前愿接价的差">
-          {sf ? `$${fmt(sf.price)}${sf.deltaTxt}` : '--'}
+        <td style={{ padding: '8px 10px' }}>
+          <TargetPriceStrip
+            spot={target.spot}
+            floor={target.floor_price}
+            suggested={target.suggested_floor}
+            suggestedDelta={target.suggested_floor_delta}
+          />
         </td>
         <td style={{ padding: '8px 10px' }}>{target.delta_min} ~ {target.delta_max}</td>
         <td style={{ padding: '8px 10px' }}>{target.dte_min} ~ {target.dte_max} 天</td>
@@ -5066,17 +5018,22 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
   return (
     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
       <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 11 }}>{err}</div>}</td>
-      <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-secondary)' }} title="现价(只读)">
-        {target.spot != null ? `$${fmt(target.spot)}` : '--'}
-      </td>
       <td style={{ padding: '8px 10px' }}>
-        <input type="number" step="any" style={inputStyle} value={form.floor_price}
-          onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
-          title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
-      </td>
-      <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-secondary)' }}
-        title="智能参考愿接价(只读)">
-        {target.suggested_floor != null ? `$${fmt(target.suggested_floor)}` : '--'}
+        <div style={{ marginBottom: 4 }}>
+          <TargetPriceStrip
+            size="sm"
+            spot={target.spot}
+            floor={target.floor_price}
+            suggested={target.suggested_floor}
+            suggestedDelta={target.suggested_floor_delta}
+          />
+        </div>
+        <label style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+          改愿接{' '}
+          <input type="number" step="any" style={inputStyle} value={form.floor_price}
+            onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
+            title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
+        </label>
       </td>
       <td style={{ padding: '8px 10px' }}>
         <SelectNum value={form.delta_min} options={DELTA_OPTS} style={inputStyle}
