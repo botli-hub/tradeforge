@@ -272,48 +272,56 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
 # ── Telegram 推送 ─────────────────────────────────────────────────────────────
 
 def format_scan_report(result: Dict[str, Any], limit: int = 8) -> str:
-    lines = [f"🎯 Wheel 全池扫描 Top 机会({result['scanned_at'][:16]})"]
-    opps = result.get("opportunities", [])
-    if not opps:
-        lines.append("没有满足条件的机会")
-    for o in opps[:limit]:
-        icon = "🟢" if o["side"] == "PUT" else "🔵"
-        tags = []
-        if o.get("trend") == "DOWN":
-            tags.append("⚠趋势弱")
-        if o.get("covers_earnings"):
-            tags.append("⚠财报")
-        if o.get("exceeds_capital"):
-            tags.append("⚠超资金上限")
-        tag_s = (" " + " ".join(tags)) if tags else ""
-        lines.append(
-            f"{icon} {o['symbol']} {'卖Put' if o['side'] == 'PUT' else '卖Call'} "
-            f"{o['expiry'][:10]} {o['strike']:g} · Δ{o['delta']:.2f} · {o['dte']}天\n"
-            f"   权利金 {o['bid']:g} · 年化 {o['annualized']:.1f}% · 评分 {o.get('score', 0):.1f}{tag_s}"
+    """兼容旧调用;新路径走 alert_engine.format_scan_alerts。"""
+    try:
+        from app.services.alert_engine import format_scan_alerts
+        opps = (result.get("opportunities") or [])[:limit]
+        return format_scan_alerts(
+            opps,
+            scanned_at=result.get("scanned_at") or "",
+            put_blocked=bool((result.get("summary") or {}).get("portfolio_put_blocked")),
+            capital_tight=bool((result.get("summary") or {}).get("capital_tight")),
         )
-    errs = result.get("errors") or []
-    if errs:
-        lines.append(f"({len(errs)} 个标的获取失败)")
-    return "\n".join(lines)
+    except Exception:
+        lines = [f"🎯 Wheel 全池扫描 Top 机会({str(result.get('scanned_at') or '')[:16]})"]
+        opps = result.get("opportunities", [])
+        if not opps:
+            lines.append("没有满足条件的机会")
+        for o in opps[:limit]:
+            icon = "🟢" if o.get("side") == "PUT" else "🔵"
+            lines.append(
+                f"{icon} {o.get('symbol')} {o.get('side')} "
+                f"{str(o.get('expiry') or '')[:10]} {o.get('strike')} · 分{o.get('score', 0)}"
+            )
+        return "\n".join(lines)
 
 
 def push_scan(host: str = "127.0.0.1", port: int = 11111,
-              force_refresh: bool = False) -> Dict[str, Any]:
+              force_refresh: bool = False, force_push: bool = False) -> Dict[str, Any]:
+    """扫描并按 N3/N5 策略推送(去重、门槛、组合闸门)。"""
     from app.api.leaps import _load_config
-    from app.services.notifier import TelegramNotifier
+    from app.services.alert_engine import process_scan_push
 
     result = run_scan(host, port, force_refresh=force_refresh)
-    notifier = TelegramNotifier.from_config(_load_config())
-    sent = False
-    if notifier._enabled:
-        sent = notifier.send(format_scan_report(result))
-    result["telegram_sent"] = sent
+    cfg = _load_config()
+    portfolio_ctx = None
+    try:
+        from app.api.wheel import _portfolio_context_for_manage
+        portfolio_ctx = _portfolio_context_for_manage()
+    except Exception:
+        portfolio_ctx = (result.get("summary") or {}) or None
+
+    push_out = process_scan_push(
+        result, cfg=cfg, force=force_push, portfolio_ctx=portfolio_ctx,
+    )
+    result["telegram_sent"] = bool(push_out.get("sent"))
+    result["push"] = push_out
     return result
 
 
 def auto_push_loop():
     """按设置页 wheel_scan.auto_push_minutes 周期推送 Top 机会;0=关闭。
-    启动后先等满一个间隔再首跑,避开限频高峰(与 wheel_timing 循环同策略)。"""
+    启动后先等满一个间隔再首跑;走 alert_engine 去重/闸门/静默。"""
     from app.api.leaps import _load_config
     from app.core.wheel_score import get_scan_cfg
     while True:

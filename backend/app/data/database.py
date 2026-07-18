@@ -747,6 +747,30 @@ def init_db():
         )
     """)
 
+    # 推送日志(通知中心 / 去重复盘)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS wheel_push_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT NOT NULL DEFAULT 'telegram',
+            category TEXT NOT NULL,
+            fingerprint TEXT,
+            title TEXT,
+            body TEXT NOT NULL,
+            meta TEXT,
+            status TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wheel_push_log_created "
+        "ON wheel_push_log(created_at DESC)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wheel_push_log_cat "
+        "ON wheel_push_log(category, created_at DESC)"
+    )
+
     # 兼容旧库:wheel_targets 增补行业/标签;cycles 增补入场分
     for ddl in [
         "ALTER TABLE wheel_targets ADD COLUMN sector TEXT",

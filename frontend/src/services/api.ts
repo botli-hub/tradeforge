@@ -969,6 +969,21 @@ export interface BackendConfig {
     alert_push_minutes?: number
     notify_mode?: 'realtime' | 'digest' | string
   }
+  /** 推送策略(通知中心) */
+  wheel_alerts?: {
+    position_priority_max?: number
+    position_cooldown_hours?: number
+    position_urgent_cooldown_hours?: number
+    quiet_hours_start?: number
+    quiet_hours_end?: number
+    quiet_hours_allow_urgent?: boolean
+    digest_hour?: number
+    scan_min_score?: number
+    scan_min_annualized?: number
+    scan_dedupe_hours?: number
+    scan_skip_blocked_puts?: boolean
+    scan_only_new?: boolean
+  }
   wheel_scan?: {
     max_spread_pct: number
     spread_soft_pct: number
@@ -1001,6 +1016,19 @@ export interface BackendConfig {
     active?: string
     presets?: Record<string, unknown>
   }
+}
+
+export type WheelPushLogItem = {
+  id: number
+  channel: string
+  category: string
+  fingerprint?: string | null
+  title?: string | null
+  body: string
+  meta?: Record<string, unknown> | null
+  status: string
+  reason?: string | null
+  created_at: string
 }
 
 export async function getBackendConfig() {
@@ -1621,11 +1649,51 @@ export async function activateWheelProfile(name: string) {
   })
 }
 
-export async function pushWheelPositionAlerts(host: string, port: number) {
-  return request<{ sent: boolean; count: number }>(
-    `/api/wheel/alerts/push?host=${encodeURIComponent(host)}&port=${port}`,
+export async function pushWheelPositionAlerts(host: string, port: number, force = true) {
+  return request<{
+    sent: boolean
+    count: number
+    candidates?: number
+    skipped?: Record<string, number>
+    preview?: string[]
+    items?: unknown[]
+    message?: string
+  }>(
+    `/api/wheel/alerts/push?host=${encodeURIComponent(host)}&port=${port}&force=${force ? 'true' : 'false'}`,
     { method: 'POST' },
   )
+}
+
+export async function getWheelAlertLog(params?: {
+  limit?: number
+  category?: string
+  status?: string
+}) {
+  const q = new URLSearchParams()
+  if (params?.limit) q.set('limit', String(params.limit))
+  if (params?.category) q.set('category', params.category)
+  if (params?.status) q.set('status', params.status)
+  const qs = q.toString()
+  return request<{ items: WheelPushLogItem[] }>(
+    `/api/wheel/alerts/log${qs ? `?${qs}` : ''}`,
+  )
+}
+
+export async function getWheelAlertPreview() {
+  return request<{
+    position: string
+    scan: string
+    config: Record<string, unknown>
+  }>('/api/wheel/alerts/preview')
+}
+
+export async function testWheelAlert(kind: 'position' | 'scan' | 'ping' = 'position') {
+  return request<{
+    sent?: boolean
+    ok?: boolean
+    reason?: string
+    preview?: string
+  }>(`/api/wheel/alerts/test?kind=${encodeURIComponent(kind)}`, { method: 'POST' })
 }
 
 export async function getLeapsSignals(symbol?: string, limit = 50) {

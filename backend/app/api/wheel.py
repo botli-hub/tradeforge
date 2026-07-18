@@ -1512,12 +1512,18 @@ def quote_contract(
 
 
 @router.post("/scan/push")
-def scan_and_push(host: str = Query("127.0.0.1"), port: int = Query(11111),
-                  refresh: bool = Query(False)):
-    """手动触发扫描并推送 Telegram"""
+def scan_and_push(
+    host: str = Query("127.0.0.1"),
+    port: int = Query(11111),
+    refresh: bool = Query(False),
+    force: bool = Query(True, description="true=忽略机会去重(手动推送默认)"),
+):
+    """手动触发扫描并推送 Telegram(去重/闸门/门槛)。"""
     from app.services import wheel_scanner
     try:
-        return wheel_scanner.push_scan(host, port, force_refresh=refresh)
+        return wheel_scanner.push_scan(
+            host, port, force_refresh=refresh, force_push=force,
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
@@ -1812,19 +1818,69 @@ def activate_profile(body: ActivateProfileIn):
 
 
 @router.post("/alerts/push")
-def push_position_alerts(host: str = Query("127.0.0.1"), port: int = Query(11111)):
-    """推送在场合约高优先级行动建议到 Telegram。"""
-    from app.core.wheel_decision import format_alert_line
-    from app.services.notifier import TelegramNotifier
+def push_position_alerts(
+    host: str = Query("127.0.0.1"),
+    port: int = Query(11111),
+    force: bool = Query(True, description="true=忽略冷却/静默(手动推送默认)"),
+):
+    """推送在场合约高优先级行动(事件去重+短模板)。手动默认 force。"""
+    from app.services.alert_engine import run_position_alert_cycle
 
-    data = check_open_positions_core(host, port)
-    urgent = [i for i in data.get("items") or [] if (i.get("action_priority") or 9) <= 3]
-    if not urgent:
-        return {"sent": False, "count": 0, "message": "无高优先级行动"}
-    lines = ["🚨 Wheel 持仓行动提醒"] + [format_alert_line(i) for i in urgent[:15]]
-    notifier = TelegramNotifier.from_config(_wheel_cfg())
-    sent = notifier.send("\n".join(lines)) if notifier._enabled else False
-    return {"sent": sent, "count": len(urgent), "items": urgent}
+    try:
+        out = run_position_alert_cycle(host, port, force=force)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"持仓推送失败: {e}")
+    return {
+        "sent": (out.get("sent_count") or 0) > 0,
+        "count": out.get("sent_count") or 0,
+        "candidates": out.get("candidates"),
+        "skipped": out.get("skipped"),
+        "preview": out.get("preview"),
+        "items": out.get("items"),
+        "message": "ok" if (out.get("sent_count") or 0) > 0 else "无新待推(冷却/无候选)",
+    }
+
+
+@router.get("/alerts/log")
+def get_push_log(
+    limit: int = Query(50, ge=1, le=200),
+    category: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+):
+    """通知中心:最近推送日志。"""
+    from app.data.wheel_repository import list_push_logs
+    return {"items": list_push_logs(limit=limit, category=category, status=status)}
+
+
+@router.get("/alerts/preview")
+def preview_alert_templates():
+    """样例短模板(不发送)。"""
+    from app.services.alert_engine import sample_position_message, sample_scan_message, get_alert_cfg
+    return {
+        "position": sample_position_message(),
+        "scan": sample_scan_message(),
+        "config": get_alert_cfg(_wheel_cfg()),
+    }
+
+
+@router.post("/alerts/test")
+def test_alert_push(kind: str = Query("position", description="position|scan|ping")):
+    """测试推送:发样例消息到 Telegram。"""
+    from app.services.alert_engine import (
+        sample_position_message, sample_scan_message, send_and_log,
+    )
+    kind = (kind or "position").lower()
+    if kind == "scan":
+        body = sample_scan_message()
+        cat = "test_scan"
+    elif kind == "ping":
+        body = "✅ TradeForge 推送测试成功 · " + datetime.now().isoformat(timespec="seconds")
+        cat = "test"
+    else:
+        body = sample_position_message()
+        cat = "test_position"
+    r = send_and_log(body, category=cat, title="test", meta={"kind": kind}, cfg=_wheel_cfg())
+    return {"sent": r.get("sent"), "ok": r.get("ok"), "reason": r.get("reason"), "preview": body}
 
 
 class EventBlockIn(BaseModel):

@@ -2,13 +2,17 @@ import { useEffect, useState } from 'react'
 import {
   AppSettings,
   BackendConfig,
+  WheelPushLogItem,
   connectTrading,
   disconnectTrading,
   getAppSettings,
   getBackendConfig,
   getMarketStatus,
+  getWheelAlertLog,
+  getWheelAlertPreview,
   saveAppSettings,
   saveBackendConfig,
+  testWheelAlert,
 } from '../services/api'
 
 type SettingsTab = 'wheel' | 'research' | 'general'
@@ -355,6 +359,13 @@ function BackendConfigCard({
     } : p)
   }
 
+  function upAlerts(key: string, value: any) {
+    setCfg(p => p ? {
+      ...p,
+      wheel_alerts: { ...(p.wheel_alerts || {}), [key]: value },
+    } : p)
+  }
+
   async function save() {
     if (!cfg) return
     setSaving(true)
@@ -603,7 +614,7 @@ function BackendConfigCard({
           </div>
 
           <div className="editor-section">
-            <h4>持仓管理与通知</h4>
+            <h4>持仓管理</h4>
             <div className="settings-row">
               <label>平仓利润目标(%)</label>
               <input type="number" value={cfg.wheel_position.profit_target_pct}
@@ -630,14 +641,6 @@ function BackendConfigCard({
                 onChange={e => up('wheel_position', 'earnings_warn_days', Number(e.target.value))} />
             </div>
             <div className="settings-row">
-              <label>持仓通知模式</label>
-              <select value={cfg.wheel_position.notify_mode || 'realtime'}
-                onChange={e => up('wheel_position', 'notify_mode', e.target.value)}>
-                <option value="realtime">即时(每条推)</option>
-                <option value="digest">每日汇总(深度ITM仍即时)</option>
-              </select>
-            </div>
-            <div className="settings-row">
               <label>每周一 TG 周报</label>
               <select value={cfg.wheel_position.weekly_report ? '1' : '0'}
                 onChange={e => up('wheel_position', 'weekly_report', e.target.value === '1')}>
@@ -646,6 +649,14 @@ function BackendConfigCard({
               </select>
             </div>
           </div>
+
+          <NotificationCenter
+            cfg={cfg}
+            up={up}
+            upScan={upScan}
+            upAlerts={upAlerts}
+            onMessage={(t) => { setMsg(t); onMessage(t) }}
+          />
 
           <div className="editor-section">
             <h4>组合风控</h4>
@@ -691,6 +702,258 @@ function BackendConfigCard({
           {saving ? '保存中…' : mode === 'wheel' ? '保存 Wheel 配置' : '保存通用配置'}
         </button>
       </div>
+    </div>
+  )
+}
+
+// ── 通知中心(N1–N5 聚合设置 + 样例 + 测试 + 日志) ────────────────────────────
+function NotificationCenter({
+  cfg,
+  up,
+  upScan,
+  upAlerts,
+  onMessage,
+}: {
+  cfg: BackendConfig
+  up: (section: keyof BackendConfig, key: string, value: any) => void
+  upScan: (key: string, value: any) => void
+  upAlerts: (key: string, value: any) => void
+  onMessage: (m: string) => void
+}) {
+  const alerts = cfg.wheel_alerts || {}
+  const [logs, setLogs] = useState<WheelPushLogItem[]>([])
+  const [preview, setPreview] = useState<{ position: string; scan: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [showPreview, setShowPreview] = useState(false)
+
+  function refreshLogs() {
+    getWheelAlertLog({ limit: 30 })
+      .then(r => setLogs(r.items || []))
+      .catch(() => setLogs([]))
+  }
+
+  useEffect(() => {
+    refreshLogs()
+    getWheelAlertPreview()
+      .then(r => setPreview({ position: r.position, scan: r.scan }))
+      .catch(() => setPreview(null))
+  }, [])
+
+  async function handleTest(kind: 'position' | 'scan' | 'ping') {
+    setBusy(true)
+    try {
+      const r = await testWheelAlert(kind)
+      if (r.sent || r.ok) {
+        onMessage(`测试推送已发送(${kind})`)
+      } else {
+        onMessage(`测试未发出: ${r.reason || '未知'}`)
+      }
+      refreshLogs()
+    } catch (e: any) {
+      onMessage(`测试失败: ${e.message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const statusColor = (s: string) => {
+    if (s === 'sent') return 'var(--green, #3d9)'
+    if (s === 'failed') return 'var(--red, #e55)'
+    return 'var(--text-secondary)'
+  }
+
+  return (
+    <div className="editor-section">
+      <h4>通知中心</h4>
+      <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+        管仓告警=事件变化才推(去重/冷却)；机会推送=TopN+门槛+合约去重。
+        组合闸门停 Put 时不会推无效 Put 机会。静默时段内仅紧急(深ITM/接货)可破。
+      </p>
+
+      <div className="settings-row">
+        <label>管仓轮询(分钟,0=关)</label>
+        <input type="number" min={0}
+          value={cfg.wheel_position.alert_push_minutes ?? 0}
+          onChange={e => up('wheel_position', 'alert_push_minutes', Number(e.target.value))}
+          title="多久检查一次持仓;同状态不会重复刷屏" />
+      </div>
+      <div className="settings-row">
+        <label>持仓通知模式</label>
+        <select value={cfg.wheel_position.notify_mode || 'realtime'}
+          onChange={e => up('wheel_position', 'notify_mode', e.target.value)}>
+          <option value="realtime">即时(状态变化推)</option>
+          <option value="digest">每日汇总(紧急仍即时)</option>
+        </select>
+      </div>
+      <div className="settings-row">
+        <label>普通冷却(小时)</label>
+        <input type="number" step="0.5" min={0}
+          value={alerts.position_cooldown_hours ?? 6}
+          onChange={e => upAlerts('position_cooldown_hours', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>紧急冷却(小时)</label>
+        <input type="number" step="0.5" min={0}
+          value={alerts.position_urgent_cooldown_hours ?? 2}
+          onChange={e => upAlerts('position_urgent_cooldown_hours', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>优先级上限(≤推)</label>
+        <input type="number" min={1} max={9}
+          value={alerts.position_priority_max ?? 3}
+          onChange={e => upAlerts('position_priority_max', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>静默开始时(0-23)</label>
+        <input type="number" min={0} max={23}
+          value={alerts.quiet_hours_start ?? 22}
+          onChange={e => upAlerts('quiet_hours_start', Number(e.target.value))}
+          title="与结束相同=关闭静默" />
+      </div>
+      <div className="settings-row">
+        <label>静默结束时(0-23)</label>
+        <input type="number" min={0} max={23}
+          value={alerts.quiet_hours_end ?? 7}
+          onChange={e => upAlerts('quiet_hours_end', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>静默仍推紧急</label>
+        <select value={alerts.quiet_hours_allow_urgent === false ? '0' : '1'}
+          onChange={e => upAlerts('quiet_hours_allow_urgent', e.target.value === '1')}>
+          <option value="1">是(推荐)</option>
+          <option value="0">否</option>
+        </select>
+      </div>
+      <div className="settings-row">
+        <label>Digest 发送时</label>
+        <input type="number" min={0} max={23}
+          value={alerts.digest_hour ?? 9}
+          onChange={e => upAlerts('digest_hour', Number(e.target.value))} />
+      </div>
+
+      <div style={{ height: 8 }} />
+      <div className="settings-row">
+        <label>高分自动推送(分钟,0=关)</label>
+        <input type="number" value={cfg.wheel_scan?.auto_push_minutes ?? 0}
+          onChange={e => upScan('auto_push_minutes', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>TG 推送 Top N</label>
+        <input type="number" min={1} max={20}
+          value={cfg.wheel_scan?.telegram_top_n ?? 5}
+          onChange={e => upScan('telegram_top_n', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>机会最低分</label>
+        <input type="number" step="0.1" min={0}
+          value={alerts.scan_min_score ?? 0}
+          onChange={e => upAlerts('scan_min_score', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>机会最低年化%</label>
+        <input type="number" step="1" min={0}
+          value={alerts.scan_min_annualized ?? 0}
+          onChange={e => upAlerts('scan_min_annualized', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>机会去重(小时)</label>
+        <input type="number" step="0.5" min={0}
+          value={alerts.scan_dedupe_hours ?? 12}
+          onChange={e => upAlerts('scan_dedupe_hours', Number(e.target.value))} />
+      </div>
+      <div className="settings-row">
+        <label>闸门停 Put 时</label>
+        <select value={alerts.scan_skip_blocked_puts === false ? '0' : '1'}
+          onChange={e => upAlerts('scan_skip_blocked_puts', e.target.value === '1')}>
+          <option value="1">不推 Put(推荐)</option>
+          <option value="0">仍推(仅标注)</option>
+        </select>
+      </div>
+      <div className="settings-row">
+        <label>仅推新机会</label>
+        <select value={alerts.scan_only_new === false ? '0' : '1'}
+          onChange={e => upAlerts('scan_only_new', e.target.value === '1')}>
+          <option value="1">是(去重)</option>
+          <option value="0">否(每轮全推 Top)</option>
+        </select>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '12px 0 8px' }}>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+          onClick={() => handleTest('ping')}>测试连通</button>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+          onClick={() => handleTest('position')}>测管仓样例</button>
+        <button type="button" className="btn btn-secondary btn-sm" disabled={busy}
+          onClick={() => handleTest('scan')}>测机会样例</button>
+        <button type="button" className="btn btn-secondary btn-sm"
+          onClick={() => setShowPreview(v => !v)}>
+          {showPreview ? '收起样例' : '预览短模板'}
+        </button>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={refreshLogs}>
+          刷新日志
+        </button>
+      </div>
+
+      {showPreview && preview && (
+        <div style={{
+          display: 'grid', gap: 8, marginBottom: 12,
+          fontSize: 12, fontFamily: 'ui-monospace, monospace',
+          whiteSpace: 'pre-wrap',
+        }}>
+          <div style={{
+            padding: 10, borderRadius: 8,
+            background: 'var(--bg-secondary, #1a1a1a)', border: '1px solid var(--border, #333)',
+          }}>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>管仓样例</div>
+            {preview.position}
+          </div>
+          <div style={{
+            padding: 10, borderRadius: 8,
+            background: 'var(--bg-secondary, #1a1a1a)', border: '1px solid var(--border, #333)',
+          }}>
+            <div style={{ color: 'var(--text-secondary)', marginBottom: 4 }}>机会样例</div>
+            {preview.scan}
+          </div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6 }}>
+        最近推送
+      </div>
+      {logs.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无记录</div>
+      ) : (
+        <div style={{
+          maxHeight: 220, overflow: 'auto', fontSize: 12,
+          border: '1px solid var(--border, #333)', borderRadius: 8,
+        }}>
+          {logs.map(row => (
+            <div key={row.id} style={{
+              padding: '8px 10px',
+              borderBottom: '1px solid var(--border, #333)',
+              display: 'grid',
+              gridTemplateColumns: '72px 70px 1fr',
+              gap: 8,
+              alignItems: 'start',
+            }}>
+              <span style={{ color: statusColor(row.status) }}>{row.status}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>{row.category}</span>
+              <span>
+                <div style={{ color: 'var(--text-secondary)' }}>
+                  {(row.created_at || '').replace('T', ' ').slice(0, 19)}
+                  {row.reason ? ` · ${row.reason}` : ''}
+                </div>
+                <div style={{
+                  whiteSpace: 'pre-wrap', marginTop: 2,
+                  maxHeight: 60, overflow: 'hidden',
+                }}>
+                  {(row.title || row.body || '').slice(0, 160)}
+                </div>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

@@ -166,14 +166,22 @@ def _wheel_timing_loop():
 
 
 def _position_alert_loop():
-    """按 wheel_position.alert_push_minutes 推送持仓行动;0=关闭。"""
+    """按 wheel_position.alert_push_minutes 轮询持仓;事件变化才推(去重/静默/短模板)。0=关。"""
     import time
+    import logging
+    log = logging.getLogger("position_alert")
     time.sleep(180)
     while True:
         try:
             from app.api.leaps import _load_config
+            from app.services.alert_engine import get_alert_cfg
             cfg = _load_config()
-            minutes = float((cfg.get("wheel_position") or {}).get("alert_push_minutes") or 0)
+            acfg = get_alert_cfg(cfg)
+            minutes = float(
+                acfg.get("alert_push_minutes")
+                or (cfg.get("wheel_position") or {}).get("alert_push_minutes")
+                or 0
+            )
         except Exception:
             minutes = 0
         if minutes <= 0:
@@ -181,20 +189,18 @@ def _position_alert_loop():
             continue
         time.sleep(minutes * 60)
         try:
-            from app.api.wheel import check_open_positions_core
-            from app.core.wheel_decision import format_alert_line
-            from app.services.notifier import TelegramNotifier
+            from app.services.alert_engine import run_position_alert_cycle
             futu = (_load_config().get("futu") or {})
-            data = check_open_positions_core(futu.get("host", "127.0.0.1"), futu.get("port", 11111))
-            urgent = [i for i in data.get("items") or [] if (i.get("action_priority") or 9) <= 3]
-            if not urgent:
-                continue
-            lines = ["🚨 Wheel 持仓行动提醒"] + [format_alert_line(i) for i in urgent[:15]]
-            notifier = TelegramNotifier.from_config(_load_config())
-            if notifier._enabled:
-                notifier.send("\n".join(lines))
-        except Exception:
-            pass
+            out = run_position_alert_cycle(
+                futu.get("host", "127.0.0.1"), futu.get("port", 11111),
+            )
+            if out.get("sent_count"):
+                log.info(
+                    "position alerts sent=%s candidates=%s skipped=%s",
+                    out.get("sent_count"), out.get("candidates"), out.get("skipped"),
+                )
+        except Exception as e:
+            log.warning("position alert cycle failed: %s", e)
 
 
 def _startup_backfill_check(scheduler):

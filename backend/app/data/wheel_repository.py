@@ -606,6 +606,96 @@ def set_kv(key: str, value: str):
         conn.close()
 
 
+# ── 推送日志 ─────────────────────────────────────────────────────────────────
+
+def add_push_log(
+    *,
+    channel: str = "telegram",
+    category: str,
+    body: str,
+    status: str,
+    fingerprint: Optional[str] = None,
+    title: Optional[str] = None,
+    meta: Optional[Dict[str, Any]] = None,
+    reason: Optional[str] = None,
+) -> int:
+    import json as _json
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO wheel_push_log
+               (channel, category, fingerprint, title, body, meta, status, reason, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                channel or "telegram",
+                category or "unknown",
+                fingerprint,
+                title,
+                body or "",
+                _json.dumps(meta, ensure_ascii=False) if meta is not None else None,
+                status or "unknown",
+                reason,
+                _now_iso(),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def list_push_logs(
+    limit: int = 50,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    import json as _json
+    conn = get_db()
+    try:
+        sql = "SELECT * FROM wheel_push_log WHERE 1=1"
+        args: List[Any] = []
+        if category:
+            sql += " AND category = ?"
+            args.append(category)
+        if status:
+            sql += " AND status = ?"
+            args.append(status)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(max(1, min(int(limit or 50), 200)))
+        rows = conn.execute(sql, args).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d.get("meta"):
+                try:
+                    d["meta"] = _json.loads(d["meta"])
+                except Exception:
+                    pass
+            out.append(d)
+        return out
+    finally:
+        conn.close()
+
+
+def prune_push_logs(keep: int = 500) -> int:
+    """保留最近 keep 条,删除更旧的。返回删除行数。"""
+    conn = get_db()
+    try:
+        keep_n = max(50, int(keep or 500))
+        row = conn.execute(
+            "SELECT id FROM wheel_push_log ORDER BY id DESC LIMIT 1 OFFSET ?",
+            (keep_n - 1,),
+        ).fetchone()
+        if not row:
+            return 0
+        cutoff = row["id"]
+        cur = conn.execute("DELETE FROM wheel_push_log WHERE id < ?", (cutoff,))
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
 # ── 资金占用 ──────────────────────────────────────────────────────────────────
 
 def get_capital_usage() -> Dict[str, Any]:

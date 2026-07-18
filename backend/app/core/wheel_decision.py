@@ -809,20 +809,24 @@ def decide_position(
 
 
 def format_alert_line(item: Dict[str, Any]) -> str:
-    """单条 Telegram 告警文案。"""
-    hint = item.get("action_hint") or "关注"
-    side = item.get("side") or ""
-    sym = item.get("symbol") or ""
-    dte = item.get("dte")
-    profit = item.get("profit_pct")
-    code = item.get("action_code") or ""
-    parts = [f"⚠ {sym} {side}", hint]
-    if code and code != ACTION_NONE:
-        parts.append(code)
-    if dte is not None:
-        parts.append(f"DTE{dte}")
-    if profit is not None:
-        parts.append(f"浮盈{profit}%")
-    if item.get("itm"):
-        parts.append("ITM")
-    return " · ".join(parts)
+    """单条 Telegram 告警文案(短模板,委托 alert_engine)。"""
+    try:
+        from app.services.alert_engine import format_position_alert
+        return format_position_alert(item, style="short")
+    except Exception:
+        hint = item.get("action_hint") or "关注"
+        side = item.get("side") or ""
+        sym = item.get("symbol") or ""
+        dte = item.get("dte")
+        profit = item.get("profit_pct")
+        code = item.get("action_code") or ""
+        parts = [f"⚠ {sym} {side}", hint]
+        if code and code != ACTION_NONE:
+            parts.append(code)
+        if dte is not None:
+            parts.append(f"DTE{dte}")
+        if profit is not None:
+            parts.append(f"浮盈{profit}%")
+        if item.get("itm"):
+            parts.append("ITM")
+        return " · ".join(parts)

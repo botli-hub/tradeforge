@@ -27,6 +27,7 @@ DEFAULT_SCAN_CFG: Dict[str, Any] = {
     "top_overall": 20,           # 扫描汇总取前 N
     "chain_cache_ttl_sec": 900,  # 期权链缓存
     "auto_push_minutes": 0,      # 定时扫描推送间隔(分钟),0=关闭
+    "telegram_top_n": 5,         # TG 推送条数
     "premium_pricing": "mid",    # bid | mid — 权利金估价
     "pop_weight": 0.35,          # POP 对分数的加成权重
     "buffer_atr_min": 0.8,       # put 缓冲至少 0.8×ATR 才不惩罚

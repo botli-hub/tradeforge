@@ -88,7 +88,22 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "min_close_notional": 20.0,
         "shallow_itm_pct": 1.5,
         "deep_itm_moneyness_pct": 3.0,
-        "alert_push_minutes": 0,  # 在场体检告警推送间隔,0=关
+        "alert_push_minutes": 0,  # 在场体检告警轮询间隔(分钟),0=关;事件变化才真推
+    },
+    # 推送策略(通知中心);与 wheel_position.notify_mode / alert_push 互补
+    "wheel_alerts": {
+        "position_priority_max": 3,
+        "position_cooldown_hours": 6.0,
+        "position_urgent_cooldown_hours": 2.0,
+        "quiet_hours_start": 22,  # 本地时,含; 与 end 相同=关闭静默
+        "quiet_hours_end": 7,
+        "quiet_hours_allow_urgent": True,
+        "digest_hour": 9,
+        "scan_min_score": 0.0,
+        "scan_min_annualized": 0.0,
+        "scan_dedupe_hours": 12.0,
+        "scan_skip_blocked_puts": True,
+        "scan_only_new": True,
     },
     "wheel_scan": {
         "max_spread_pct": 10.0, "spread_soft_pct": 4.0,
@@ -97,6 +112,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "top_per_symbol": 3, "top_overall": 20,
         "chain_cache_ttl_sec": 900, "symbol_interval_sec": 2,
         "auto_push_minutes": 0,
+        "telegram_top_n": 5,  # TG 开仓机会条数
         "earnings_hard_filter": True,
         "premium_pricing": "mid",
         "pop_weight": 0.35,
