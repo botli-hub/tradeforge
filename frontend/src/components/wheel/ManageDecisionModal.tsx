@@ -35,6 +35,8 @@ type Props = {
   onGoOpps: () => void
   /** 一键记账主建议(跳过填表) */
   onQuickExecute?: () => void
+  /** 复制买回/执行备忘到剪贴板 */
+  onCopyMemo?: () => void
   pickReplaceCandidates: ManageModalPickFn
 }
 
@@ -50,8 +52,10 @@ export default function ManageDecisionModal({
   onRoll,
   onGoOpps,
   onQuickExecute,
+  onCopyMemo,
   pickReplaceCandidates,
 }: Props) {
+  const releaseReady = mc.profit_pct != null && mc.profit_pct >= 50
   const isCall = mc.side === 'CALL'
   const code = (mc.action_code || '').toUpperCase()
   const underwater = mc.profit_pct != null && mc.profit_pct < 0
@@ -131,6 +135,12 @@ export default function ManageDecisionModal({
                 </span>
               )}
               {mc.strike_above_floor && <span className="manage-chip warn">超过愿接价</span>}
+              {releaseReady && (
+                <span className="manage-chip" style={{ background: 'var(--green-dim)', color: 'var(--green)', fontWeight: 700 }}
+                  title="浮盈≥50%,组合年化视角可落袋腾担保">
+                  可腾
+                </span>
+              )}
             </div>
           </div>
           <button type="button" className="btn btn-sm" onClick={onDismiss}>关闭</button>
@@ -164,6 +174,13 @@ export default function ManageDecisionModal({
           {prefer === 'close' && (
             <button type="button" className="btn btn-ghost btn-sm" style={{ width: '100%', marginTop: 6 }}
               onClick={onBuyback}>改价格再登记…</button>
+          )}
+          {onCopyMemo && (prefer === 'close' || prefer === 'roll' || releaseReady) && (
+            <button type="button" className="btn btn-secondary btn-sm" style={{ width: '100%', marginTop: 6 }}
+              onClick={onCopyMemo}
+              title="复制合约/方向/限价到剪贴板,去富途下单">
+              复制执行备忘
+            </button>
           )}
         </div>
 

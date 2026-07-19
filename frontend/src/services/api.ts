@@ -1742,7 +1742,22 @@ export type WheelTodayBoard = {
     portfolio_ann_proxy?: number | null
     ge50_ann_proxy?: number | null
     open_missed_50_n?: number
+    total_freed_est?: number
     insight?: string
+    target_pct?: number
+  } | null
+  capital_release?: {
+    n: number
+    items?: Array<{
+      symbol?: string
+      side?: string
+      profit_pct?: number
+      freed_capital_est?: number
+      cycle_id?: string
+      release_badge?: string
+    }>
+    total_freed_est?: number
+    hint?: string
   } | null
 }
 

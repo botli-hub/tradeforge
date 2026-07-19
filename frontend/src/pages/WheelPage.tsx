@@ -19,8 +19,9 @@ import WheelOptimizePanel from '../components/WheelOptimizePanel'
 import {
   addPendingReg, annPerDelta, buildFutuOrderMemo, computeOpsMetrics, contractCodeWarning, copyText,
   dailyRentPer10k, dteBucket, DTE_BUCKET_META, estimateAnnualized, evaluateTradeability, explainOpenOpp,
-  fmtRelativeTime, getPortfolioBudget, getPortfolioBudgetSource, getRiskTier, isOnboardDone, loadPendingQueue,
-  normalizeContractCode, removePendingReg, resolveOppSellPrice, resolveTradeTier, savePendingQueue, scanFailureHint,
+  fmtRelativeTime, getPortfolioBudget, getPortfolioBudgetSource, getRiskTier, isOnboardDone, isReleaseCandidate,
+  loadPendingQueue, manageToBuyMemoInput, normalizeContractCode, oppToSellMemoInput, removePendingReg,
+  resolveOppSellPrice, resolveTradeTier, savePendingQueue, scanFailureHint,
   setOnboardDone, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
   subscribePortfolioBudget, syncPortfolioBudgetFromConfig,
   type DteBucket, type PendingRegItem, type RiskTier, type TradeTier,
@@ -1945,10 +1946,50 @@ export default function WheelPage() {
     symbol: string; side: 'PUT' | 'CALL'; action: 'SELL' | 'BUY'
     contract_code?: string; strike?: number | null; expiry?: string | null
     qty?: number; price?: number | null; note?: string
-    price_kind?: 'bid' | 'premium' | 'trigger' | 'none'
+    price_kind?: 'bid' | 'ask' | 'premium' | 'trigger' | 'none'
+    limit_price?: number | null
   }) {
     const ok = await copyText(buildFutuOrderMemo(p))
-    flash(ok ? '已复制富途下单备忘' : '复制失败,请手动抄写', ok ? 'success' : 'error')
+    flash(ok ? '已复制执行备忘(可贴富途)' : '复制失败,请手动抄写', ok ? 'success' : 'error')
+  }
+
+  async function copyOppExecMemo(row: OppRow) {
+    await copyOrderMemo(oppToSellMemoInput({
+      symbol: row.symbol,
+      side: row.side,
+      contract_code: row.contract_code,
+      strike: row.strike,
+      expiry: row.expiry,
+      bid: row.bid,
+      suggest_qty: (row as { suggest_qty?: number }).suggest_qty,
+      annualized: row.annualized,
+      score: row.score,
+      action_hint: row.action_hint || row.headline,
+    }))
+  }
+
+  async function copyManageExecMemo(item: WheelOpenPositionItem) {
+    await copyOrderMemo(manageToBuyMemoInput(item))
+  }
+
+  /** 指派后一键找 CC:带成本基础约束提示 */
+  function findCallAfterAssign(p: {
+    symbol: string
+    cycle_id?: string
+    cost_basis?: number | null
+    min_call_strike?: number | null
+    cc_contracts?: number | null
+  }) {
+    const minK = p.min_call_strike ?? p.cost_basis
+    flash(
+      minK != null
+        ? `${p.symbol} 找 Call · strike≥$${Number(minK).toFixed(2)}` +
+          (p.cc_contracts ? ` · 约${p.cc_contracts}张` : '')
+        : `${p.symbol} 找 Covered Call…`,
+      'info',
+    )
+    setTab('home')
+    handleSuggest(p.symbol, 'call', p.cycle_id)
   }
 
   function oppMemoFields(row: OppRow): {
@@ -2322,7 +2363,7 @@ export default function WheelPage() {
                   {todayBoard.exit_efficiency.ge50_ann_proxy != null
                     ? ` · ≥50%离场桶 ${todayBoard.exit_efficiency.ge50_ann_proxy}%` : ''}
                   {(todayBoard.exit_efficiency.open_missed_50_n || 0) > 0
-                    ? ` · ${todayBoard.exit_efficiency.open_missed_50_n} 腿已≥50%可腾仓` : ''}
+                    ? ` · ${todayBoard.exit_efficiency.open_missed_50_n} 腿可腾` : ''}
                 </div>
               )}
             </div>
@@ -2460,13 +2501,62 @@ export default function WheelPage() {
             )}
             {(todayBoard?.post_assign?.length || 0) > 0 && (
               <div className="banner info" style={{ marginBottom: 10 }}>
-                <b>指派后待挂 CC</b>
-                {(todayBoard!.post_assign || []).slice(0, 3).map((p: any) => (
-                  <div key={String(p.cycle_id)} style={{ marginTop: 4 }}>
-                    {p.symbol} {p.shares}股
-                    {p.cost_basis != null ? ` · CB≈$${p.cost_basis}` : ''}
-                    {p.uncovered_days != null ? ` · 裸奔${p.uncovered_days}天` : ''}
-                    {' · '}{p.next_step_hint || '找 Call'}
+                <b>指派后 · 待挂 CC（优先处理）</b>
+                {(todayBoard!.post_assign || []).slice(0, 4).map((p: any) => (
+                  <div key={String(p.cycle_id)} style={{
+                    marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8,
+                    alignItems: 'center', justifyContent: 'space-between',
+                  }}>
+                    <div style={{ fontSize: 13 }}>
+                      <b>{p.symbol}</b> {p.shares}股
+                      {p.cost_basis != null ? ` · CB≈$${Number(p.cost_basis).toFixed(2)}` : ''}
+                      {p.min_call_strike != null ? ` · Call strike≥$${Number(p.min_call_strike).toFixed(2)}` : ''}
+                      {p.uncovered_days != null ? ` · 裸奔${p.uncovered_days}天` : ''}
+                      {p.cc_contracts != null && p.cc_contracts > 0 ? ` · ~${p.cc_contracts}张` : ''}
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {p.cc_contracts >= 1 && (
+                        <button type="button" className="btn btn-primary btn-sm"
+                          disabled={suggestLoading}
+                          onClick={() => findCallAfterAssign({
+                            symbol: p.symbol,
+                            cycle_id: p.cycle_id,
+                            cost_basis: p.cost_basis,
+                            min_call_strike: p.min_call_strike,
+                            cc_contracts: p.cc_contracts,
+                          })}>
+                          找 Call
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* 可腾仓队列 */}
+            {((todayBoard as any)?.capital_release?.n || 0) > 0 && (
+              <div className="banner warn" style={{ marginBottom: 10 }}>
+                <b>可腾 · 浮盈已达标</b>
+                <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.85 }}>
+                  {(todayBoard as any).capital_release.hint}
+                </span>
+                {((todayBoard as any).capital_release.items || []).slice(0, 4).map((it: any) => (
+                  <div key={String(it.cycle_id || it.symbol)} style={{
+                    marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+                  }}>
+                    <Badge color="green">可腾</Badge>
+                    <span style={{ fontSize: 13 }}>
+                      {it.symbol} {it.side} 浮盈{it.profit_pct}%
+                      {it.freed_capital_est != null ? ` · 约释放$${fmt(it.freed_capital_est, 0)}` : ''}
+                    </span>
+                    <button type="button" className="btn btn-sm btn-secondary"
+                      onClick={() => {
+                        const check = Object.values(openChecks).find(c => c.cycle_id === it.cycle_id)
+                        if (check) setManageCompare(check)
+                        else flash('请先刷新体检', 'info')
+                      }}>
+                      决策
+                    </button>
                   </div>
                 ))}
               </div>
@@ -2489,6 +2579,9 @@ export default function WheelPage() {
                             <Badge color={m.categories.includes('CLOSE') ? 'green' : 'orange'}>
                               {m.tags[0] || '该管'}
                             </Badge>
+                            {isReleaseCandidate(m.profit_pct) && (
+                              <Badge color="green" title="浮盈≥50%可腾仓">可腾</Badge>
+                            )}
                             {m.symbol} {m.side}
                             {m.strike != null && <span style={{ opacity: 0.7 }}>${m.strike}</span>}
                           </div>
@@ -2504,6 +2597,10 @@ export default function WheelPage() {
                               {(m.action_code === 'ROLL' || m.action_code === 'ROLL_ADJUST' || m.action_code === 'PREPARE_ASSIGN')
                                 ? '看 Roll' : '处理'}
                             </button>
+                          )}
+                          {m.kind === 'MANAGE' && m.check && (
+                            <button type="button" className="btn btn-ghost btn-sm"
+                              onClick={() => copyManageExecMemo(m.check!)}>备忘</button>
                           )}
                         </div>
                       </div>
@@ -2555,6 +2652,8 @@ export default function WheelPage() {
                           </div>
                         </div>
                         <div className="opp-row-actions">
+                          <button type="button" className="btn btn-secondary btn-sm"
+                            onClick={() => copyOppExecMemo(openPick)}>备忘</button>
                           <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(openPick)}>登记</button>
                         </div>
                       </div>
@@ -3603,6 +3702,9 @@ export default function WheelPage() {
                           {row.is_top_pick && row.kind === 'OPEN' && (
                             <Badge color="orange" title="同标的同方向当前最优">主推</Badge>
                           )}
+                          {row.kind === 'MANAGE' && isReleaseCandidate(row.profit_pct) && (
+                            <Badge color="green" title="浮盈≥50%,可腾仓">可腾</Badge>
+                          )}
                           <b>{row.symbol}</b>
                           <span style={{ fontWeight: 600, color: row.side === 'PUT' ? 'var(--green)' : 'var(--purple, #a78bfa)' }}>
                             {row.side === 'PUT' ? 'Put' : row.side === 'CALL' ? 'Call' : ''}
@@ -3645,6 +3747,11 @@ export default function WheelPage() {
                                 {open ? '收起' : '为何'}
                               </button>
                               <button type="button" className="btn btn-secondary btn-sm"
+                                title="复制执行备忘→富途下单"
+                                onClick={() => copyOppExecMemo(row)}>
+                                备忘
+                              </button>
+                              <button type="button" className="btn btn-secondary btn-sm"
                                 disabled={suggestLoading}
                                 title="拉期权链并补实时买价"
                                 onClick={() => handleSuggest(
@@ -3661,8 +3768,15 @@ export default function WheelPage() {
                                 onClick={() => openOppRegister(row)}>登记</button>
                             </>
                           ) : (
-                            <button type="button" className="btn btn-primary btn-sm"
-                              onClick={() => openOppRegister(row)}>{cta}</button>
+                            <>
+                              {row.check && (
+                                <button type="button" className="btn btn-secondary btn-sm"
+                                  title="复制买回备忘"
+                                  onClick={() => copyManageExecMemo(row.check!)}>备忘</button>
+                              )}
+                              <button type="button" className="btn btn-primary btn-sm"
+                                onClick={() => openOppRegister(row)}>{cta}</button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -4426,6 +4540,7 @@ export default function WheelPage() {
           executeLoading={executeLoading}
           pickReplaceCandidates={pickReplaceCandidates}
           onDismiss={() => setManageCompare(null)}
+          onCopyMemo={() => copyManageExecMemo(manageCompare)}
           onQuickExecute={async () => {
             const mc = manageCompare
             setExecuteLoading(true)
@@ -4436,8 +4551,19 @@ export default function WheelPage() {
                 item: mc as unknown as Record<string, unknown>,
                 apply: true,
               })
-              if (r.post_assign) {
-                flash(`已记账 · 下一步: ${(r.post_assign as any).next_step_hint || '找 CC'}`, 'success')
+              const pa = r.post_assign as any
+              if (pa) {
+                flash(`已记账 · ${(pa.next_step_hint || '下一步找 CC')}`, 'success')
+                if (pa.suggest_side === 'call' && pa.symbol) {
+                  // 指派后自动打开找 Call
+                  queueMicrotask(() => findCallAfterAssign({
+                    symbol: pa.symbol,
+                    cycle_id: pa.cycle_id,
+                    cost_basis: pa.cost_basis,
+                    min_call_strike: pa.min_call_strike,
+                    cc_contracts: pa.cc_contracts,
+                  }))
+                }
               } else {
                 flash('已一键记账', 'success')
               }

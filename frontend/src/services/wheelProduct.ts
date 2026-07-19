@@ -188,7 +188,15 @@ export function contractCodeWarning(code?: string | null): string | null {
   return null
 }
 
-/** 富途下单备忘(复制到剪贴板) */
+/** 浮盈是否达「可腾仓」阈值(组合年化优先默认 50%) */
+export function isReleaseCandidate(
+  profitPct?: number | null,
+  targetPct = 50,
+): boolean {
+  return profitPct != null && Number.isFinite(profitPct) && profitPct >= targetPct
+}
+
+/** 富途下单备忘(复制到剪贴板) — 首行可快速粘贴核对 */
 export function buildFutuOrderMemo(p: {
   symbol: string
   side: 'PUT' | 'CALL'
@@ -197,38 +205,126 @@ export function buildFutuOrderMemo(p: {
   strike?: number | null
   expiry?: string | null
   qty?: number
-  /** 卖出参考：优先真实 bid，勿把触线 last 当卖价 */
+  /** 卖出参考：优先真实 bid；买回平仓用 ask */
   price?: number | null
-  /** bid=实时买价；trigger=仅有触线价(非卖价)；none=无 */
-  price_kind?: 'bid' | 'premium' | 'trigger' | 'none'
+  /** bid=卖出参考买价；ask=买回价；premium/trigger/none */
+  price_kind?: 'bid' | 'ask' | 'premium' | 'trigger' | 'none'
   note?: string
+  /** 建议限价(可与 price 相同) */
+  limit_price?: number | null
 }): string {
   const code = normalizeContractCode(p.contract_code, p.symbol) || p.contract_code || '(无代码)'
   const dir = p.action === 'SELL'
     ? (p.side === 'PUT' ? '卖出 Put(开仓)' : '卖出 Call(开仓)')
     : (p.side === 'PUT' ? '买入 Put(平仓)' : '买入 Call(平仓)')
   const kind = p.price_kind || (p.price != null ? 'bid' : 'none')
-  let priceLine = '参考卖价: (无实时买价，限价自定)'
+  const lim = p.limit_price ?? p.price
+  let priceLine = '参考价: (无实时报价，限价自定)'
   if (p.price != null && kind === 'bid') {
-    priceLine = `参考卖价(bid): ${p.price}`
+    priceLine = `参考卖价(bid): ${p.price} → 建议限价 ≤ bid 或略低以求成交`
+  } else if (p.price != null && kind === 'ask') {
+    priceLine = `参考买回(ask): ${p.price} → 建议限价 ≥ ask 或按需`
   } else if (p.price != null && kind === 'premium') {
     priceLine = `参考权利金: ${p.price}`
   } else if (p.price != null && kind === 'trigger') {
     priceLine = `触线价: ${p.price} (非买价，勿直接当卖出限价)`
   }
+  // 首行紧凑: 方便 IM/便签快速扫
+  const compact = [
+    p.action === 'SELL' ? 'SELL' : 'BUY',
+    p.side,
+    p.symbol,
+    code !== '(无代码)' ? code : '',
+    p.strike != null ? `K${p.strike}` : '',
+    p.expiry ? String(p.expiry).slice(0, 10) : '',
+    `x${p.qty ?? 1}`,
+    lim != null ? `@${lim}` : '@?',
+  ].filter(Boolean).join(' ')
+
   const lines = [
-    '【TradeForge 下单备忘】',
-    `标的: ${p.symbol}`,
+    '【TradeForge 执行备忘】',
+    compact,
     `方向: ${dir}`,
     `合约: ${code}`,
     p.strike != null ? `Strike: ${p.strike}` : '',
     p.expiry ? `到期: ${String(p.expiry).slice(0, 10)}` : '',
     `数量: ${p.qty ?? 1} 张`,
     priceLine,
+    lim != null && kind !== 'trigger' ? `建议限价: ${lim}` : '',
     p.note ? `备注: ${p.note}` : '',
-    '—— 在富途成交后回到 TradeForge「待登记」一键登记',
+    '① 富途按上单下单  ② 成交后回 TradeForge 待登记/决策弹窗记账',
   ].filter(Boolean)
   return lines.join('\n')
+}
+
+/** 从机会行构造开仓备忘参数 */
+export function oppToSellMemoInput(row: {
+  symbol: string
+  side?: string | null
+  contract_code?: string | null
+  strike?: number | null
+  expiry?: string | null
+  bid?: number | null
+  qty?: number | null
+  suggest_qty?: number | null
+  annualized?: number | null
+  score?: number | null
+  action_hint?: string | null
+}): Parameters<typeof buildFutuOrderMemo>[0] {
+  const side = (row.side || 'PUT').toUpperCase() === 'CALL' ? 'CALL' : 'PUT'
+  const px = resolveOppSellPrice({ bid: row.bid, premium_used: null, trigger_price: null })
+  const qty = Math.max(1, Number(row.suggest_qty ?? row.qty ?? 1) || 1)
+  const noteParts = [
+    row.score != null ? `分${row.score}` : '',
+    row.annualized != null ? `年化${row.annualized}%` : '',
+    row.action_hint || '',
+  ].filter(Boolean)
+  return {
+    symbol: row.symbol,
+    side,
+    action: 'SELL',
+    contract_code: row.contract_code || undefined,
+    strike: row.strike,
+    expiry: row.expiry ? String(row.expiry).slice(0, 10) : undefined,
+    qty,
+    price: px.sell,
+    price_kind: px.kind === 'bid' ? 'bid' : px.kind === 'premium' ? 'premium' : 'none',
+    limit_price: px.sell,
+    note: noteParts.join(' · ') || undefined,
+  }
+}
+
+/** 从持仓体检构造买回备忘 */
+export function manageToBuyMemoInput(item: {
+  symbol: string
+  side?: string | null
+  contract_code?: string | null
+  strike?: number | null
+  expiry?: string | null
+  qty?: number | null
+  buyback_ask?: number | null
+  current_price?: number | null
+  action_hint?: string | null
+  profit_pct?: number | null
+}): Parameters<typeof buildFutuOrderMemo>[0] {
+  const side = (item.side || 'PUT').toUpperCase() === 'CALL' ? 'CALL' : 'PUT'
+  const ask = item.buyback_ask ?? item.current_price ?? null
+  return {
+    symbol: item.symbol,
+    side,
+    action: 'BUY',
+    contract_code: item.contract_code || undefined,
+    strike: item.strike,
+    expiry: item.expiry ? String(item.expiry).slice(0, 10) : undefined,
+    qty: Math.max(1, Number(item.qty ?? 1) || 1),
+    price: ask,
+    price_kind: ask != null ? 'ask' : 'none',
+    limit_price: ask,
+    note: [
+      item.action_hint,
+      item.profit_pct != null ? `浮盈${item.profit_pct}%` : '',
+    ].filter(Boolean).join(' · ') || undefined,
+  }
 }
 
 /** 开仓机会：真实可卖参考价 vs 触线价分离 */

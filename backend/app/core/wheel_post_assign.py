@@ -55,10 +55,17 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
         "cost_basis": cb,
         "cc_contracts": contracts,
         "next_step": "SELL_CALL" if contracts >= 1 else "HOLD_OR_BUY_MORE",
-        "next_step_hint": "去机会页找 Call / 或标的页「建议 Call」" if contracts >= 1 else "持股不足一张",
+        "next_step_hint": (
+            f"找 Call: strike≥{anchors.get('suggest_strike_floor') or cb or '成本'} · 约{contracts}张"
+            if contracts >= 1
+            else "持股不足一张"
+        ),
         "call_anchors": anchors,
         "notes": notes,
         "priority": 2 if contracts >= 1 else 5,
+        # 前端一键找 CC 用
+        "suggest_side": "call" if contracts >= 1 else None,
+        "min_call_strike": anchors.get("suggest_strike_floor") or cb,
     }
 
 

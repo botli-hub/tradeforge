@@ -305,16 +305,26 @@ def build_today(
         pass
 
     exit_brief = None
+    capital_release = None
     try:
         from app.core.wheel_attribution import exit_efficiency_stats, open_missed_50_count
         es = exit_efficiency_stats()
-        missed = open_missed_50_count(items)
+        # 止盈目标随 IV 档
+        tgt = 50.0
+        try:
+            tgt = float((cfg.get("wheel_position") or {}).get("profit_target_pct") or 50)
+        except (TypeError, ValueError):
+            pass
+        missed = open_missed_50_count(items, target_pct=tgt)
+        capital_release = missed
         exit_brief = {
             "n_legs": es.get("n_legs"),
             "portfolio_ann_proxy": es.get("portfolio_ann_proxy"),
             "ge50_ann_proxy": (es.get("buckets") or {}).get("ge50", {}).get("ann_proxy"),
             "open_missed_50_n": missed.get("n"),
+            "total_freed_est": missed.get("total_freed_est"),
             "insight": es.get("insight"),
+            "target_pct": tgt,
         }
     except Exception:
         pass
@@ -342,11 +352,12 @@ def build_today(
             "source": (iv_regime or {}).get("source"),
         } if iv_regime else None,
         "exit_efficiency": exit_brief,
+        "capital_release": capital_release,
         "opp_summary": {
             "actionable": opps_summary.get("actionable_count") or opps_summary.get("actionable"),
             "put_blocked": capital.get("portfolio_put_blocked"),
         },
-        "headline": _headline(must, post_q, primary, capital, stale, iv_regime),
+        "headline": _headline(must, post_q, primary, capital, stale, iv_regime, capital_release),
     }
 
 
@@ -367,7 +378,7 @@ def _is_executable_opp(p: Dict[str, Any], summary: Dict[str, Any]) -> bool:
     return True
 
 
-def _headline(must, post_q, primary, capital, stale, iv_regime=None) -> str:
+def _headline(must, post_q, primary, capital, stale, iv_regime=None, capital_release=None) -> str:
     parts = []
     if stale:
         parts.append("行情缓存")
@@ -377,6 +388,9 @@ def _headline(must, post_q, primary, capital, stale, iv_regime=None) -> str:
         parts.append(f"{len(must)}项必管")
     if post_q:
         parts.append(f"{len(post_q)}笔待挂CC")
+    cr_n = (capital_release or {}).get("n") or 0
+    if cr_n:
+        parts.append(f"{cr_n}腿可腾")
     exec_n = sum(1 for p in primary if p.get("executable"))
     if exec_n:
         parts.append(f"{exec_n}笔可开")

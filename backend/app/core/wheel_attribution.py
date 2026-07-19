@@ -355,29 +355,69 @@ def exit_efficiency_stats(limit_trades: int = 2000) -> Dict[str, Any]:
     }
 
 
-def open_missed_50_count(items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """在场腿:浮盈已≥50% 仍未平 → 组合周转视角的「可腾未腾」。"""
+def open_missed_50_count(
+    items: List[Dict[str, Any]],
+    target_pct: float = 50.0,
+) -> Dict[str, Any]:
+    """在场腿:浮盈已≥target 仍未平 → 组合周转视角的「可腾未腾」。
+
+    按释放担保估算排序(Put 用 freed_capital_est / strike 名义)。
+    """
     hit = []
     for it in items or []:
         pp = it.get("profit_pct")
         if pp is None:
             continue
         try:
-            if float(pp) >= 50:
-                hit.append({
-                    "symbol": it.get("symbol"),
-                    "side": it.get("side"),
-                    "profit_pct": pp,
-                    "dte": it.get("dte"),
-                    "action_code": it.get("action_code"),
-                    "cycle_id": it.get("cycle_id"),
-                })
+            if float(pp) < float(target_pct):
+                continue
         except (TypeError, ValueError):
             continue
+        freed = it.get("freed_capital_est")
+        if freed is None and (it.get("side") or "").upper() == "PUT":
+            try:
+                strike = float(it.get("strike") or 0)
+                qty = float(it.get("qty") or 1)
+                size = float(it.get("contract_size") or 100)
+                freed = strike * qty * size if strike > 0 else 0
+            except (TypeError, ValueError):
+                freed = 0
+        try:
+            freed_f = float(freed or 0)
+        except (TypeError, ValueError):
+            freed_f = 0.0
+        hit.append({
+            "symbol": it.get("symbol"),
+            "side": it.get("side"),
+            "profit_pct": pp,
+            "dte": it.get("dte"),
+            "action_code": it.get("action_code"),
+            "action_hint": it.get("action_hint"),
+            "cycle_id": it.get("cycle_id"),
+            "contract_code": it.get("contract_code"),
+            "strike": it.get("strike"),
+            "freed_capital_est": round(freed_f, 2) if freed_f else None,
+            "release_badge": "可腾",
+        })
+    hit.sort(
+        key=lambda x: (
+            -(x.get("freed_capital_est") or 0),
+            -(float(x.get("profit_pct") or 0)),
+        ),
+    )
+    total_free = sum(x.get("freed_capital_est") or 0 for x in hit)
     return {
         "n": len(hit),
         "items": hit,
-        "hint": "浮盈≥50%仍在场:组合年化视角下优先考虑落袋腾担保" if hit else "无已达标未平腿",
+        "total_freed_est": round(total_free, 2),
+        "target_pct": target_pct,
+        "hint": (
+            f"浮盈≥{target_pct:g}% 仍在场 {len(hit)} 腿"
+            + (f",约可释放担保 ${total_free:,.0f}" if total_free > 0 else "")
+            + ":组合年化视角优先落袋腾仓"
+            if hit
+            else f"无浮盈≥{target_pct:g}% 未平腿"
+        ),
     }
 
 
