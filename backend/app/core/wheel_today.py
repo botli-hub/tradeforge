@@ -297,6 +297,28 @@ def build_today(
         "bp_source": (bp or {}).get("source"),
     }
 
+    iv_regime = None
+    try:
+        from app.core.wheel_iv_regime import resolve_regime
+        iv_regime = resolve_regime(cfg)
+    except Exception:
+        pass
+
+    exit_brief = None
+    try:
+        from app.core.wheel_attribution import exit_efficiency_stats, open_missed_50_count
+        es = exit_efficiency_stats()
+        missed = open_missed_50_count(items)
+        exit_brief = {
+            "n_legs": es.get("n_legs"),
+            "portfolio_ann_proxy": es.get("portfolio_ann_proxy"),
+            "ge50_ann_proxy": (es.get("buckets") or {}).get("ge50", {}).get("ann_proxy"),
+            "open_missed_50_n": missed.get("n"),
+            "insight": es.get("insight"),
+        }
+    except Exception:
+        pass
+
     return {
         "as_of": _now_iso(),
         "session": session,
@@ -311,11 +333,20 @@ def build_today(
         "concentration": conc,
         "capital": capital,
         "portfolio_context": pf,
+        "iv_regime": {
+            "regime": (iv_regime or {}).get("regime"),
+            "label": (iv_regime or {}).get("label"),
+            "hint": (iv_regime or {}).get("hint"),
+            "median_ivr": (iv_regime or {}).get("median_ivr"),
+            "mode": (iv_regime or {}).get("mode"),
+            "source": (iv_regime or {}).get("source"),
+        } if iv_regime else None,
+        "exit_efficiency": exit_brief,
         "opp_summary": {
             "actionable": opps_summary.get("actionable_count") or opps_summary.get("actionable"),
             "put_blocked": capital.get("portfolio_put_blocked"),
         },
-        "headline": _headline(must, post_q, primary, capital, stale),
+        "headline": _headline(must, post_q, primary, capital, stale, iv_regime),
     }
 
 
@@ -336,10 +367,12 @@ def _is_executable_opp(p: Dict[str, Any], summary: Dict[str, Any]) -> bool:
     return True
 
 
-def _headline(must, post_q, primary, capital, stale) -> str:
+def _headline(must, post_q, primary, capital, stale, iv_regime=None) -> str:
     parts = []
     if stale:
         parts.append("行情缓存")
+    if iv_regime and iv_regime.get("label"):
+        parts.append(str(iv_regime.get("label")))
     if must:
         parts.append(f"{len(must)}项必管")
     if post_q:

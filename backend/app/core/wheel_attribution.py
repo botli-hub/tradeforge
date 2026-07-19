@@ -196,6 +196,191 @@ def recent_suggestion_logs(limit: int = 10) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def _pair_open_close(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """将同 cycle 的 SELL_* 与后续 BUY_*_CLOSE 配对为信用腿。"""
+    by_cycle: Dict[str, List[Dict[str, Any]]] = {}
+    for t in trades:
+        cid = t.get("cycle_id")
+        if not cid:
+            continue
+        by_cycle.setdefault(cid, []).append(t)
+
+    legs: List[Dict[str, Any]] = []
+    for cid, ts in by_cycle.items():
+        ts = sorted(ts, key=lambda x: str(x.get("traded_at") or ""))
+        i = 0
+        while i < len(ts):
+            t = ts[i]
+            tt = t.get("trade_type")
+            if tt not in ("SELL_PUT", "SELL_CALL"):
+                i += 1
+                continue
+            # 找下一笔同向平仓
+            close_tt = "BUY_PUT_CLOSE" if tt == "SELL_PUT" else "BUY_CALL_CLOSE"
+            close = None
+            for j in range(i + 1, len(ts)):
+                if ts[j].get("trade_type") == close_tt:
+                    close = ts[j]
+                    break
+                # 若中间又开了新卖,停止
+                if ts[j].get("trade_type") in ("SELL_PUT", "SELL_CALL", "EXPIRE", "ASSIGNED", "CALLED_AWAY"):
+                    break
+            if close is None:
+                i += 1
+                continue
+            p0 = float(t.get("price") or 0)
+            p1 = float(close.get("price") or 0)
+            qty = float(t.get("qty") or close.get("qty") or 1)
+            size = float(t.get("contract_size") or close.get("contract_size") or 100)
+            strike = float(t.get("strike") or close.get("strike") or 0)
+            fee = float(t.get("fee") or 0) + float(close.get("fee") or 0)
+            if p0 <= 0:
+                i += 1
+                continue
+            profit_pct = round((p0 - p1) / p0 * 100, 1)
+            net = (p0 - p1) * qty * size - fee
+            cap = strike * qty * size if strike > 0 else max(p0 * qty * size * 20, 1)  # fallback
+            d0 = _parse_day(t.get("traded_at"))
+            d1 = _parse_day(close.get("traded_at"))
+            days = max((d1 - d0).days, 1) if d0 and d1 else None
+            ann = None
+            if days and cap > 0:
+                ann = round(net / cap * 365 / days * 100, 2)
+            # 占用美元·天
+            cap_days = (cap * days) if days else None
+            legs.append({
+                "cycle_id": cid,
+                "symbol": t.get("symbol"),
+                "side": "PUT" if tt == "SELL_PUT" else "CALL",
+                "strike": strike,
+                "open_price": p0,
+                "close_price": p1,
+                "profit_pct": profit_pct,
+                "net_premium": round(net, 2),
+                "capital": round(cap, 2),
+                "days": days,
+                "annualized_on_capital": ann,
+                "capital_days": round(cap_days, 2) if cap_days is not None else None,
+                "opened_at": t.get("traded_at"),
+                "closed_at": close.get("traded_at"),
+                "exit_bucket": (
+                    "ge50" if profit_pct >= 50
+                    else "ge40" if profit_pct >= 40
+                    else "ge30" if profit_pct >= 30
+                    else "small_win" if profit_pct > 0
+                    else "loss"
+                ),
+            })
+            i += 1
+    return legs
+
+
+def exit_efficiency_stats(limit_trades: int = 2000) -> Dict[str, Any]:
+    """止盈效率:关注组合年化代理 = Σ净权利金 / Σ(占用×天数) × 365。
+
+    用台账已平仓信用腿(买回),按浮盈分桶对比资金时间效率。
+    样本少时只展示数字,不宣称最优。
+    """
+    from app.data import wheel_repository as repo
+
+    trades = repo.get_trades(limit=limit_trades)
+    legs = _pair_open_close(trades)
+    if not legs:
+        return {
+            "ok": True,
+            "n_legs": 0,
+            "message": "尚无足够买回腿样本;继续登记 SELL+BUY_CLOSE 后可统计",
+            "portfolio_ann_proxy": None,
+            "buckets": {},
+            "legs": [],
+            "insight": "组合年化优先:更关心 $/占用·天,而非单笔绝对美元",
+        }
+
+    def _agg(subset: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not subset:
+            return {"n": 0, "net_sum": 0, "capital_days_sum": 0, "ann_proxy": None,
+                    "avg_profit_pct": None, "avg_days": None, "avg_leg_ann": None}
+        net_sum = sum(x["net_premium"] for x in subset)
+        cd = [x["capital_days"] for x in subset if x.get("capital_days")]
+        cd_sum = sum(cd) if cd else 0
+        ann_proxy = round(net_sum / cd_sum * 365 * 100, 2) if cd_sum > 0 else None
+        anns = [x["annualized_on_capital"] for x in subset if x.get("annualized_on_capital") is not None]
+        days = [x["days"] for x in subset if x.get("days")]
+        pps = [x["profit_pct"] for x in subset]
+        return {
+            "n": len(subset),
+            "net_sum": round(net_sum, 2),
+            "capital_days_sum": round(cd_sum, 2),
+            "ann_proxy": ann_proxy,
+            "avg_profit_pct": round(sum(pps) / len(pps), 1) if pps else None,
+            "avg_days": round(sum(days) / len(days), 1) if days else None,
+            "avg_leg_ann": round(sum(anns) / len(anns), 1) if anns else None,
+        }
+
+    buckets = {
+        "ge50": _agg([x for x in legs if x["exit_bucket"] == "ge50"]),
+        "ge40": _agg([x for x in legs if x["exit_bucket"] in ("ge50", "ge40")]),
+        "below50_win": _agg([x for x in legs if 0 < x["profit_pct"] < 50]),
+        "loss": _agg([x for x in legs if x["profit_pct"] <= 0]),
+        "all": _agg(legs),
+    }
+
+    # 反事实叙事:若只保留 ge50 桶的资金效率 vs 全部
+    all_ann = buckets["all"].get("ann_proxy")
+    ge50_ann = buckets["ge50"].get("ann_proxy")
+    insight_parts = [
+        "指标=组合年化代理 Σ净权利金/Σ(占用×天)×365,越大越好",
+    ]
+    if ge50_ann is not None and all_ann is not None:
+        if ge50_ann > all_ann:
+            insight_parts.append(
+                f"≥50%离场桶年化代理 {ge50_ann}% > 全样本 {all_ann}%,支持「达标周转」"
+            )
+        else:
+            insight_parts.append(
+                f"≥50%桶 {ge50_ann}% vs 全样本 {all_ann}%:样本或路径差异,勿过拟合"
+            )
+    if buckets["ge50"]["n"] < 5:
+        insight_parts.append(f"≥50%样本仅 {buckets['ge50']['n']} 笔,结论仅供参考")
+
+    # 在场已达 50% 未平 — 机会成本提示(需外部注入,此处只返回结构)
+    return {
+        "ok": True,
+        "n_legs": len(legs),
+        "portfolio_ann_proxy": all_ann,
+        "buckets": buckets,
+        "legs": legs[:50],
+        "insight": " · ".join(insight_parts),
+        "focus": "portfolio_annualized",
+    }
+
+
+def open_missed_50_count(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """在场腿:浮盈已≥50% 仍未平 → 组合周转视角的「可腾未腾」。"""
+    hit = []
+    for it in items or []:
+        pp = it.get("profit_pct")
+        if pp is None:
+            continue
+        try:
+            if float(pp) >= 50:
+                hit.append({
+                    "symbol": it.get("symbol"),
+                    "side": it.get("side"),
+                    "profit_pct": pp,
+                    "dte": it.get("dte"),
+                    "action_code": it.get("action_code"),
+                    "cycle_id": it.get("cycle_id"),
+                })
+        except (TypeError, ValueError):
+            continue
+    return {
+        "n": len(hit),
+        "items": hit,
+        "hint": "浮盈≥50%仍在场:组合年化视角下优先考虑落袋腾担保" if hit else "无已达标未平腿",
+    }
+
+
 def suggestion_follow_through(days: int = 7, top_n: int = 5) -> Dict[str, Any]:
     """建议 vs 实操:近 N 天扫描 Top 是否在随后开仓。
 

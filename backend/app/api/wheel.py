@@ -16,9 +16,18 @@ router = APIRouter()
 
 # ── 标的管理 ──────────────────────────────────────────────────────────────────
 
-def _wheel_cfg() -> Dict[str, Any]:
+def _wheel_cfg(apply_iv_regime: bool = True) -> Dict[str, Any]:
+    """Wheel 生效配置;默认叠加自动 IV 环境档。"""
     from app.api.leaps import _load_config
-    return _load_config()
+    cfg = _load_config()
+    if not apply_iv_regime:
+        return cfg
+    try:
+        from app.core.wheel_iv_regime import apply_regime_to_config
+        return apply_regime_to_config(cfg)
+    except Exception as e:
+        logger.warning("iv regime apply failed: %s", e)
+        return cfg
 
 
 @router.get("/targets")
@@ -903,7 +912,12 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         if c["symbol"] not in target_by_symbol:
             tgt = repo.get_target(c["symbol"])
             target_by_symbol[c["symbol"]] = tgt
-            min_ann_by_symbol[c["symbol"]] = float((tgt or {}).get("min_annualized") or 0)
+            base_min = float((tgt or {}).get("min_annualized") or 0)
+            try:
+                from app.core.wheel_iv_regime import effective_min_annualized
+                min_ann_by_symbol[c["symbol"]] = effective_min_annualized(base_min)
+            except Exception:
+                min_ann_by_symbol[c["symbol"]] = base_min
         tgt = target_by_symbol[c["symbol"]]
         floor_px = float((tgt or {}).get("floor_price") or 0) or None
         max_cap = float((tgt or {}).get("max_capital") or 0) or None
@@ -1777,6 +1791,69 @@ def attribution_follow_through(days: int = Query(7, ge=1, le=60)):
     """建议 vs 实操跟进率。"""
     from app.core.wheel_attribution import suggestion_follow_through
     return suggestion_follow_through(days=days)
+
+
+@router.get("/attribution/exit-stats")
+def attribution_exit_stats():
+    """止盈效率:组合年化代理(占用×时间)分桶。"""
+    from app.core.wheel_attribution import exit_efficiency_stats, open_missed_50_count
+    stats = exit_efficiency_stats()
+    # 附带在场已≥50%未平
+    try:
+        from app.api.leaps import _load_config
+        futu = (_load_config().get("futu") or {})
+        data = check_open_positions_core(
+            futu.get("host", "127.0.0.1"), int(futu.get("port") or 11111),
+        )
+        stats["open_missed_50"] = open_missed_50_count(data.get("items") or [])
+    except Exception as e:
+        stats["open_missed_50"] = {"n": 0, "items": [], "hint": f"体检不可用: {e}"}
+    # IV 环境摘要
+    try:
+        from app.core.wheel_iv_regime import resolve_regime
+        stats["iv_regime"] = resolve_regime()
+    except Exception:
+        pass
+    return stats
+
+
+@router.get("/iv-regime")
+def get_iv_regime():
+    """当前 IV 环境档(自动中位 IVR)+叠加参数。"""
+    from app.core.wheel_iv_regime import resolve_regime, apply_regime_to_config
+    info = resolve_regime()
+    cfg = apply_regime_to_config()
+    pos = cfg.get("wheel_position") or {}
+    return {
+        **info,
+        "effective_profit_target_pct": pos.get("profit_target_pct"),
+        "effective_soft_profit_pct": pos.get("soft_profit_pct"),
+        "effective_max_portfolio_pct": (cfg.get("wheel_portfolio") or {}).get("max_portfolio_pct"),
+    }
+
+
+class IvRegimeIn(BaseModel):
+    mode: Optional[str] = None  # auto | manual
+    manual_regime: Optional[str] = None  # low | mid | high
+
+
+@router.put("/iv-regime")
+def put_iv_regime(body: IvRegimeIn):
+    """切换 IV 环境模式(写入设置库 wheel_iv_regime)。"""
+    from app.core.config import deep_merge, get_db_overrides, get_effective_config
+    from app.data.wheel_repository import set_kv
+    import json as _json
+    existing = get_db_overrides()
+    patch: Dict[str, Any] = {"wheel_iv_regime": {}}
+    if body.mode is not None:
+        patch["wheel_iv_regime"]["mode"] = body.mode
+    if body.manual_regime is not None:
+        patch["wheel_iv_regime"]["manual_regime"] = body.manual_regime
+    merged = deep_merge(existing, patch)
+    set_kv("backend_config", _json.dumps(merged, ensure_ascii=False))
+    import app.api.leaps as leaps_mod
+    leaps_mod._config_cache = None
+    return get_iv_regime()
 
 
 @router.get("/admission")

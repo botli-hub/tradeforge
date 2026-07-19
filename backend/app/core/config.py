@@ -165,6 +165,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
             },
         },
     },
+    # IV 环境(自动=启用标的中位 IVR);叠加开仓/止盈阈值,侧重组合年化周转
+    "wheel_iv_regime": {
+        "mode": "auto",  # auto | manual
+        "manual_regime": "mid",
+        "low_enter": 35.0,
+        "low_exit": 40.0,
+        "high_enter": 60.0,
+        "high_exit": 55.0,
+    },
 }
 
 

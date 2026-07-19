@@ -2297,6 +2297,9 @@ export default function WheelPage() {
               </div>
               <div className="sub">
                 档位 {STRATEGY_TEMPLATES[riskTier].label}
+                {todayBoard?.iv_regime?.label
+                  ? ` · IV ${todayBoard.iv_regime.label}${todayBoard.iv_regime.median_ivr != null ? `(中位${todayBoard.iv_regime.median_ivr})` : ''}`
+                  : ''}
                 {putBlocked ? ' · 行权压力高已停新 Put' : ''}
                 {opendOk === false ? ' · OpenD 离线' : ''}
                 {todayBoard?.stale ? ` · 行情缓存${todayBoard.stale_age_minutes != null ? ` ${todayBoard.stale_age_minutes}m` : ''}` : ''}
@@ -2305,6 +2308,21 @@ export default function WheelPage() {
               {todayBoard?.headline && (
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
                   {todayBoard.headline}
+                </div>
+              )}
+              {todayBoard?.iv_regime?.hint && (
+                <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>
+                  {todayBoard.iv_regime.hint}
+                </div>
+              )}
+              {todayBoard?.exit_efficiency && (todayBoard.exit_efficiency.n_legs || 0) > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+                  组合年化代理 {todayBoard.exit_efficiency.portfolio_ann_proxy != null
+                    ? `${todayBoard.exit_efficiency.portfolio_ann_proxy}%` : '—'}
+                  {todayBoard.exit_efficiency.ge50_ann_proxy != null
+                    ? ` · ≥50%离场桶 ${todayBoard.exit_efficiency.ge50_ann_proxy}%` : ''}
+                  {(todayBoard.exit_efficiency.open_missed_50_n || 0) > 0
+                    ? ` · ${todayBoard.exit_efficiency.open_missed_50_n} 腿已≥50%可腾仓` : ''}
                 </div>
               )}
             </div>

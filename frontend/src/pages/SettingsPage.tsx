@@ -366,6 +366,13 @@ function BackendConfigCard({
     } : p)
   }
 
+  function upIvRegime(key: string, value: any) {
+    setCfg(p => p ? {
+      ...p,
+      wheel_iv_regime: { ...(p.wheel_iv_regime || {}), [key]: value },
+    } : p)
+  }
+
   async function save() {
     if (!cfg) return
     setSaving(true)
@@ -648,6 +655,34 @@ function BackendConfigCard({
                 <option value="0">关闭</option>
               </select>
             </div>
+          </div>
+
+          <div className="editor-section">
+            <h4>IV 环境（组合年化优先）</h4>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              自动=启用标的中位 IVR 分档(滞回)。低IV:更严 min 年化、更快止盈、控仓；
+              高IV:略进攻。愿接价 floor 不随环境放松。
+              下方「平仓利润目标」会被环境叠加覆盖生效值。
+            </p>
+            <div className="settings-row">
+              <label>模式</label>
+              <select value={cfg.wheel_iv_regime?.mode || 'auto'}
+                onChange={e => upIvRegime('mode', e.target.value)}>
+                <option value="auto">自动(中位 IVR)</option>
+                <option value="manual">手动</option>
+              </select>
+            </div>
+            {(cfg.wheel_iv_regime?.mode || 'auto') === 'manual' && (
+              <div className="settings-row">
+                <label>手动档位</label>
+                <select value={cfg.wheel_iv_regime?.manual_regime || 'mid'}
+                  onChange={e => upIvRegime('manual_regime', e.target.value)}>
+                  <option value="low">低 IV</option>
+                  <option value="mid">中性</option>
+                  <option value="high">高 IV</option>
+                </select>
+              </div>
+            )}
           </div>
 
           <NotificationCenter

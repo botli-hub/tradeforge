@@ -1019,6 +1019,14 @@ export interface BackendConfig {
     active?: string
     presets?: Record<string, unknown>
   }
+  wheel_iv_regime?: {
+    mode?: 'auto' | 'manual' | string
+    manual_regime?: 'low' | 'mid' | 'high' | string
+    low_enter?: number
+    low_exit?: number
+    high_enter?: number
+    high_exit?: number
+  }
 }
 
 export type WheelPushLogItem = {
@@ -1720,12 +1728,61 @@ export type WheelTodayBoard = {
     buying_power?: number | null
   }
   positions_error?: string | null
+  iv_regime?: {
+    regime?: string
+    label?: string
+    hint?: string
+    median_ivr?: number | null
+    mode?: string
+    source?: string
+  } | null
+  exit_efficiency?: {
+    n_legs?: number
+    portfolio_ann_proxy?: number | null
+    ge50_ann_proxy?: number | null
+    open_missed_50_n?: number
+    insight?: string
+  } | null
 }
 
 export async function getWheelToday(host: string, port: number, refresh = true) {
   return request<WheelTodayBoard>(
     `/api/wheel/today?host=${encodeURIComponent(host)}&port=${port}&refresh=${refresh ? 'true' : 'false'}`,
   )
+}
+
+export async function getWheelIvRegime() {
+  return request<{
+    regime: string
+    label?: string
+    hint?: string
+    median_ivr?: number | null
+    mode?: string
+    source?: string
+    effective_profit_target_pct?: number
+    min_annualized_mult?: number
+  }>('/api/wheel/iv-regime')
+}
+
+export async function setWheelIvRegime(body: {
+  mode?: 'auto' | 'manual' | string
+  manual_regime?: 'low' | 'mid' | 'high' | string
+}) {
+  return request<Record<string, unknown>>('/api/wheel/iv-regime', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function getWheelExitStats() {
+  return request<{
+    n_legs: number
+    portfolio_ann_proxy?: number | null
+    buckets?: Record<string, { n: number; ann_proxy?: number | null; avg_days?: number | null }>
+    insight?: string
+    open_missed_50?: { n: number; hint?: string }
+  }>('/api/wheel/attribution/exit-stats')
 }
 
 export async function executeWheelDraft(body: {
