@@ -8,6 +8,8 @@ export interface AppSettings {
   feeRate: number
   slippage: number
   theme: string
+  /** UI 风格: default=现有交易台 · apple=苹果设计 */
+  uiStyle?: 'default' | 'apple' | string
   language: string
   marketDataSource: AdapterType
   marketHost: string

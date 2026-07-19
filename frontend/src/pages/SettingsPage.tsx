@@ -14,6 +14,7 @@ import {
   saveBackendConfig,
   testWheelAlert,
 } from '../services/api'
+import { setUiStyle } from '../services/uiStyle'
 
 type SettingsTab = 'wheel' | 'research' | 'general'
 
@@ -35,6 +36,9 @@ export default function SettingsPage() {
     setSaving(true)
     const next = saveAppSettings(settings)
     setSettings(next)
+    if (next.uiStyle === 'apple' || next.uiStyle === 'default') {
+      setUiStyle(next.uiStyle)
+    }
     setMessage('前端设置已保存')
     setTimeout(() => setMessage(''), 2000)
     setSaving(false)
@@ -288,13 +292,17 @@ export default function SettingsPage() {
           <div className="editor-section">
             <h4>显示</h4>
             <div className="settings-row">
-              <label>主题</label>
+              <label>界面风格</label>
               <select
-                value={settings.theme}
-                onChange={e => updateField('theme', e.target.value)}
+                value={settings.uiStyle || 'default'}
+                onChange={e => {
+                  const v = e.target.value === 'apple' ? 'apple' : 'default'
+                  updateField('uiStyle', v)
+                  setUiStyle(v)
+                }}
               >
-                <option value="dark">深色</option>
-                <option value="light">浅色</option>
+                <option value="default">默认（现有交易台）</option>
+                <option value="apple">苹果设计</option>
               </select>
             </div>
             <div className="settings-row">
@@ -307,6 +315,9 @@ export default function SettingsPage() {
                 <option value="en">English</option>
               </select>
             </div>
+            <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0 0' }}>
+              也可在页面右上角随时切换风格，选择会保存在本机。
+            </p>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

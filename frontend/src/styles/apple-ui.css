@@ -1,0 +1,395 @@
+/**
+ * Apple 设计语言覆盖层
+ * 激活条件: html[data-ui-style="apple"]
+ * 默认风格不设置该选择器,保持现有 Robinhood 式深色交易台
+ */
+
+html[data-ui-style="apple"] {
+  /* iOS / macOS 浅色系统色 */
+  --bg-primary: #f2f2f7;
+  --bg-card: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-input: #e5e5ea;
+  --bg-secondary: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-float: #ffffff;
+
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #8e8e93;
+  --text: #1d1d1f;
+
+  /* 涨跌用系统绿/红;主按钮用系统蓝(见下方 .btn 覆盖) */
+  --green: #34c759;
+  --green-dim: rgba(52, 199, 89, 0.14);
+  --accent: #007aff;
+  --blue: #007aff;
+  --blue-dim: rgba(0, 122, 255, 0.12);
+  --red: #ff3b30;
+  --red-dim: rgba(255, 59, 48, 0.12);
+  --warning: #ff9f0a;
+  --warning-dim: rgba(255, 159, 10, 0.14);
+  --info: #64d2ff;
+  --info-dim: rgba(100, 210, 255, 0.14);
+  --purple: #bf5af2;
+
+  --border: rgba(60, 60, 67, 0.12);
+  --divider: rgba(60, 60, 67, 0.08);
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-pill: 980px;
+  --shadow-float: 0 8px 32px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.06);
+
+  --positive: #34c759;
+  --negative: #ff3b30;
+
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.01em;
+}
+
+html[data-ui-style="apple"] body,
+html[data-ui-style="apple"] #root {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* ── 导航:毛玻璃 ── */
+html[data-ui-style="apple"] .nav {
+  background: rgba(242, 242, 247, 0.78);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid var(--border);
+  padding: 0 20px;
+}
+
+html[data-ui-style="apple"] .nav-item {
+  color: var(--text-secondary);
+  font-size: 15px;
+  font-weight: 500;
+  padding: 14px 14px;
+  border-bottom-width: 0;
+  border-radius: 8px;
+  margin: 6px 2px;
+}
+
+html[data-ui-style="apple"] .nav-item:hover {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+html[data-ui-style="apple"] .nav-item.active {
+  color: var(--blue);
+  background: var(--blue-dim);
+  border-bottom-color: transparent;
+  font-weight: 600;
+}
+
+/* 模式切换胶囊 */
+html[data-ui-style="apple"] .mode-seg {
+  background: rgba(118, 118, 128, 0.12);
+  border-radius: 9px;
+  padding: 2px;
+  border: none;
+  gap: 0;
+}
+
+html[data-ui-style="apple"] .mode-seg button {
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 6px 12px;
+  min-height: 28px;
+}
+
+html[data-ui-style="apple"] .mode-seg button.active {
+  background: #ffffff;
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+}
+
+/* ── 卡片与表面 ── */
+html[data-ui-style="apple"] .card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: none;
+  border-bottom: none;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+html[data-ui-style="apple"] .surface,
+html[data-ui-style="apple"] .surface-float,
+html[data-ui-style="apple"] .panel {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+html[data-ui-style="apple"] .surface-float {
+  box-shadow: var(--shadow-float);
+}
+
+/* ── 按钮(主操作用系统蓝) ── */
+html[data-ui-style="apple"] .btn,
+html[data-ui-style="apple"] .btn-primary,
+html[data-ui-style="apple"] .btn.btn-primary {
+  background: var(--blue);
+  color: #ffffff;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  box-shadow: none;
+  border: none;
+}
+
+html[data-ui-style="apple"] .btn:hover,
+html[data-ui-style="apple"] .btn-primary:hover {
+  opacity: 0.92;
+  filter: brightness(1.02);
+}
+
+html[data-ui-style="apple"] .btn:focus-visible {
+  outline-color: var(--blue);
+}
+
+html[data-ui-style="apple"] .btn-secondary,
+html[data-ui-style="apple"] .btn.btn-secondary {
+  background: rgba(118, 118, 128, 0.12);
+  color: var(--blue);
+  border: none;
+  font-weight: 600;
+}
+
+html[data-ui-style="apple"] .btn-ghost,
+html[data-ui-style="apple"] .btn.btn-ghost {
+  color: var(--blue);
+  background: transparent;
+}
+
+html[data-ui-style="apple"] .btn-ghost:hover {
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--blue);
+}
+
+html[data-ui-style="apple"] .btn-icon {
+  background: rgba(118, 118, 128, 0.12);
+  border: none;
+  color: var(--text-primary);
+  border-radius: 8px;
+}
+
+/* ── 输入 ── */
+html[data-ui-style="apple"] input,
+html[data-ui-style="apple"] select,
+html[data-ui-style="apple"] textarea {
+  background: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border: none !important;
+  border-radius: 10px !important;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+
+html[data-ui-style="apple"] input:focus,
+html[data-ui-style="apple"] select:focus,
+html[data-ui-style="apple"] textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.28) !important;
+}
+
+/* ── 标签 / badge ── */
+html[data-ui-style="apple"] .tag,
+html[data-ui-style="apple"] .badge,
+html[data-ui-style="apple"] .manage-chip {
+  border-radius: 6px;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+/* ── 底部 Tab ── */
+html[data-ui-style="apple"] .bottom-tabs {
+  background: rgba(242, 242, 247, 0.86);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 0.5px solid var(--border);
+}
+
+html[data-ui-style="apple"] .bottom-tab {
+  color: var(--text-tertiary);
+}
+
+html[data-ui-style="apple"] .bottom-tab.active {
+  color: var(--blue);
+}
+
+/* ── 页面留白 ── */
+html[data-ui-style="apple"] .page,
+html[data-ui-style="apple"] .tab-panel {
+  color: var(--text-primary);
+}
+
+html[data-ui-style="apple"] .app-shell {
+  background: var(--bg-primary);
+  min-height: 100vh;
+}
+
+/* ── 弹层 / 模态 ── */
+html[data-ui-style="apple"] .manage-modal-overlay,
+html[data-ui-style="apple"] .drawer-overlay {
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(4px);
+}
+
+html[data-ui-style="apple"] .manage-modal,
+html[data-ui-style="apple"] .drawer-panel {
+  background: #ffffff !important;
+  color: var(--text-primary);
+  border-radius: 16px;
+  box-shadow: var(--shadow-float);
+  border: none !important;
+}
+
+/* ── 上下文条 / 头条 ── */
+html[data-ui-style="apple"] .context-strip {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: 0.5px solid var(--border);
+  padding: 14px 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+html[data-ui-style="apple"] .headline {
+  color: var(--text-primary);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+html[data-ui-style="apple"] .sub {
+  color: var(--text-secondary);
+}
+
+/* ── banner ── */
+html[data-ui-style="apple"] .banner {
+  border-radius: 12px;
+  border: none;
+}
+
+html[data-ui-style="apple"] .banner.info {
+  background: rgba(0, 122, 255, 0.1);
+  color: #0040dd;
+}
+
+html[data-ui-style="apple"] .banner.warn,
+html[data-ui-style="apple"] .banner.warning {
+  background: rgba(255, 159, 10, 0.14);
+  color: #9a6700;
+}
+
+html[data-ui-style="apple"] .banner.error {
+  background: rgba(255, 59, 48, 0.12);
+  color: #d70015;
+}
+
+/* ── 机会行 / 列表 ── */
+html[data-ui-style="apple"] .opp-row {
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: 12px;
+}
+
+html[data-ui-style="apple"] .home-todo-step {
+  border-color: var(--border);
+}
+
+/* ── 正负色(涨跌) ── */
+html[data-ui-style="apple"] .positive {
+  color: #34c759 !important;
+}
+
+html[data-ui-style="apple"] .negative {
+  color: #ff3b30 !important;
+}
+
+/* ── 设置行 ── */
+html[data-ui-style="apple"] .settings-row label,
+html[data-ui-style="apple"] .editor-section h4 {
+  color: var(--text-primary);
+}
+
+html[data-ui-style="apple"] .editor-section {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-bottom: 12px;
+  border: none;
+}
+
+/* ── 风格切换控件 ── */
+.ui-style-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin-left: auto;
+  background: rgba(118, 118, 128, 0.16);
+  border-radius: 9px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+html[data-ui-style="default"] .ui-style-switch {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+}
+
+.ui-style-switch button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  line-height: 1.2;
+  min-height: 26px;
+  white-space: nowrap;
+}
+
+.ui-style-switch button:hover {
+  color: var(--text-primary);
+}
+
+.ui-style-switch button.active {
+  background: var(--bg-elevated, #fff);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+html[data-ui-style="default"] .ui-style-switch button.active {
+  background: #1a1a1a;
+  color: #fff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+html[data-ui-style="apple"] .ui-style-switch button.active {
+  background: #ffffff;
+  color: #1d1d1f;
+}
+
+/* 移动端右上角占位 */
+.ui-style-switch-wrap {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 4px;
+}

@@ -14,6 +14,12 @@ import LeapsMonitorPage from './pages/LeapsMonitorPage'
 import Plan2032Page from './pages/Plan2032Page'
 import WheelPage from './pages/WheelPage'
 import { getAppMode, setAppMode, type AppMode } from './services/wheelProduct'
+import {
+  getUiStyle,
+  setUiStyle,
+  subscribeUiStyle,
+  type UiStyle,
+} from './services/uiStyle'
 
 type PageKey = 'wheel' | 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
 
@@ -50,6 +56,7 @@ const MOBILE_RESEARCH_TABS: { key: PageKey; label: string; ico: string }[] = [
 
 function App() {
   const [mode, setMode] = useState<AppMode>(() => getAppMode())
+  const [uiStyle, setUiStyleState] = useState<UiStyle>(() => getUiStyle())
   const [currentPage, setCurrentPage] = useState<PageKey>(() =>
     getAppMode() === 'research' ? 'market' : 'wheel')
 
@@ -61,6 +68,13 @@ function App() {
     window.addEventListener('tradeforge:app-mode', onMode)
     return () => window.removeEventListener('tradeforge:app-mode', onMode)
   }, [])
+
+  useEffect(() => subscribeUiStyle(setUiStyleState), [])
+
+  function switchUiStyle(next: UiStyle) {
+    setUiStyle(next)
+    setUiStyleState(next)
+  }
 
   useEffect(() => {
     const valid: PageKey[] = [
@@ -137,11 +151,31 @@ function App() {
               </div>
             ))}
           </div>
-          {mode === 'wheel' && (
-            <span className="desktop-only" style={{ fontSize: 13, color: 'var(--text-secondary)', marginLeft: 'auto', paddingRight: 8 }}>
-              状态机 · 机会 · 台账 · 富途成交后登记
-            </span>
-          )}
+          <div className="ui-style-switch-wrap">
+            {mode === 'wheel' && (
+              <span className="desktop-only" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                台账登记
+              </span>
+            )}
+            <div className="ui-style-switch" role="group" aria-label="界面风格">
+              <button
+                type="button"
+                className={uiStyle === 'default' ? 'active' : ''}
+                title="默认交易台风格"
+                onClick={() => switchUiStyle('default')}
+              >
+                默认
+              </button>
+              <button
+                type="button"
+                className={uiStyle === 'apple' ? 'active' : ''}
+                title="苹果设计风格"
+                onClick={() => switchUiStyle('apple')}
+              >
+                苹果
+              </button>
+            </div>
+          </div>
         </nav>
 
         {Object.entries(pages).map(([key, page]) => (

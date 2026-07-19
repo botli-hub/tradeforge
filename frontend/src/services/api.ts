@@ -35,6 +35,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   feeRate: 0.0003,
   slippage: 0.001,
   theme: 'dark',
+  uiStyle: 'default',
   language: 'zh',
   marketDataSource: 'finnhub',
   marketHost: '127.0.0.1',
