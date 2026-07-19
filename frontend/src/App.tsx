@@ -18,6 +18,8 @@ import {
   getUiStyle,
   setUiStyle,
   subscribeUiStyle,
+  UI_STYLE_META,
+  UI_STYLE_OPTIONS,
   type UiStyle,
 } from './services/uiStyle'
 
@@ -158,22 +160,17 @@ function App() {
               </span>
             )}
             <div className="ui-style-switch" role="group" aria-label="界面风格">
-              <button
-                type="button"
-                className={uiStyle === 'default' ? 'active' : ''}
-                title="默认交易台风格"
-                onClick={() => switchUiStyle('default')}
-              >
-                默认
-              </button>
-              <button
-                type="button"
-                className={uiStyle === 'apple' ? 'active' : ''}
-                title="苹果设计风格"
-                onClick={() => switchUiStyle('apple')}
-              >
-                苹果
-              </button>
+              {UI_STYLE_OPTIONS.map(key => (
+                <button
+                  key={key}
+                  type="button"
+                  className={uiStyle === key ? 'active' : ''}
+                  title={UI_STYLE_META[key].title}
+                  onClick={() => switchUiStyle(key)}
+                >
+                  {UI_STYLE_META[key].short}
+                </button>
+              ))}
             </div>
           </div>
         </nav>

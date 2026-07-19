@@ -385,6 +385,12 @@ html[data-ui-style="apple"] .ui-style-switch button.active {
   color: #1d1d1f;
 }
 
+/* 三按钮时略收紧 */
+.ui-style-switch button {
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
 /* 移动端右上角占位 */
 .ui-style-switch-wrap {
   margin-left: auto;

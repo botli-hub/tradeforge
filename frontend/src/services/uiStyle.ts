@@ -1,34 +1,37 @@
-/** UI 风格: default=现有交易台, apple=苹果设计语言 */
+/** UI 风格: default | apple | cyber */
 
-export type UiStyle = 'default' | 'apple'
+export type UiStyle = 'default' | 'apple' | 'cyber'
 
 const KEY = 'tradeforge.uiStyle'
 const EVENT = 'tradeforge:ui-style'
+const ALL: UiStyle[] = ['default', 'apple', 'cyber']
+
+export function isUiStyle(v: unknown): v is UiStyle {
+  return v === 'default' || v === 'apple' || v === 'cyber'
+}
 
 export function getUiStyle(): UiStyle {
   try {
     const v = localStorage.getItem(KEY)
-    if (v === 'apple' || v === 'default') return v
+    if (isUiStyle(v)) return v
   } catch { /* */ }
-  // 兼容旧 theme 字段
   try {
     const raw = localStorage.getItem('tradeforge.settings')
     if (raw) {
       const s = JSON.parse(raw)
-      if (s?.uiStyle === 'apple' || s?.uiStyle === 'default') return s.uiStyle
+      if (isUiStyle(s?.uiStyle)) return s.uiStyle
     }
   } catch { /* */ }
   return 'default'
 }
 
-export function setUiStyle(style: UiStyle): UiStyle {
-  const next = style === 'apple' ? 'apple' : 'default'
+export function setUiStyle(style: UiStyle | string): UiStyle {
+  const next: UiStyle = isUiStyle(style) ? style : 'default'
   try {
     localStorage.setItem(KEY, next)
   } catch { /* */ }
   applyUiStyle(next)
   window.dispatchEvent(new CustomEvent(EVENT, { detail: next }))
-  // 同步进 AppSettings,便于设置页展示
   try {
     const raw = localStorage.getItem('tradeforge.settings')
     const base = raw ? JSON.parse(raw) : {}
@@ -41,12 +44,17 @@ export function applyUiStyle(style?: UiStyle): void {
   const s = style ?? getUiStyle()
   const root = document.documentElement
   root.setAttribute('data-ui-style', s)
-  // 苹果浅色用 color-scheme 改善表单控件
   root.style.colorScheme = s === 'apple' ? 'light' : 'dark'
 }
 
+/** 在三套风格间轮换 */
+export function cycleUiStyle(): UiStyle {
+  const i = ALL.indexOf(getUiStyle())
+  return setUiStyle(ALL[(i + 1) % ALL.length])
+}
+
 export function toggleUiStyle(): UiStyle {
-  return setUiStyle(getUiStyle() === 'apple' ? 'default' : 'apple')
+  return cycleUiStyle()
 }
 
 export function subscribeUiStyle(cb: (s: UiStyle) => void): () => void {
@@ -55,7 +63,10 @@ export function subscribeUiStyle(cb: (s: UiStyle) => void): () => void {
   return () => window.removeEventListener(EVENT, h)
 }
 
-export const UI_STYLE_META: Record<UiStyle, { label: string; short: string }> = {
-  default: { label: '默认', short: '默认' },
-  apple: { label: '苹果', short: 'Apple' },
+export const UI_STYLE_META: Record<UiStyle, { label: string; short: string; title: string }> = {
+  default: { label: '默认', short: '默认', title: '默认交易台风格' },
+  apple: { label: '苹果', short: 'Apple', title: '苹果设计风格' },
+  cyber: { label: '赛博', short: '赛博', title: '赛博朋克风格' },
 }
+
+export const UI_STYLE_OPTIONS = ALL

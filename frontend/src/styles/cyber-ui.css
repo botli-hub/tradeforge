@@ -1,0 +1,411 @@
+/**
+ * 赛博朋克风格
+ * 激活: html[data-ui-style="cyber"]
+ */
+
+html[data-ui-style="cyber"] {
+  --bg-primary: #05010d;
+  --bg-card: #0d0221;
+  --bg-elevated: #12032a;
+  --bg-input: #1a0a36;
+  --bg-secondary: #0d0221;
+  --bg-panel: #12032a;
+  --bg-float: #1a0a36;
+
+  --text-primary: #e8f6ff;
+  --text-secondary: #8ba3c7;
+  --text-tertiary: #5a6f94;
+  --text: #e8f6ff;
+
+  /* 霓虹青 + 品红 */
+  --green: #00f0ff;
+  --green-dim: rgba(0, 240, 255, 0.14);
+  --accent: #ff2bd6;
+  --magenta: #ff2bd6;
+  --magenta-dim: rgba(255, 43, 214, 0.16);
+  --blue: #00f0ff;
+  --blue-dim: rgba(0, 240, 255, 0.12);
+  --red: #ff3d71;
+  --red-dim: rgba(255, 61, 113, 0.16);
+  --warning: #fcee0a;
+  --warning-dim: rgba(252, 238, 10, 0.12);
+  --info: #7b61ff;
+  --info-dim: rgba(123, 97, 255, 0.16);
+  --purple: #b967ff;
+
+  --border: rgba(0, 240, 255, 0.22);
+  --divider: rgba(255, 43, 214, 0.12);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-pill: 4px;
+  --shadow-float: 0 0 24px rgba(0, 240, 255, 0.18), 0 0 48px rgba(255, 43, 214, 0.1);
+
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  font-family: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: 0.02em;
+}
+
+html[data-ui-style="cyber"] body,
+html[data-ui-style="cyber"] #root {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% -10%, rgba(255, 43, 214, 0.12), transparent 50%),
+    radial-gradient(ellipse 60% 40% at 90% 10%, rgba(0, 240, 255, 0.1), transparent 45%),
+    var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+html[data-ui-style="cyber"] .app-shell {
+  background: transparent;
+  min-height: 100vh;
+}
+
+/* 扫描线氛围(轻) */
+html[data-ui-style="cyber"] body::before {
+  content: "";
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  opacity: 0.035;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 240, 255, 0.4) 2px,
+    rgba(0, 240, 255, 0.4) 3px
+  );
+}
+
+/* ── 导航 ── */
+html[data-ui-style="cyber"] .nav {
+  background: rgba(5, 1, 13, 0.88);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 0 16px;
+}
+
+html[data-ui-style="cyber"] .nav-item {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 14px 12px;
+  border-bottom: 2px solid transparent;
+  margin: 0;
+  border-radius: 0;
+}
+
+html[data-ui-style="cyber"] .nav-item:hover {
+  color: var(--green);
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.5);
+}
+
+html[data-ui-style="cyber"] .nav-item.active {
+  color: var(--green);
+  border-bottom-color: var(--green);
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.65);
+  background: linear-gradient(180deg, transparent, rgba(0, 240, 255, 0.06));
+}
+
+html[data-ui-style="cyber"] .mode-seg {
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px;
+  gap: 2px;
+}
+
+html[data-ui-style="cyber"] .mode-seg button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 10px;
+}
+
+html[data-ui-style="cyber"] .mode-seg button.active {
+  background: rgba(0, 240, 255, 0.15);
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green), 0 0 12px rgba(0, 240, 255, 0.25);
+}
+
+/* ── 卡片 ── */
+html[data-ui-style="cyber"] .card {
+  background: linear-gradient(145deg, rgba(18, 3, 42, 0.95), rgba(13, 2, 33, 0.98));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  box-shadow:
+    0 0 0 1px rgba(255, 43, 214, 0.05),
+    0 0 24px rgba(0, 240, 255, 0.05);
+  clip-path: polygon(
+    0 0,
+    calc(100% - 12px) 0,
+    100% 12px,
+    100% 100%,
+    12px 100%,
+    0 calc(100% - 12px)
+  );
+}
+
+html[data-ui-style="cyber"] .surface,
+html[data-ui-style="cyber"] .surface-float,
+html[data-ui-style="cyber"] .panel {
+  background: rgba(13, 2, 33, 0.92);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.08);
+}
+
+html[data-ui-style="cyber"] .surface-float {
+  box-shadow: var(--shadow-float);
+}
+
+/* ── 按钮 ── */
+html[data-ui-style="cyber"] .btn,
+html[data-ui-style="cyber"] .btn-primary,
+html[data-ui-style="cyber"] .btn.btn-primary {
+  background: linear-gradient(90deg, rgba(0, 240, 255, 0.2), rgba(255, 43, 214, 0.18));
+  color: var(--green);
+  border: 1px solid var(--green);
+  border-radius: 2px;
+  font-weight: 700;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  box-shadow: 0 0 14px rgba(0, 240, 255, 0.25);
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+}
+
+html[data-ui-style="cyber"] .btn:hover,
+html[data-ui-style="cyber"] .btn-primary:hover {
+  opacity: 1;
+  background: linear-gradient(90deg, rgba(0, 240, 255, 0.35), rgba(255, 43, 214, 0.28));
+  box-shadow: 0 0 22px rgba(0, 240, 255, 0.45);
+}
+
+html[data-ui-style="cyber"] .btn:focus-visible {
+  outline: 2px solid var(--magenta);
+  outline-offset: 2px;
+}
+
+html[data-ui-style="cyber"] .btn-secondary,
+html[data-ui-style="cyber"] .btn.btn-secondary {
+  background: transparent;
+  color: var(--magenta);
+  border: 1px solid rgba(255, 43, 214, 0.55);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+html[data-ui-style="cyber"] .btn-secondary:hover {
+  background: var(--magenta-dim);
+  box-shadow: 0 0 12px rgba(255, 43, 214, 0.25);
+}
+
+html[data-ui-style="cyber"] .btn-ghost,
+html[data-ui-style="cyber"] .btn.btn-ghost {
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  text-shadow: none;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+html[data-ui-style="cyber"] .btn-ghost:hover {
+  color: var(--green);
+  background: rgba(0, 240, 255, 0.08);
+  border-color: transparent;
+}
+
+html[data-ui-style="cyber"] .btn-icon {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  color: var(--green);
+  border-radius: 2px;
+}
+
+/* ── 输入 ── */
+html[data-ui-style="cyber"] input,
+html[data-ui-style="cyber"] select,
+html[data-ui-style="cyber"] textarea {
+  background: rgba(0, 0, 0, 0.45) !important;
+  color: var(--green) !important;
+  border: 1px solid rgba(0, 240, 255, 0.28) !important;
+  border-radius: 2px !important;
+  font-family: inherit !important;
+  box-shadow: inset 0 0 12px rgba(0, 240, 255, 0.05);
+}
+
+html[data-ui-style="cyber"] input:focus,
+html[data-ui-style="cyber"] select:focus,
+html[data-ui-style="cyber"] textarea:focus {
+  outline: none;
+  border-color: var(--green) !important;
+  box-shadow: 0 0 0 1px var(--green), 0 0 16px rgba(0, 240, 255, 0.25) !important;
+}
+
+/* ── 底部 Tab ── */
+html[data-ui-style="cyber"] .bottom-tabs {
+  background: rgba(5, 1, 13, 0.92);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 24px rgba(255, 43, 214, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+html[data-ui-style="cyber"] .bottom-tab {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+html[data-ui-style="cyber"] .bottom-tab.active {
+  color: var(--green);
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.55);
+}
+
+/* ── 弹层 ── */
+html[data-ui-style="cyber"] .manage-modal-overlay,
+html[data-ui-style="cyber"] .drawer-overlay {
+  background: rgba(5, 1, 13, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+html[data-ui-style="cyber"] .manage-modal,
+html[data-ui-style="cyber"] .drawer-panel {
+  background: #0d0221 !important;
+  color: var(--text-primary);
+  border: 1px solid var(--border) !important;
+  border-radius: 4px;
+  box-shadow: var(--shadow-float);
+}
+
+/* ── 上下文 / 头条 ── */
+html[data-ui-style="cyber"] .context-strip {
+  background: rgba(13, 2, 33, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 14px 16px;
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.08);
+}
+
+html[data-ui-style="cyber"] .headline {
+  color: var(--green);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 14px rgba(0, 240, 255, 0.35);
+}
+
+html[data-ui-style="cyber"] .sub {
+  color: var(--text-secondary);
+}
+
+/* ── banner ── */
+html[data-ui-style="cyber"] .banner {
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  font-family: inherit;
+}
+
+html[data-ui-style="cyber"] .banner.info {
+  background: rgba(0, 240, 255, 0.1);
+  color: var(--green);
+  border-color: rgba(0, 240, 255, 0.35);
+}
+
+html[data-ui-style="cyber"] .banner.warn,
+html[data-ui-style="cyber"] .banner.warning {
+  background: rgba(252, 238, 10, 0.08);
+  color: var(--warning);
+  border-color: rgba(252, 238, 10, 0.35);
+}
+
+html[data-ui-style="cyber"] .banner.error {
+  background: rgba(255, 61, 113, 0.1);
+  color: var(--red);
+  border-color: rgba(255, 61, 113, 0.4);
+}
+
+/* ── 列表 ── */
+html[data-ui-style="cyber"] .opp-row {
+  background: rgba(13, 2, 33, 0.85);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 2px;
+}
+
+html[data-ui-style="cyber"] .opp-row:hover {
+  border-color: var(--green);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.12);
+}
+
+/* ── 设置 ── */
+html[data-ui-style="cyber"] .editor-section {
+  background: rgba(13, 2, 33, 0.9);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+html[data-ui-style="cyber"] .editor-section h4 {
+  color: var(--magenta);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 13px;
+  text-shadow: 0 0 10px rgba(255, 43, 214, 0.35);
+}
+
+html[data-ui-style="cyber"] .settings-row label {
+  color: var(--text-secondary);
+}
+
+/* ── 正负 ── */
+html[data-ui-style="cyber"] .positive {
+  color: var(--green) !important;
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.35);
+}
+
+html[data-ui-style="cyber"] .negative {
+  color: var(--red) !important;
+  text-shadow: 0 0 8px rgba(255, 61, 113, 0.35);
+}
+
+/* ── 风格切换器在赛博下的样式 ── */
+html[data-ui-style="cyber"] .ui-style-switch {
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 2px;
+}
+
+html[data-ui-style="cyber"] .ui-style-switch button {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 1px;
+  padding: 5px 8px;
+}
+
+html[data-ui-style="cyber"] .ui-style-switch button.active {
+  background: rgba(0, 240, 255, 0.15);
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green), 0 0 10px rgba(0, 240, 255, 0.3);
+}

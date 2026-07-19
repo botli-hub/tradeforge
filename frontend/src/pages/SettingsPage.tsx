@@ -14,7 +14,7 @@ import {
   saveBackendConfig,
   testWheelAlert,
 } from '../services/api'
-import { setUiStyle } from '../services/uiStyle'
+import { isUiStyle, setUiStyle, UI_STYLE_META, UI_STYLE_OPTIONS } from '../services/uiStyle'
 
 type SettingsTab = 'wheel' | 'research' | 'general'
 
@@ -36,7 +36,7 @@ export default function SettingsPage() {
     setSaving(true)
     const next = saveAppSettings(settings)
     setSettings(next)
-    if (next.uiStyle === 'apple' || next.uiStyle === 'default') {
+    if (isUiStyle(next.uiStyle)) {
       setUiStyle(next.uiStyle)
     }
     setMessage('前端设置已保存')
@@ -294,15 +294,16 @@ export default function SettingsPage() {
             <div className="settings-row">
               <label>界面风格</label>
               <select
-                value={settings.uiStyle || 'default'}
+                value={isUiStyle(settings.uiStyle) ? settings.uiStyle : 'default'}
                 onChange={e => {
-                  const v = e.target.value === 'apple' ? 'apple' : 'default'
+                  const v = isUiStyle(e.target.value) ? e.target.value : 'default'
                   updateField('uiStyle', v)
                   setUiStyle(v)
                 }}
               >
-                <option value="default">默认（现有交易台）</option>
-                <option value="apple">苹果设计</option>
+                {UI_STYLE_OPTIONS.map(k => (
+                  <option key={k} value={k}>{UI_STYLE_META[k].label} — {UI_STYLE_META[k].title}</option>
+                ))}
               </select>
             </div>
             <div className="settings-row">
