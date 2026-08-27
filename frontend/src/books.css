@@ -1,0 +1,33 @@
+.manage-primary.neutral {
+  border-color: var(--border);
+  background: var(--bg-elevated);
+}
+.books-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin: 8px 0 12px;
+}
+@media (max-width: 640px) {
+  .books-grid { grid-template-columns: 1fr; }
+}
+.books-col {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.books-col-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.books-ref {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}

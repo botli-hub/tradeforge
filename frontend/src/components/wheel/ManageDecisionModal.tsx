@@ -1,6 +1,25 @@
 /** 持仓管理决策弹窗 — 分层主建议 / 详情 / 三选一 */
 import type { WheelOpenPositionItem, WheelOpportunitiesResult } from '../../services/api'
 
+type ItemWithBooks = WheelOpenPositionItem & {
+  books?: {
+    seller?: {
+      premium_captured_pct?: number | null
+      remaining_premium_usd?: number | null
+      remaining_ann?: number | null
+      capital_tied?: number | null
+      freed_if_close?: number | null
+    }
+    owner?: {
+      holding_is_price_bet?: boolean
+      assign_strike?: number | null
+      floor_price?: number | null
+      stance?: string | null
+      assign_means?: string | null
+    }
+  } | null
+}
+
 function fmt(v: number | null | undefined, digits = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return '--'
   return v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
@@ -23,7 +42,7 @@ export type ManageModalPickFn = (
 }[]
 
 type Props = {
-  mc: WheelOpenPositionItem
+  mc: ItemWithBooks
   serverOpps: WheelOpportunitiesResult | null
   portfolioPutBlocked?: boolean
   rollLoading?: boolean
@@ -59,23 +78,32 @@ export default function ManageDecisionModal({
   const isCall = mc.side === 'CALL'
   const code = (mc.action_code || '').toUpperCase()
   const underwater = mc.profit_pct != null && mc.profit_pct < 0
-  const prefer: 'expire' | 'close' | 'roll' =
-    code === 'HOLD_THETA' || code === 'NONE' ? 'expire'
-      : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
-        : (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') ? 'roll'
-          : (mc.profit_hit ? 'close' : 'expire')
+  const books = mc.books
+  const dt = (mc.decision_tree || {}) as Record<string, unknown>
+  const softReplace = code === 'REPLACE' && (dt.soft_profit_hit === true || dt.branch === 'replace_soft')
+  const booksChoice = !!(books && (code === 'HOLD_THETA' || code === 'NONE' || softReplace))
+  const prefer: 'expire' | 'close' | 'roll' | 'none' =
+    booksChoice ? 'none'
+      : code === 'HOLD_THETA' || code === 'NONE' ? 'expire'
+        : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
+          : (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') ? 'roll'
+            : (mc.profit_hit ? 'close' : 'expire')
   const buy = fmt(mc.buyback_ask || mc.current_price)
   const expireBody = isCall
     ? (mc.itm
       ? '到期若仍 ITM:正股可能被 call 走。仅当你愿意按 strike 交货时再放任。'
       : underwater
         ? '仍 OTM:到期作废可收回浮亏。确认愿按 strike 交货;否则买回或 Roll。'
-        : 'OTM 到期作废,留下持股吃光剩余权利金。临期且买回摩擦大时往往优于硬止盈。')
+        : (booksChoice
+          ? 'OTM 到期作废,留下持股与剩余权利金。对照两本账后自行三选一。'
+          : 'OTM 到期作废,留下持股吃光剩余权利金。临期且买回摩擦大时往往优于硬止盈。'))
     : (mc.itm
       ? '到期若仍 ITM:可能被指派接货。确认愿接货且有资金,再放任;否则 Roll/平仓。'
       : underwater
         ? '仍 OTM:到期作废可收回浮亏。确认愿按 strike 接货;否则止损买回或 Roll。'
-        : 'OTM 到期作废,现金担保释放。临期 OTM 可放任吃 θ。')
+        : (booksChoice
+          ? 'OTM 到期作废,现金担保释放。对照两本账后自行三选一。'
+          : 'OTM 到期作废,现金担保释放。临期 OTM 可放任吃 θ。'))
   const closeBody = isCall
     ? (underwater
       ? `买回约 $${buy}/股,确认亏损约 ${mc.profit_pct}%。结束 Call 义务、保留持股(不释放大额现金)。`
@@ -90,13 +118,13 @@ export default function ManageDecisionModal({
     : (underwater
       ? '买回 + 卖更远/更低 strike:经典 CSP 防守;确认仍愿接货再 roll。'
       : '买回 + 卖更远到期(可 roll down)。临期/ITM 风险升、尚未想接货时用。')
-  const preferLabel = prefer === 'expire' ? '放任到期' : prefer === 'close' ? '买回平仓' : 'Roll 展期'
+  const preferLabel = prefer === 'expire' ? '放任到期' : prefer === 'close' ? '买回平仓' : prefer === 'roll' ? 'Roll 展期' : '三选一'
   const primaryWhy = (mc.reasons && mc.reasons[0])
     || (isCall && prefer === 'close' && !underwater
       ? '权利金目标已达成;Call 买回结束义务,不显著降低组合占用。'
       : !isCall && prefer === 'close' && !underwater
         ? '权利金目标已达成,买回可释放担保金周转。'
-        : (mc.action_hint || '按规则建议操作'))
+        : (mc.action_hint || (booksChoice ? '对照两本账后三选一,无默认推荐' : '按规则建议操作')))
   const conf = mc.decision_confidence
   const doPrimary = () => {
     // 一键执行(非 Roll 需候选时走原路径)
@@ -106,7 +134,7 @@ export default function ManageDecisionModal({
     }
     if (prefer === 'expire') onExpire()
     else if (prefer === 'close') onBuyback()
-    else onRoll()
+    else if (prefer === 'roll') onRoll()
   }
   const nextLegs = (code === 'CLOSE' || code === 'REPLACE')
     ? pickReplaceCandidates(serverOpps, mc, 2) : []
@@ -146,6 +174,31 @@ export default function ManageDecisionModal({
           <button type="button" className="btn btn-sm" onClick={onDismiss}>关闭</button>
         </div>
 
+        {books && (
+          <div className="books-grid">
+            <div className="books-col">
+              <div className="books-col-title">卖方账</div>
+              <div>已收权利金 {books.seller?.premium_captured_pct ?? '--'}%</div>
+              <div>剩余权利金 ${fmt(books.seller?.remaining_premium_usd, 0)}</div>
+              <div>剩余年化 {books.seller?.remaining_ann ?? '--'}%</div>
+              <div>占用 ${fmt(books.seller?.capital_tied, 0)}{isCall ? ' · 持股' : ' · CSP 担保'}</div>
+              <div>平仓释放 ${fmt(books.seller?.freed_if_close, 0)}</div>
+            </div>
+            <div className="books-col">
+              <div className="books-col-title">股东判断</div>
+              <div>{books.owner?.holding_is_price_bet ? '续拿=股价还得朝你这边走' : '未把续拿当方向赌注'}</div>
+              <div>指派价 ${fmt(books.owner?.assign_strike, 0)}</div>
+              <div>floor {books.owner?.floor_price != null ? `$${fmt(books.owner.floor_price)}` : '--'}</div>
+              <div>{books.owner?.stance === 'income' ? '只收租' : '允许接货'}</div>
+              <div>{books.owner?.assign_means}</div>
+            </div>
+            {code && (
+              <div className="books-ref">参考 {code}（非推荐）</div>
+            )}
+          </div>
+        )}
+
+        {prefer !== 'none' && (
         <div className={`manage-primary ${prefer !== 'expire' || underwater ? 'warn' : ''}`}>
           <div className="manage-primary-title">
             推荐 · {preferLabel}
@@ -183,6 +236,16 @@ export default function ManageDecisionModal({
             </button>
           )}
         </div>
+        )}
+        {prefer === 'none' && (
+          <div className="manage-primary neutral">
+            <div className="manage-primary-title">对照两本账 · 无默认推荐</div>
+            <div className="manage-primary-why">
+              {mc.action_hint ? <div><b>参考</b> {mc.action_hint}</div> : null}
+              <div style={{ marginTop: 4 }}>不对账成单一结论。下面三选一，自行登记。</div>
+            </div>
+          </div>
+        )}
 
         <details className="manage-details">
           <summary>详情与纪律</summary>

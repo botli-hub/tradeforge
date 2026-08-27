@@ -215,6 +215,31 @@ def headroom_factor(headroom_ratio: Optional[float], scan_cfg: Dict[str, Any]) -
     return round(1.0 + boost * r, 4)
 
 
+
+def stance_assign_risk_factor(
+    side: str,
+    stance: Optional[str],
+    delta: float,
+    spot: Optional[float],
+    strike: Optional[float],
+) -> tuple:
+    """income 标的:高指派风险 Put 降权;acquire 不改分."""
+    st = str(stance or "").strip().lower()
+    if side != "PUT" or st not in ("income", "只收租"):
+        return 1.0, None
+    d = abs(float(delta or 0))
+    itm = bool(spot and strike and float(spot) < float(strike))
+    close = False
+    try:
+        if spot and strike and float(spot) > 0:
+            close = abs(float(spot) - float(strike)) / float(spot) < 0.02
+    except (TypeError, ValueError, ZeroDivisionError):
+        close = False
+    if itm or d >= 0.30 or close:
+        return 0.75, "只收租·指派风险"
+    return 1.0, None
+
+
 def score_contract(
     annualized: float,
     side: str,
@@ -230,6 +255,9 @@ def score_contract(
     headroom_ratio: Optional[float] = None,
     premium: Optional[float] = None,
     collateral: Optional[float] = None,
+    stance: Optional[str] = None,
+    spot: Optional[float] = None,
+    strike: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """返回 {"score", "robust_score", "pop", "ev_pct", "factors"};spread 超限返回 None。"""
     # 财报硬过滤(仅 Put)
@@ -263,9 +291,10 @@ def score_contract(
     buf_f = buffer_factor(buffer_atr, scan_cfg, side)
     head_f = headroom_factor(headroom_ratio, scan_cfg)
 
-    score = annualized * liq * earn * tr * iv_bonus * delta_f * pop_f * buf_f * head_f
+    stance_f, stance_flag = stance_assign_risk_factor(side, stance, delta, spot, strike)
+    score = annualized * liq * earn * tr * iv_bonus * delta_f * pop_f * buf_f * head_f * stance_f
     # 稳健分:更重视 POP 与缓冲,年化权重降低
-    robust = (annualized ** 0.5) * (pop_v * 100) * liq * earn * tr * buf_f * head_f * iv_bonus
+    robust = (annualized ** 0.5) * (pop_v * 100) * liq * earn * tr * buf_f * head_f * iv_bonus * stance_f
 
     ev = None
     if premium is not None and collateral and collateral > 0:
@@ -291,7 +320,9 @@ def score_contract(
             "pop": round(pop_f, 3),
             "buffer": round(buf_f, 3),
             "headroom": round(head_f, 3),
+            "stance": round(stance_f, 3),
         },
+        "stance_flag": stance_flag,
     }
 
 

@@ -387,6 +387,69 @@ def test_would_open_unknown_no_floor():
     assert r["would_open_today"] == "unknown"
 
 
+def test_acquire_hold_theta_attaches_books():
+    """acquire + 高浮盈吃θ:仍 HOLD_THETA(旧行为),但挂两本账,不对账成绿灯."""
+    r = decide_position(
+        _item(
+            dte=5, profit_pct=55.0, current_price=0.4, buyback_ask=0.4,
+            expiring=True, stance="acquire",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "HOLD_THETA"
+    assert r["decision_tree"]["hold_for_theta"]
+    books = r.get("books")
+    assert books is not None
+    assert books["seller"]["premium_captured_pct"] == 55.0
+    assert books["owner"]["stance"] == "acquire"
+    assert "strike" in (books["owner"].get("assign_means") or "")
+    assert "浮盈对账" in r["reasons"]
+
+
+def test_income_high_profit_skips_hold_theta():
+    """只收租 + 同样高浮盈:不走 HOLD_THETA,落到 CLOSE/REPLACE 更早腾仓."""
+    r = decide_position(
+        _item(
+            dte=5, profit_pct=55.0, current_price=0.4, buyback_ask=0.4,
+            expiring=True, stance="income",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] != "HOLD_THETA"
+    assert r["action_code"] in ("CLOSE", "REPLACE")
+    assert not r["decision_tree"]["hold_for_theta"]
+
+
+def test_income_expiring_itm_put_not_prepare_assign():
+    """只收租 + 临期 ITM PUT:不是准备接货成功路径."""
+    r = decide_position(
+        _item(
+            side="PUT", itm=True, delta=0.45, spot=99, dte=5, expiring=True,
+            profit_pct=-10.0, stance="income",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] != "PREPARE_ASSIGN"
+    assert r["action_code"] in ("ROLL_ADJUST", "CLOSE")
+    assert "只收租" in (r["action_hint"] or "")
+    cl = r.get("assign_checklist") or {}
+    notes = " ".join(cl.get("notes") or [])
+    assert "只收租" in notes or "偏离" in notes
+
+
+def test_acquire_expiring_itm_put_prepare_assign():
+    """允许接货 + 临期 ITM PUT:仍走 PREPARE_ASSIGN."""
+    r = decide_position(
+        _item(
+            side="PUT", itm=True, delta=0.45, spot=99, dte=5, expiring=True,
+            profit_pct=-10.0, stance="acquire",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "PREPARE_ASSIGN"
+    assert "接货" in (r["action_hint"] or "")
+
+
 def test_floor_stance_no_heavy_penalty_for_floor_above_spot():
     """准入:floor>现价不重罚,打近价愿接标签"""
     from app.core.wheel_admission import floor_stance

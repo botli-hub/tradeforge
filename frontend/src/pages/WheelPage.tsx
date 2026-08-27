@@ -33,6 +33,8 @@ import {
   type SemColor,
 } from '../components/wheel/WheelUi'
 import ManageDecisionModal from '../components/wheel/ManageDecisionModal'
+import MustManageP0 from '../components/wheel/MustManageP0'
+import TargetStanceSelect from '../components/wheel/TargetStanceSelect'
 import { useToast } from '../components/ui/Toast'
 
 /** 离散选项下拉：当前值不在列表里时自动补上，避免丢历史数据 */
@@ -733,8 +735,8 @@ function buildOppRows(
   for (const item of Object.values(openChecks)) {
     const code = (item.action_code || '').toUpperCase()
     if (!code || code === 'NONE') {
-      // 无主建议时:若有浅 ITM 文案仍可展示弱提示,否则跳过
-      if (!item.action_hint) continue
+      // 无主建议时:浮盈两本账仍进必须处理;否则需有文案
+      if (!item.books && !item.action_hint) continue
     }
     let cat: OppCategory = 'CLOSE'
     let tag = '关注'
@@ -754,7 +756,10 @@ function buildOppRows(
       // 资金紧时升排:与后端 action_priority 下调一致
       efficiency = (item.capital_tight ? 920 : 800) + (item.profit_pct || 0)
     } else if (code === 'HOLD_THETA') {
-      cat = 'CLOSE'; tag = '吃θ'; actionable = false; efficiency = 400
+      cat = 'LOW_YIELD'
+      tag = item.books ? '浮盈对账' : '吃θ'
+      actionable = !!item.books
+      efficiency = 400
     } else if (item.action_hint) {
       // 兜底:根据 hint 归类
       if ((item.action_hint || '').includes('Roll') || item.roll_21dte) {
@@ -790,7 +795,7 @@ function buildOppRows(
       action_priority: prio,
       prefer_card: item.prefer_card,
       decision_why: item.reasons,
-      tags: [tag],
+      tags: [item.books ? '浮盈对账' : tag],
       risk_hard: item.deep_itm ? ['深度ITM'] : [],
       risk_soft: [
         ...(item.itm && !item.deep_itm ? ['ITM'] : []),
@@ -1380,6 +1385,7 @@ export default function WheelPage() {
   const [editParams, setEditParams] = useState<{
     floor_price: string; delta_min: string; delta_max: string
     dte_min: string; dte_max: string; min_annualized: string
+    stance: string
   } | null>(null)
   const [savingParams, setSavingParams] = useState(false)
   // 机会扫描(高分候选 + EMA 触线)
@@ -2566,51 +2572,15 @@ export default function WheelPage() {
               <div className="home-todo-step p0">
                 <div className="home-todo-num">1</div>
                 <div>
-                  <div className="home-todo-label">P0 · 必须处理持仓</div>
-                  {(() => {
-                    const list = allOppRows.filter(r => r.kind === 'MANAGE')
-                      .sort((a, b) => (a.action_priority ?? 9) - (b.action_priority ?? 9))
-                      .slice(0, 3)
-                    if (!list.length) return <div className="home-todo-empty">暂无紧急项 — 持仓健康</div>
-                    return list.map(m => (
-                      <div key={m.id} className="opp-row" style={{ margin: '0 0 6px' }}>
-                        <div className="opp-row-main">
-                          <div className="opp-row-title">
-                            <Badge color={m.categories.includes('CLOSE') ? 'green' : 'orange'}>
-                              {m.tags[0] || '该管'}
-                            </Badge>
-                            {isReleaseCandidate(m.profit_pct) && (
-                              <Badge color="green" title="浮盈≥50%可腾仓">可腾</Badge>
-                            )}
-                            {m.symbol} {m.side}
-                            {m.strike != null && <span style={{ opacity: 0.7 }}>${m.strike}</span>}
-                          </div>
-                          <div className="opp-row-meta">
-                            <span>{m.action_hint || m.headline}</span>
-                            {m.dte != null && <span>DTE {m.dte}</span>}
-                            {m.profit_pct != null && <span>浮盈 {m.profit_pct}%</span>}
-                          </div>
-                        </div>
-                        <div className="opp-row-actions">
-                          {m.actionable !== false && (
-                            <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(m)}>
-                              {(m.action_code === 'ROLL' || m.action_code === 'ROLL_ADJUST' || m.action_code === 'PREPARE_ASSIGN')
-                                ? '看 Roll' : '处理'}
-                            </button>
-                          )}
-                          {m.kind === 'MANAGE' && m.check && (
-                            <button type="button" className="btn btn-ghost btn-sm"
-                              onClick={() => copyManageExecMemo(m.check!)}>备忘</button>
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  })()}
-                  {manageCount > 3 && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('MANAGE') }}>
-                      全部 {manageCount} 项 →
-                    </button>
-                  )}
+                  <MustManageP0
+                    mustManage={(todayBoard?.must_manage || []) as WheelOpenPositionItem[]}
+                    fallbackRows={allOppRows.filter(r => r.kind === 'MANAGE')}
+                    manageCount={manageCount}
+                    onOpenItem={(item) => setManageCompare(item)}
+                    onOpenRow={(row) => openOppRegister(row as OppRow)}
+                    onCopyMemo={(item) => copyManageExecMemo(item)}
+                    onShowMore={() => { setTab('opps'); setOppCatFilter('MANAGE') }}
+                  />
                 </div>
               </div>
               {/* P1 */}
@@ -3071,11 +3041,13 @@ export default function WheelPage() {
                               Δ <b style={{ color: 'var(--text)' }}>{sel.delta_min}~{sel.delta_max}</b>
                               {' · '}DTE <b style={{ color: 'var(--text)' }}>{sel.dte_min}~{sel.dte_max}</b>
                               {' · '}年化≥<b style={{ color: 'var(--text)' }}>{sel.min_annualized}%</b>
+                              {' · '}<b style={{ color: 'var(--text)' }}>{sel.stance === 'income' ? '只收租' : '允许接货'}</b>
                             </span>
                             <button title="修改找货参数" onClick={() => setEditParams({
                               floor_price: String(sel.floor_price), delta_min: String(sel.delta_min),
                               delta_max: String(sel.delta_max), dte_min: String(sel.dte_min),
                               dte_max: String(sel.dte_max), min_annualized: String(sel.min_annualized),
+                              stance: sel.stance === 'income' ? 'income' : 'acquire',
                             })} style={{
                               border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer',
                               borderRadius: 6, padding: '1px 8px', fontSize: 13, color: 'var(--accent)',
@@ -3102,6 +3074,18 @@ export default function WheelPage() {
                     </div>
                     {editParams && (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+                        <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}
+                          title="只收租=接货当预警、更早腾仓；允许接货=floor 是愿接股东价，临期 ITM 走准备接货">
+                          立场
+                          <select value={editParams.stance} style={{
+                            display: 'block', width: 110, padding: '4px 6px', marginTop: 2,
+                            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
+                            borderRadius: 4, color: 'var(--text)', fontSize: 13,
+                          }} onChange={e => setEditParams(f => f ? { ...f, stance: e.target.value } : f)}>
+                            <option value="acquire">允许接货</option>
+                            <option value="income">只收租</option>
+                          </select>
+                        </label>
                         <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}
                           title="真被指派时最多愿付的股价;此后卖Put的strike不得超过此价">
                           愿接价$
@@ -3146,6 +3130,8 @@ export default function WheelPage() {
                                 min_annualized: parseFloat(editParams.min_annualized),
                                 floor_change_source: 'manual',
                               })
+                              const { patchTargetStance } = await import('../components/wheel/TargetStanceSelect')
+                              await patchTargetStance(sel.symbol, editParams.stance === 'income' ? 'income' : 'acquire')
                               setEditParams(null)
                               await loadAll()
                             } catch (e: any) {
@@ -4340,7 +4326,7 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '现价 · 愿接 · 参考', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '现价 · 愿接 · 参考', '立场', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
                     title={h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
                   >{h}</th>
@@ -4348,7 +4334,7 @@ export default function WheelPage() {
               </tr>
             </thead>
             <tbody>
-              {targets.length === 0 && <tr><td colSpan={8} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
+              {targets.length === 0 && <tr><td colSpan={9} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
               {targets.map(t => (
                 <TargetRow key={t.symbol} target={t} onSaved={loadAll}
                   onToggle={() => handleToggleTarget(t)} onDelete={() => handleDeleteTarget(t.symbol)} />
@@ -4929,6 +4915,7 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
     dte_min: String(target.dte_min), dte_max: String(target.dte_max),
     min_annualized: String(target.min_annualized),
     min_open_interest: String(target.min_open_interest),
+    stance: target.stance === 'income' ? 'income' : 'acquire',
   })
   const [err, setErr] = useState<string | null>(null)
 
@@ -4948,6 +4935,8 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
         min_open_interest: parseInt(form.min_open_interest),
         floor_change_source: 'manual',
       })
+      const { patchTargetStance } = await import('../components/wheel/TargetStanceSelect')
+      await patchTargetStance(target.symbol, form.stance === 'income' ? 'income' : 'acquire')
       setEditing(false)
       onSaved()
     } catch (e: any) {
@@ -4968,6 +4957,13 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
             floor={target.floor_price}
             suggested={target.suggested_floor}
             suggestedDelta={target.suggested_floor_delta}
+          />
+        </td>
+        <td style={{ padding: '8px 10px' }}>
+          <TargetStanceSelect
+            symbol={target.symbol}
+            stance={(target as { stance?: string }).stance}
+            onSaved={() => onSaved()}
           />
         </td>
         <td style={{ padding: '8px 10px' }}>{target.delta_min} ~ {target.delta_max}</td>
@@ -5007,6 +5003,14 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
             onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
             title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
         </label>
+      </td>
+      <td style={{ padding: '8px 10px' }}>
+        <select value={form.stance} style={inputStyle}
+          title="只收租=接货当预警、更早腾仓；允许接货=floor 是愿接股东价，临期 ITM 走准备接货"
+          onChange={e => setForm(f => ({ ...f, stance: e.target.value }))}>
+          <option value="acquire">允许接货</option>
+          <option value="income">只收租</option>
+        </select>
       </td>
       <td style={{ padding: '8px 10px' }}>
         <SelectNum value={form.delta_min} options={DELTA_OPTS} style={inputStyle}
