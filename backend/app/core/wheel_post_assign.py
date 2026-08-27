@@ -34,7 +34,10 @@ def _load_cfg() -> Dict[str, Any]:
 
 def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
     """接货后下一步。时机层按立场分流,不再一律优先挂 CC。"""
-    from app.core.wheel_call_timing import attach_cc_timing, evaluate_cc_timing
+    from app.core.wheel_call_timing import (
+        attach_cc_timing, evaluate_cc_timing,
+        ensure_sell_above_column, get_target_sell_above,
+    )
 
     symbol = cycle.get("symbol")
     shares = float(cycle.get("shares") or 0)
@@ -50,6 +53,7 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
     else:
         notes.append("持股不足 100 股,暂不能标准 CC")
 
+    ensure_sell_above_column()
     target = _target_for(symbol)
     cfg = _load_cfg()
     anchors: Dict[str, Any] = {}
@@ -73,7 +77,9 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         iv_rank = target.get("iv_rank")
 
-    sell_above = target.get("sell_above") or target.get("call_floor") or cb
+    sell_above = get_target_sell_above(symbol) if symbol else None
+    if sell_above is None:
+        sell_above = target.get("sell_above") or target.get("call_floor")
     timing = evaluate_cc_timing(
         stance=target.get("stance") or cycle.get("stance"),
         spot=spot,
