@@ -2,7 +2,7 @@
 from app.core.wheel_call_timing import (
     GRADE_PRIORITY, GRADE_READY, GRADE_SKIP, GRADE_WATCH,
     attach_cc_timing, evaluate_cc_timing, is_holding_call_opp,
-    normalize_stance, split_holding_cc,
+    normalize_stance, split_holding_cc, strike_floor,
 )
 
 
@@ -92,3 +92,19 @@ def test_attach_and_split():
     buckets = split_holding_cc([row])
     assert len(buckets["watch"]) == 1
     assert buckets["priority"] == []
+
+
+def test_strike_floor_uses_sell_above_when_higher():
+    assert strike_floor(100, 120) == 120
+
+
+def test_strike_floor_ignores_none():
+    assert strike_floor(100, None) == 100
+    assert strike_floor(100, 0) == 100
+
+
+def test_strike_floor_is_max_of_cb_and_sell_above():
+    assert strike_floor(100, 80) == 100
+    assert strike_floor(90, 110) == 110
+    assert strike_floor(None, 50) == 50
+    assert strike_floor(None, None) is None

@@ -80,6 +80,73 @@ def strike_floor(cost_basis: Optional[float], sell_above: Optional[float] = None
     return round(max(vals), 2)
 
 
+def _positive_or_none(v) -> Optional[float]:
+    """0/None/非法 = 未设。"""
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_sell_above_column() -> None:
+    """wheel_targets.sell_above: 愿卖价(CC strike 锚). 幂等 ALTER。"""
+    try:
+        from app.data.database import get_db
+        conn = get_db()
+        try:
+            conn.execute("ALTER TABLE wheel_targets ADD COLUMN sell_above REAL")
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
+def get_target_sell_above(symbol: str) -> Optional[float]:
+    """读愿卖价. 兼容遗留 call_floor; 0/None=未设。"""
+    if not symbol:
+        return None
+    ensure_sell_above_column()
+    try:
+        from app.data.database import get_db
+        conn = get_db()
+        try:
+            row = conn.execute(
+                "SELECT * FROM wheel_targets WHERE symbol=?", (symbol,)
+            ).fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            return _positive_or_none(d.get("sell_above")) or _positive_or_none(d.get("call_floor"))
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def set_target_sell_above(symbol: str, value) -> Optional[float]:
+    """写入愿卖价. None/0=清空。"""
+    ensure_sell_above_column()
+    v = _positive_or_none(value)
+    from datetime import datetime
+    from app.data.database import get_db
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE wheel_targets SET sell_above=?, updated_at=? WHERE symbol=?",
+            (v, datetime.now().isoformat(), symbol),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return v
+
+
 def _candidate_ok(
     *,
     min_annualized: Optional[float],
