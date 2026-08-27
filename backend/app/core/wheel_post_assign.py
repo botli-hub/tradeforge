@@ -1,4 +1,4 @@
-"""指派后流程:HOLDING 成本基础 + 首笔 CC 提示。"""
+"""指派后流程:HOLDING 成本基础 + 首笔 CC 提示 + 卖 Call 时机。"""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -11,12 +11,31 @@ def cost_basis_of(cycle: Dict[str, Any]) -> Optional[float]:
     if shares <= 0 or share_cost is None:
         return None
     prem = float(cycle.get("total_premium") or 0)
-    # total_premium 已是净收权利金(美元)
     return round(float(share_cost) - prem / shares, 4)
 
 
+def _target_for(symbol: Optional[str]) -> Dict[str, Any]:
+    if not symbol:
+        return {}
+    try:
+        from app.data import wheel_repository as repo
+        return repo.get_target(symbol) or {}
+    except Exception:
+        return {}
+
+
+def _load_cfg() -> Dict[str, Any]:
+    try:
+        from app.api.leaps import _load_config
+        return _load_config() or {}
+    except Exception:
+        return {}
+
+
 def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
-    """接货后下一步。"""
+    """接货后下一步。时机层按立场分流,不再一律优先挂 CC。"""
+    from app.core.wheel_call_timing import attach_cc_timing, evaluate_cc_timing
+
     symbol = cycle.get("symbol")
     shares = float(cycle.get("shares") or 0)
     cb = cost_basis_of(cycle)
@@ -27,26 +46,49 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
     if cb is not None:
         notes.append(f"有效成本基础 ≈ ${cb:.2f}/股(含权利金摊薄)")
     if contracts >= 1:
-        notes.append(f"可卖约 {contracts} 张 Covered Call")
+        notes.append(f"可挂约 {contracts} 张 Covered Call(参考,非下单)")
     else:
         notes.append("持股不足 100 股,暂不能标准 CC")
 
-    # 轻量 CC 锚点(不拉链)
+    target = _target_for(symbol)
+    cfg = _load_cfg()
     anchors: Dict[str, Any] = {}
+    spot = None
     try:
         from app.core.volatility import get_daily_closes
         closes = get_daily_closes(symbol, limit=5)
         spot = closes[-1] if closes else None
         anchors["spot"] = spot
         if spot and cb:
-            # 建议 strike 不低于 max(成本, spot) 的保守上方
-            floor_cc = max(cb, spot * 0.98)
+            floor_cc = max(cb, float(spot) * 0.98)
             anchors["suggest_strike_floor"] = round(floor_cc, 2)
-            anchors["note"] = "CC strike 建议 ≥ 成本基础,避免锁死亏损卖出"
+            anchors["note"] = "CC strike 锚在成本基础/愿卖价之上"
     except Exception:
         pass
 
-    return {
+    iv_rank = None
+    try:
+        from app.core.wheel_iv_regime import symbol_iv_rank
+        iv_rank = symbol_iv_rank(symbol)
+    except Exception:
+        iv_rank = target.get("iv_rank")
+
+    sell_above = target.get("sell_above") or target.get("call_floor") or cb
+    timing = evaluate_cc_timing(
+        stance=target.get("stance") or cycle.get("stance"),
+        spot=spot,
+        cost_basis=cb,
+        sell_above=sell_above,
+        shares=shares,
+        uncovered_days=cycle.get("uncovered_days"),
+        iv_rank=iv_rank,
+        min_annualized=target.get("min_annualized"),
+        dte_min=target.get("dte_min"),
+        dte_max=target.get("dte_max"),
+        cfg=cfg,
+    )
+
+    hint = {
         "cycle_id": cycle.get("id"),
         "symbol": symbol,
         "status": cycle.get("status"),
@@ -54,23 +96,15 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
         "share_cost": cycle.get("share_cost"),
         "cost_basis": cb,
         "cc_contracts": contracts,
-        "next_step": "SELL_CALL" if contracts >= 1 else "HOLD_OR_BUY_MORE",
-        "next_step_hint": (
-            f"找 Call: strike≥{anchors.get('suggest_strike_floor') or cb or '成本'} · 约{contracts}张"
-            if contracts >= 1
-            else "持股不足一张"
-        ),
         "call_anchors": anchors,
         "notes": notes,
-        "priority": 2 if contracts >= 1 else 5,
-        # 前端一键找 CC 用
-        "suggest_side": "call" if contracts >= 1 else None,
-        "min_call_strike": anchors.get("suggest_strike_floor") or cb,
+        "min_call_strike": timing.get("strike_floor") or anchors.get("suggest_strike_floor") or cb,
     }
+    return attach_cc_timing(hint, timing)
 
 
 def post_assign_queue() -> List[Dict[str, Any]]:
-    """所有 HOLDING 且未挂 CC 的周期 → 待办。"""
+    """所有 HOLDING 且未挂 CC 的周期 → 待办(按 Call 时机分档)。"""
     from app.data import wheel_repository as repo
 
     out: List[Dict[str, Any]] = []
@@ -80,15 +114,9 @@ def post_assign_queue() -> List[Dict[str, Any]]:
         if (c.get("shares") or 0) <= 0:
             continue
         hint = post_assign_hint(c)
-        # 裸奔天数
         uncovered = c.get("uncovered_days")
         if uncovered is not None:
             hint["uncovered_days"] = uncovered
-            if uncovered >= 3:
-                hint["priority"] = 1
-                hint["notes"] = list(hint.get("notes") or []) + [
-                    f"已裸奔 {uncovered} 天,theta 空转"
-                ]
         out.append(hint)
     out.sort(key=lambda x: (x.get("priority") or 9, -(x.get("uncovered_days") or 0)))
     return out
