@@ -1,0 +1,62 @@
+--- a/frontend/src/pages/WheelPage.tsx
++++ b/frontend/src/pages/WheelPage.tsx
+@@ -33,6 +33,7 @@
+   type SemColor,
+ } from '../components/wheel/WheelUi'
+ import ManageDecisionModal from '../components/wheel/ManageDecisionModal'
++import HoldingCcBanner from '../components/wheel/HoldingCcBanner'
+ import { useToast } from '../components/ui/Toast'
+ 
+ /** 离散选项下拉：当前值不在列表里时自动补上，避免丢历史数据 */
+@@ -2499,40 +2500,17 @@
+                   `${e.symbol} ${e.label}${e.days === 0 ? '今' : `${e.days}d`}`).join(' · ')}
+               </div>
+             )}
+-            {(todayBoard?.post_assign?.length || 0) > 0 && (
+-              <div className="banner info" style={{ marginBottom: 10 }}>
+-                <b>指派后 · 待挂 CC（优先处理）</b>
+-                {(todayBoard!.post_assign || []).slice(0, 4).map((p: any) => (
+-                  <div key={String(p.cycle_id)} style={{
+-                    marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8,
+-                    alignItems: 'center', justifyContent: 'space-between',
+-                  }}>
+-                    <div style={{ fontSize: 13 }}>
+-                      <b>{p.symbol}</b> {p.shares}股
+-                      {p.cost_basis != null ? ` · CB≈$${Number(p.cost_basis).toFixed(2)}` : ''}
+-                      {p.min_call_strike != null ? ` · Call strike≥$${Number(p.min_call_strike).toFixed(2)}` : ''}
+-                      {p.uncovered_days != null ? ` · 裸奔${p.uncovered_days}天` : ''}
+-                      {p.cc_contracts != null && p.cc_contracts > 0 ? ` · ~${p.cc_contracts}张` : ''}
+-                    </div>
+-                    <div style={{ display: 'flex', gap: 6 }}>
+-                      {p.cc_contracts >= 1 && (
+-                        <button type="button" className="btn btn-primary btn-sm"
+-                          disabled={suggestLoading}
+-                          onClick={() => findCallAfterAssign({
+-                            symbol: p.symbol,
+-                            cycle_id: p.cycle_id,
+-                            cost_basis: p.cost_basis,
+-                            min_call_strike: p.min_call_strike,
+-                            cc_contracts: p.cc_contracts,
+-                          })}>
+-                          找 Call
+-                        </button>
+-                      )}
+-                    </div>
+-                  </div>
+-                ))}
+-              </div>
+-            )}
++            <HoldingCcBanner
++              rows={((todayBoard as any)?.holding_cc || todayBoard?.post_assign || []) as any[]}
++              loading={suggestLoading}
++              onFindCall={(p) => findCallAfterAssign({
++                symbol: p.symbol,
++                cycle_id: p.cycle_id,
++                cost_basis: p.cost_basis,
++                min_call_strike: p.min_call_strike,
++                cc_contracts: p.cc_contracts,
++              })}
++            />
+             {/* 可腾仓队列 */}
+             {((todayBoard as any)?.capital_release?.n || 0) > 0 && (
+               <div className="banner warn" style={{ marginBottom: 10 }}>

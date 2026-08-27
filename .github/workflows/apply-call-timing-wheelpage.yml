@@ -1,0 +1,34 @@
+name: apply-call-timing-wheelpage
+on:
+  push:
+    branches: [feat/call-timing]
+    paths:
+      - frontend/patches/pr-call-timing-wheelpage.patch
+      - .github/workflows/apply-call-timing-wheelpage.yml
+      - frontend/src/components/wheel/HoldingCcBanner.tsx
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/call-timing
+      - name: Apply WheelPage patch
+        run: |
+          set -e
+          patch -p1 < frontend/patches/pr-call-timing-wheelpage.patch
+          grep -q HoldingCcBanner frontend/src/pages/WheelPage.tsx
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/pages/WheelPage.tsx
+          if git diff --staged --quiet; then
+            echo "WheelPage already patched"
+          else
+            git commit -m "feat(wheel): 今日页持股待挂 CC 按时机分档 (WheelPage)"
+            git push
+          fi
