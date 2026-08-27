@@ -1,0 +1,36 @@
+name: apply-pr5-wheelpage-patch
+on:
+  push:
+    branches: [feat/today-ledgers-and-stance-v2]
+    paths:
+      - frontend/patches/pr5-today-books.patch
+      - .github/workflows/apply-pr5-wheelpage-patch.yml
+      - frontend/src/components/wheel/MustManageP0.tsx
+      - frontend/src/components/wheel/TargetStanceSelect.tsx
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/today-ledgers-and-stance-v2
+      - name: Apply WheelPage patch
+        run: |
+          set -e
+          patch -p1 < frontend/patches/pr5-today-books.patch
+          grep -q MustManageP0 frontend/src/pages/WheelPage.tsx
+          grep -q TargetStanceSelect frontend/src/pages/WheelPage.tsx
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/pages/WheelPage.tsx
+          if git diff --staged --quiet; then
+            echo "WheelPage already patched"
+          else
+            git commit -m "feat(wheel): P0 两本账 + 标的表立场 (WheelPage)"
+            git push
+          fi
