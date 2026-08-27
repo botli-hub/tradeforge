@@ -284,14 +284,18 @@ def build_today(
         from app.core.wheel_opportunities import build_opportunities
         data = build_opportunities(host, port, refresh_pool=False, run_pool_if_empty=False)
         opps_summary = data.get("summary") or {}
-        primary = (data.get("primary_picks") or [])[:5]
-        # 可执行过滤标注
+        picks = list(data.get("primary_picks") or [])
+        # CALL 不进优先开仓:归持股待挂 CC 档
+        primary = [x for x in picks if (x.get("side") or "PUT").upper() != "CALL"][:5]
         for p in primary:
             p["executable"] = _is_executable_opp(p, opps_summary)
     except Exception as e:
         opps_summary = {"error": str(e)}
 
     post_q = post_assign_queue()
+    from app.core.wheel_call_timing import split_holding_cc
+    cc_buckets = split_holding_cc(post_q)
+    holding_cc_hot = cc_buckets["priority"] + cc_buckets["ready"]
     events = event_calendar(21)
     conc = concentration_warnings(cfg)
     bp = try_buying_power()
@@ -349,6 +353,8 @@ def build_today(
         "must_count": len(must),
         "primary_opens": primary,
         "post_assign": post_q[:10],
+        "holding_cc": post_q[:15],
+        "holding_cc_hot": holding_cc_hot[:10],
         "events": events[:20],
         "concentration": conc,
         "capital": capital,
@@ -367,7 +373,7 @@ def build_today(
             "actionable": opps_summary.get("actionable_count") or opps_summary.get("actionable"),
             "put_blocked": capital.get("portfolio_put_blocked"),
         },
-        "headline": _headline(must, post_q, primary, capital, stale, iv_regime, capital_release),
+        "headline": _headline(must, post_q, primary, capital, stale, iv_regime, capital_release, holding_cc_hot),
     }
 
 
@@ -388,7 +394,7 @@ def _is_executable_opp(p: Dict[str, Any], summary: Dict[str, Any]) -> bool:
     return True
 
 
-def _headline(must, post_q, primary, capital, stale, iv_regime=None, capital_release=None) -> str:
+def _headline(must, post_q, primary, capital, stale, iv_regime=None, capital_release=None, holding_cc_hot=None) -> str:
     parts = []
     if stale:
         parts.append("行情缓存")
@@ -396,8 +402,12 @@ def _headline(must, post_q, primary, capital, stale, iv_regime=None, capital_rel
         parts.append(str(iv_regime.get("label")))
     if must:
         parts.append(f"{len(must)}项必管")
-    if post_q:
-        parts.append(f"{len(post_q)}笔待挂CC")
+    hot = holding_cc_hot if holding_cc_hot is not None else [x for x in (post_q or []) if x.get("timing_ready")]
+    wait_n = len(post_q or []) - len(hot)
+    if hot:
+        parts.append(f"{len(hot)}笔待挂CC时机")
+    elif wait_n:
+        parts.append(f"{wait_n}笔持股待时机")
     cr_n = (capital_release or {}).get("n") or 0
     if cr_n:
         parts.append(f"{cr_n}腿可腾")
