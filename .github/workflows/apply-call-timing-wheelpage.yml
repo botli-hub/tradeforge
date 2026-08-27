@@ -6,6 +6,7 @@ on:
       - frontend/patches/pr-call-timing-wheelpage.patch
       - .github/workflows/apply-call-timing-wheelpage.yml
       - frontend/src/components/wheel/HoldingCcBanner.tsx
+      - frontend/src/components/wheel/TargetSellAbove.tsx
   workflow_dispatch:
 jobs:
   apply:
@@ -21,6 +22,7 @@ jobs:
           set -e
           patch -p1 < frontend/patches/pr-call-timing-wheelpage.patch
           grep -q HoldingCcBanner frontend/src/pages/WheelPage.tsx
+          grep -q TargetSellAbove frontend/src/pages/WheelPage.tsx
       - name: Commit if changed
         run: |
           git config user.name "github-actions[bot]"
@@ -29,6 +31,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "WheelPage already patched"
           else
-            git commit -m "feat(wheel): 今日页持股待挂 CC 按时机分档 (WheelPage)"
+            git commit -m "feat(wheel): 愿卖价列 + P1 去重 Call (WheelPage)"
             git push
           fi
