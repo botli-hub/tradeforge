@@ -10,7 +10,7 @@ ACTION_REPLACE = "REPLACE"
 ACTION_PREPARE_ASSIGN = "PREPARE_ASSIGN"
 ACTION_NONE = "NONE"
 
-# ── 量化默认(设置页 wheel_position 可覆盖) ─────────────────────────────────
+# ── 量化默认(设置页 wheel_position 可覆盖) ──────────────────────────────────
 # 单位: 百分比用「点」(50=50%), DTE/美元/小数 delta 见注释
 POSITION_QUANT: Dict[str, float] = {
     "profit_target_pct": 50.0,          # 硬止盈
