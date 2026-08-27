@@ -19,17 +19,6 @@ ACTION_REPLACE = "REPLACE"
 ACTION_PREPARE_ASSIGN = "PREPARE_ASSIGN"
 ACTION_NONE = "NONE"
 
-STANCE_INCOME = "income"
-STANCE_ACQUIRE = "acquire"
-
-
-def normalize_stance(raw: Any) -> str:
-    """标的立场: income=只收租 / acquire=允许接货. 缺省 acquire(兼容旧标的)."""
-    s = str(raw or "").strip().lower()
-    if s in ("income", "只收租", "rent", "premium"):
-        return STANCE_INCOME
-    return STANCE_ACQUIRE
-
 # ── 量化默认(设置页 wheel_position 可覆盖) ──────────────────────────────────
 # 单位: 百分比用「点」(50=50%), DTE/美元/小数 delta 见注释
 POSITION_QUANT: Dict[str, float] = {
@@ -58,3 +47,49 @@ POSITION_QUANT: Dict[str, float] = {
     # would_open 薄垫 caution
     "open_caution_buffer_pct": 2.0,
 }
+
+
+def _cfg_num(cfg: Dict[str, Any], key: str, default: float) -> float:
+    try:
+        return float(cfg.get(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def merge_pos_quant(pos_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
+    """合并量化默认与用户配置。"""
+    out = dict(POSITION_QUANT)
+    if pos_cfg:
+        for k, v in pos_cfg.items():
+            if k in out or k in (
+                "profit_target_pct", "soft_profit_pct", "hard_roll_dte",
+                "gamma_warn_dte", "hold_theta_min_profit_pct", "hold_theta_max_dte",
+                "hold_theta_min_remaining_ann", "thin_otm_buffer_pct",
+                "max_hold_profit_pct", "min_close_notional", "shallow_itm_pct",
+                "deep_itm_moneyness_pct", "capital_tight_util_pct",
+                "dividend_warn_days", "threat_otm_buffer_pct",
+                "deep_itm_delta", "shallow_itm_delta_max",
+                "early_assign_delta_deep", "early_assign_delta_div",
+                "early_assign_delta_shallow_div", "early_assign_delta_otm_div",
+                "open_caution_buffer_pct",
+            ):
+                try:
+                    out[k] = float(v)
+                except (TypeError, ValueError):
+                    pass
+    return out
+
+
+def remaining_annualized(close_px: float, strike: float, dte: Optional[int]) -> Optional[float]:
+    if not strike or not dte or dte <= 0 or close_px <= 0:
+        return None
+    return round(close_px / strike * 365 / dte * 100, 2)
+
+
+def residual_floor(min_annualized: float, pos_cfg: Optional[Dict[str, Any]] = None) -> float:
+    """剩余年化「仍值得拿」的下限。"""
+    q = merge_pos_quant(pos_cfg)
+    floor = float(q["hold_theta_min_remaining_ann"])
+    if min_annualized and min_annualized > 0:
+        floor = min(floor, max(8.0, min_annualized * 0.5))
+    return floor
