@@ -33,7 +33,7 @@
 
 | 动作 | 含义 |
 |------|------|
-| `CLOSE` | 买回止盈 / 纪律否决后不硬扛 |
+| `CLOSE` | 买回止盈 / 纪律否决后不硬扞 |
 | `REPLACE` | 软止盈或低效 → 腾仓 |
 | `ROLL` / `ROLL_ADJUST` | 展期（后者调 strike） |
 | `HOLD_THETA` | 高浮盈 OTM 继续收租 |
@@ -234,7 +234,7 @@ python3 scripts/health_guard.py ensure   # 异常时重启前后端
 - 期权与在场体检强依赖 **OpenD 已登录运行**  
 - 中国大陆访问 Telegram 需在设置中填本地代理  
 - 本项目是**决策与台账工具**，默认不自动向券商下单；实盘下单需自行连接交易并确认  
-- 旧版 PRD/TECH 文档可能滞后，**以本 README 与代码为准**
+- 产品说明以本 README 与代码为准（旧 PRD/TECH 已移除）。
 
 ---
 
