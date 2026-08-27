@@ -186,7 +186,7 @@ def concentration_warnings(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, An
     for p in stacked:
         if p.get("both_csp"):
             warns.append(f"双 Put 高相关 {p['a']}/{p['b']} ρ={p['corr']}")
-        for s in sector_heavy:
+    for s in sector_heavy:
         warns.append(f"板块集中 {s['sector']}: {','.join(s['symbols'][:5])}")
 
     return {
