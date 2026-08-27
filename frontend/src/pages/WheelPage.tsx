@@ -34,6 +34,7 @@ import {
 } from '../components/wheel/WheelUi'
 import ManageDecisionModal from '../components/wheel/ManageDecisionModal'
 import HoldingCcBanner from '../components/wheel/HoldingCcBanner'
+import TargetSellAbove from '../components/wheel/TargetSellAbove'
 import { useToast } from '../components/ui/Toast'
 
 /** 离散选项下拉：当前值不在列表里时自动补上，避免丢历史数据 */
@@ -2143,7 +2144,7 @@ export default function WheelPage() {
       if (tab !== 'opps' && tab !== 'home') return
       const rows = tab === 'opps'
         ? pagedOppRows
-        : allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT'))
+        : allOppRows.filter(r => r.kind === 'OPEN' && r.side !== 'CALL' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT'))
       if (e.key === 'j' || e.key === 'J') {
         e.preventDefault()
         setRowCursor(c => {
@@ -2600,11 +2601,18 @@ export default function WheelPage() {
                     if (putBlocked) {
                       return <div className="home-todo-empty">压力解除前不推新 Put · 可看 CC 或触线</div>
                     }
-                    const openPick = (serverOpps?.primary_picks || [])
-                      .filter(p => p.actionable && !(putBlocked && p.side === 'PUT'))
+                    const noCall = (s?: string) => (s || 'PUT').toUpperCase() !== 'CALL'
+                    const todayOpens = ((todayBoard as any)?.primary_opens || []).filter((p: any) => noCall(p.side))
+                    const fromToday = todayOpens[0]
+                      ? (allOppRows.find(r => r.kind === 'OPEN' && noCall(r.side) && r.tradeable && r.symbol === todayOpens[0].symbol)
+                        || serverOppToRow(todayOpens[0] as any))
+                      : null
+                    const openPick = fromToday
+                      || (serverOpps?.primary_picks || [])
+                      .filter(p => p.actionable && noCall(p.side) && !(putBlocked && p.side === 'PUT'))
                       .map(serverOppToRow)[0]
-                      || allOppRows.find(r => r.kind === 'OPEN' && r.is_top_pick && r.tradeable)
-                      || allOppRows.find(r => r.kind === 'OPEN' && (r.trade_tier === 'PRIORITY' || r.trade_tier === 'QUEUE') && r.tradeable)
+                      || allOppRows.find(r => r.kind === 'OPEN' && noCall(r.side) && r.is_top_pick && r.tradeable)
+                      || allOppRows.find(r => r.kind === 'OPEN' && noCall(r.side) && (r.trade_tier === 'PRIORITY' || r.trade_tier === 'QUEUE') && r.tradeable)
                     if (!openPick) {
                       return (
                         <div className="home-todo-empty">
@@ -2716,7 +2724,7 @@ export default function WheelPage() {
               <div className="panel-title" style={{ margin: 0 }}>优先可下单</div>
               <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('PRIORITY') }}>更多</button>
             </div>
-            {allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).length === 0 ? (
+            {allOppRows.filter(r => r.kind === 'OPEN' && r.side !== 'CALL' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).length === 0 ? (
               <EmptyState
                 title="暂无优先档"
                 description="需要可交易高分 + 触线确认。可先扫描，或查看可排单/观察。"
@@ -2727,7 +2735,7 @@ export default function WheelPage() {
                   onClick={() => { setTab('opps'); setOppCatFilter('QUEUE') }}>看可排单</button>
               </EmptyState>
             ) : (
-              allOppRows.filter(r => r.kind === 'OPEN' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).map((r, i) => {
+              allOppRows.filter(r => r.kind === 'OPEN' && r.side !== 'CALL' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).map((r, i) => {
                 const skHome = signalKindLabel(resolveOppSignalKind(r))
                 return (
                 <div key={r.id} className="opp-row" style={i === rowCursor && tab === 'home' ? { background: 'var(--green-dim)' } : undefined}>
@@ -4318,15 +4326,15 @@ export default function WheelPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '现价 · 愿接 · 参考', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '现价 · 愿接 · 参考', '愿卖价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
-                    title={h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
+                    title={h === '愿卖价' ? 'CC strike 锚,与 Put 愿接价分开' : h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
                   >{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {targets.length === 0 && <tr><td colSpan={8} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
+              {targets.length === 0 && <tr><td colSpan={9} style={{ padding: '20px 10px', color: 'var(--text-secondary)', textAlign: 'center' }}>暂无标的,从上方添加</td></tr>}
               {targets.map(t => (
                 <TargetRow key={t.symbol} target={t} onSaved={loadAll}
                   onToggle={() => handleToggleTarget(t)} onDelete={() => handleDeleteTarget(t.symbol)} />
@@ -4948,6 +4956,13 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
             suggestedDelta={target.suggested_floor_delta}
           />
         </td>
+        <td style={{ padding: '8px 10px' }}>
+          <TargetSellAbove
+            symbol={target.symbol}
+            value={(target as { sell_above?: number | null }).sell_above}
+            onSaved={() => onSaved()}
+          />
+        </td>
         <td style={{ padding: '8px 10px' }}>{target.delta_min} ~ {target.delta_max}</td>
         <td style={{ padding: '8px 10px' }}>{target.dte_min} ~ {target.dte_max} 天</td>
         <td style={{ padding: '8px 10px' }}>{target.min_annualized}</td>
@@ -4985,6 +5000,13 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
             onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
             title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
         </label>
+      </td>
+      <td style={{ padding: '8px 10px' }}>
+        <TargetSellAbove
+          symbol={target.symbol}
+          value={(target as { sell_above?: number | null }).sell_above}
+          onSaved={() => onSaved()}
+        />
       </td>
       <td style={{ padding: '8px 10px' }}>
         <SelectNum value={form.delta_min} options={DELTA_OPTS} style={inputStyle}
