@@ -358,11 +358,11 @@ def decide_position(
         secondary_hint = f"若续做:Roll到 floor≤{floor_price:g} 再开"
         reasons.append(f"愿接{floor_price:g} < strike{strike:g},指派不符预设")
     elif underwater and not itm and would_open == "no":
-        # 量化:纪律不会新开 → 不沉没成本硬抗,主动 CLOSE
+        # 量化:纪律不会新开 → 不沉没成本硬扛,主动 CLOSE
         branch = "close_discipline_no"
         code, priority = ACTION_CLOSE, 3
         prefer_card = "no_roll"
-        hint = "纪律否决新开:优先买回/Roll,勿沉没成本硬抗"
+        hint = "纪律否决新开:优先买回/Roll,勿沉没成本硬扛"
         secondary_hint = (
             "趋势/规则已否决同类新开 — 持有=主动偏离"
             if side == "PUT"
