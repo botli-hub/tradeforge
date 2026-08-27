@@ -43,7 +43,6 @@ def test_hold_for_theta():
 
 def test_hold_theta_otm_dte14_high_remaining():
     """ARM CC 类:浮盈>50% 但 DTE14 OTM 且剩余年化仍高 → 吃 θ,不硬止盈"""
-    # rem_ann = 4.9/340*365/14*100 ≈ 37.6
     r = decide_position(
         _item(
             side="CALL", strike=340.0, spot=300.0, dte=14, itm=False,
@@ -71,7 +70,6 @@ def test_healthy_otm_near_dte_no_force_roll():
         _item(dte=18, profit_pct=20.0, buyback_ask=2.0, current_price=2.0, strike=100.0, spot=110.0),
         15, 50,
     )
-    # rem ≈ 2/100*365/18*100 ≈ 40.5
     assert r["action_code"] in ("NONE", "HOLD_THETA")
     assert not (r.get("roll_21dte") and r["action_code"] == "ROLL")
 
@@ -90,7 +88,6 @@ def test_max_hold_profit_caps_theta():
 
 
 def test_fee_trap_hold_theta():
-    # 买回 0.05 * 100 = $5 < min_close_notional 20, 高浮盈 OTM
     r = decide_position(
         _item(dte=20, profit_pct=80.0, buyback_ask=0.05, current_price=0.05),
         15, 50,
@@ -115,12 +112,10 @@ def test_pure_low_yield():
 
 
 def test_remaining_ann_uses_buyback_ask():
-    # close 0.5 vs last 2.0 — 应用 0.5 算剩余年化
     r = decide_position(
         _item(current_price=2.0, buyback_ask=0.5, dte=30, profit_pct=20.0),
         15, 50,
     )
-    # 0.5/100*365/30*100 ≈ 6.08
     assert r["remaining_annualized"] is not None
     assert abs(r["remaining_annualized"] - 6.08) < 0.1
     assert r["low_yield"]
@@ -146,7 +141,6 @@ def test_cc_dividend_early_assign():
 
 
 def test_shallow_itm_put_observe():
-    # 价内 0.5%, delta 0.4 → 浅 ITM, 无其它触发
     r = decide_position(
         _item(side="PUT", strike=100, spot=99.5, itm=True, delta=0.4, dte=30, profit_pct=10.0,
               buyback_ask=2.0, current_price=2.0),
@@ -157,8 +151,6 @@ def test_shallow_itm_put_observe():
 
 
 def test_21dte_roll_out():
-    # 剩余年化偏低 + 未达软止盈 → 21DTE Roll(健康 OTM 不再机械 roll)
-    # rem = 0.4/100*365/18*100 ≈ 8.1 < 15; profit 10 < soft 30
     r = decide_position(_item(dte=18, profit_pct=10.0, buyback_ask=0.4, current_price=0.4), 15, 50)
     assert r["roll_21dte"]
     assert r["action_code"] == "ROLL"
@@ -167,7 +159,6 @@ def test_21dte_roll_out():
 
 def test_underwater_otm_not_healthy():
     """浮亏 OTM:不得标成健康收租/吃θ;剩余权利金高≠值得拿"""
-    # 开 3.0 买回 4.0 → 浮亏; rem 仍可能很高
     r = decide_position(
         _item(
             side="PUT", strike=240.0, spot=245.0, dte=30, itm=False,
@@ -181,7 +172,7 @@ def test_underwater_otm_not_healthy():
     assert r["action_code"] == "NONE"
     assert "浮亏" in (r["action_hint"] or "")
     assert r["decision_confidence"] is not None
-    assert r["decision_confidence"] <= 60  # 条件持有,置信偏低
+    assert r["decision_confidence"] <= 60
 
 
 def test_underwater_strike_above_floor_close():
@@ -202,16 +193,14 @@ def test_underwater_strike_above_floor_close():
 
 def test_underwater_threatened_rolls():
     """浮亏 + 临近 DTE + 安全垫薄 → Roll 防守,不是放任"""
-    # buffer = (245-240)/245 ≈ 2% < 5%; dte 18 ≤ 21
     r = decide_position(
         _item(
             side="PUT", strike=240.0, spot=245.0, dte=18, itm=False,
             profit_pct=-20.0, buyback_ask=3.0, current_price=3.0,
-            floor_price=250.0,  # strike 在底线内,不走 strike_above_floor
+            floor_price=250.0,
         ),
         15, 50,
     )
-    # floor 250 > strike 240 → not strike_above_floor
     assert not r["strike_above_floor"]
     assert r["decision_tree"]["threatened_underwater"]
     assert r["action_code"] == "ROLL"
@@ -258,7 +247,7 @@ def test_capital_tight_boosts_replace_priority():
         15, 50,
     )
     assert r["action_code"] == "REPLACE"
-    assert r["action_priority"] == 3  # 4 - 1
+    assert r["action_priority"] == 3
     assert r["capital_tight"]
     assert any("资金" in x for x in r["reasons"])
     assert "资金紧" in (r["action_hint"] or "")
@@ -268,13 +257,13 @@ def test_capital_tight_soft_replace():
     r = decide_position(
         _item(
             current_price=0.3, buyback_ask=0.3, profit_pct=40.0, dte=35,
-            capital_util_pct=80.0,  # >= 75 → tight
+            capital_util_pct=80.0,
         ),
         15, 50,
     )
     assert r["action_code"] == "REPLACE"
     assert r["capital_tight"]
-    assert r["action_priority"] == 2  # soft was 3, -1
+    assert r["action_priority"] == 2
 
 
 def test_healthy_otm_capital_tight_no_force_close():
@@ -286,7 +275,6 @@ def test_healthy_otm_capital_tight_no_force_close():
         ),
         15, 50,
     )
-    # rem ≈ 1.6/100*365/35 ≈ 16.7 > 15
     assert r["action_code"] == "NONE"
     assert r["action_hint"] is None or "换仓" not in (r["action_hint"] or "")
 
@@ -380,11 +368,73 @@ def test_would_open_unknown_no_floor():
         _item(
             side="PUT", strike=100, spot=110, dte=35, itm=False,
             profit_pct=30.0, buyback_ask=1.6,
-            # no floor_price
         ),
         15, 50,
     )
     assert r["would_open_today"] == "unknown"
+
+
+def test_acquire_hold_theta_attaches_books():
+    """acquire + 高浮盈吃θ:仍 HOLD_THETA(旧行为),但挂两本账,不对账成绿灯."""
+    r = decide_position(
+        _item(
+            dte=5, profit_pct=55.0, current_price=0.4, buyback_ask=0.4,
+            expiring=True, stance="acquire",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "HOLD_THETA"
+    assert r["decision_tree"]["hold_for_theta"]
+    books = r.get("books")
+    assert books is not None
+    assert books["seller"]["premium_captured_pct"] == 55.0
+    assert books["owner"]["stance"] == "acquire"
+    assert "strike" in (books["owner"].get("assign_means") or "")
+    assert "浮盈对账" in r["reasons"]
+
+
+def test_income_high_profit_skips_hold_theta():
+    """只收租 + 同样高浮盈:不走 HOLD_THETA,落到 CLOSE/REPLACE 更早腾仓."""
+    r = decide_position(
+        _item(
+            dte=5, profit_pct=55.0, current_price=0.4, buyback_ask=0.4,
+            expiring=True, stance="income",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] != "HOLD_THETA"
+    assert r["action_code"] in ("CLOSE", "REPLACE")
+    assert not r["decision_tree"]["hold_for_theta"]
+
+
+def test_income_expiring_itm_put_not_prepare_assign():
+    """只收租 + 临期 ITM PUT:不是准备接货成功路径."""
+    r = decide_position(
+        _item(
+            side="PUT", itm=True, delta=0.45, spot=99, dte=5, expiring=True,
+            profit_pct=-10.0, stance="income",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] != "PREPARE_ASSIGN"
+    assert r["action_code"] in ("ROLL_ADJUST", "CLOSE")
+    assert "只收租" in (r["action_hint"] or "")
+    cl = r.get("assign_checklist") or {}
+    notes = " ".join(cl.get("notes") or [])
+    assert "只收租" in notes or "偏离" in notes
+
+
+def test_acquire_expiring_itm_put_prepare_assign():
+    """允许接货 + 临期 ITM PUT:仍走 PREPARE_ASSIGN."""
+    r = decide_position(
+        _item(
+            side="PUT", itm=True, delta=0.45, spot=99, dte=5, expiring=True,
+            profit_pct=-10.0, stance="acquire",
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "PREPARE_ASSIGN"
+    assert "接货" in (r["action_hint"] or "")
 
 
 def test_floor_stance_no_heavy_penalty_for_floor_above_spot():
