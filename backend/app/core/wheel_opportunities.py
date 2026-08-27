@@ -610,6 +610,8 @@ def build_opportunities(
         }
 
     items = [_fill_from_code(x) for x in merged.values()]
+    from app.core.wheel_call_timing import is_holding_call_opp
+    items = [x for x in items if is_holding_call_opp(x)]
 
     # 同标的+同方向:仅展示最优 1 条(双满足/高分优先),其余折叠进 siblings
     # 先排序再折叠
