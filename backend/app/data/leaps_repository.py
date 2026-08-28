@@ -76,51 +76,66 @@ def update_watchlist_item(symbol: str, **kwargs):
         conn.close()
 
 
-# ── 期权价格缓存 ──────────────────────────────────────────────────────────────
+# ── 期权价格缓存（按 timeframe 分桶: 1d Put / 1h Call）────────────────────────
 
-def get_option_price_history(contract_code: str, limit: int = 250) -> List[Dict[str, Any]]:
+def _tf(timeframe: Optional[str] = None) -> str:
+    s = str(timeframe or "1d").strip().lower()
+    if s in ("1h", "60m", "k_60m", "hour", "hourly", "h"):
+        return "1h"
+    return "1d"
+
+
+def get_option_price_history(contract_code: str, limit: int = 250,
+                             timeframe: Optional[str] = None) -> List[Dict[str, Any]]:
+    tf = _tf(timeframe)
     conn = get_db()
     try:
         rows = conn.execute(
             """
-            SELECT date, open, high, low, close, volume, iv
+            SELECT date, open, high, low, close, volume, iv, timeframe
             FROM leaps_option_price_cache
-            WHERE contract_code = ?
+            WHERE contract_code = ? AND COALESCE(timeframe, '1d') = ?
             ORDER BY date DESC
             LIMIT ?
             """,
-            (contract_code, limit),
+            (contract_code, tf, limit),
         ).fetchall()
         return [dict(r) for r in reversed(rows)]
     finally:
         conn.close()
 
 
-def get_latest_cached_date(contract_code: str) -> Optional[str]:
+def get_latest_cached_date(contract_code: str,
+                           timeframe: Optional[str] = None) -> Optional[str]:
+    tf = _tf(timeframe)
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT MAX(date) AS d FROM leaps_option_price_cache WHERE contract_code = ?",
-            (contract_code,),
+            """SELECT MAX(date) AS d FROM leaps_option_price_cache
+               WHERE contract_code = ? AND COALESCE(timeframe, '1d') = ?""",
+            (contract_code, tf),
         ).fetchone()
         return row["d"] if row else None
     finally:
         conn.close()
 
 
-def save_option_prices(contract_code: str, bars: List[Dict[str, Any]]):
-    """bars 中每项含 date/open/high/low/close/volume/iv(可为 None)"""
+def save_option_prices(contract_code: str, bars: List[Dict[str, Any]],
+                       timeframe: Optional[str] = None):
+    """bars 中每项含 date/open/high/low/close/volume/iv(可为 None)。
+    主键 (contract_code, timeframe, date)：1h 与日K 不互相覆盖。"""
     if not bars:
         return
+    tf = _tf(timeframe)
     conn = get_db()
     now = _now_iso()
     try:
         conn.executemany(
             """
             INSERT INTO leaps_option_price_cache
-                (contract_code, date, open, high, low, close, volume, iv, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(contract_code, date) DO UPDATE SET
+                (contract_code, timeframe, date, open, high, low, close, volume, iv, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(contract_code, timeframe, date) DO UPDATE SET
                 open = excluded.open, high = excluded.high,
                 low = excluded.low, close = excluded.close,
                 volume = excluded.volume,
@@ -128,7 +143,7 @@ def save_option_prices(contract_code: str, bars: List[Dict[str, Any]]):
             """,
             [
                 (
-                    contract_code,
+                    contract_code, tf,
                     b["date"], b.get("open"), b.get("high"),
                     b.get("low"), b.get("close"), b.get("volume"),
                     b.get("iv"), now,
@@ -191,25 +206,27 @@ def log_signal(
     floor_price: float,
     suggestions: Optional[List[Dict]] = None,
     is_intraday: bool = False,
+    timeframe: Optional[str] = None,
 ) -> str:
     signal_id = str(uuid.uuid4())
     conn = get_db()
     now = _now_iso()
+    tf = _tf(timeframe)
     try:
         conn.execute(
             """
             INSERT INTO leaps_signals
                 (id, symbol, contract_code, signal_level, trigger_price,
                  ema_value, ema_type, iv_rank, underlying_price,
-                 floor_price, suggestions, is_intraday, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 floor_price, suggestions, is_intraday, created_at, timeframe)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 signal_id, symbol, contract_code, signal_level,
                 trigger_price, ema_value, ema_type, iv_rank,
                 underlying_price, floor_price,
                 json.dumps(suggestions or [], ensure_ascii=False),
-                1 if is_intraday else 0, now,
+                1 if is_intraday else 0, now, tf,
             ),
         )
         conn.commit()
@@ -259,20 +276,22 @@ def count_symbol_signals_30d(symbol: str) -> int:
 # ── Wheel 开仓时机历史(按合约去重合并)────────────────────────────────────────
 
 def upsert_timing_history(sig) -> None:
-    """sig: LeapsSignal(dataclass)。同合约已存在则更新最新数据并累计次数"""
+    """sig: LeapsSignal(dataclass)。按 (contract_code, timeframe) 去重。
+    Put 日K 与 Call 1h 同一合约代码也不会互相覆盖。"""
     side = "CALL" if "CALL" in (sig.signal_level or "") else "PUT"
+    tf = _tf(getattr(sig, "timeframe", None) or ("1h" if side == "CALL" else "1d"))
     now = _now_iso()
     conn = get_db()
     try:
         conn.execute(
             """
             INSERT INTO wheel_timing_history
-                (contract_code, symbol, side, strike, expiry, ema_type, ema_value,
+                (contract_code, timeframe, symbol, side, strike, expiry, ema_type, ema_value,
                  trigger_price, iv_rank, underlying_price,
                  delta, bid, annualized, dte, below_floor,
                  times_triggered, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(contract_code) DO UPDATE SET
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(contract_code, timeframe) DO UPDATE SET
                 strike = excluded.strike, expiry = excluded.expiry,
                 ema_type = excluded.ema_type, ema_value = excluded.ema_value,
                 trigger_price = excluded.trigger_price, iv_rank = excluded.iv_rank,
@@ -283,7 +302,7 @@ def upsert_timing_history(sig) -> None:
                 times_triggered = wheel_timing_history.times_triggered + 1,
                 last_seen = excluded.last_seen
             """,
-            (sig.contract_code, sig.symbol, side, sig.strike, sig.expiry,
+            (sig.contract_code, tf, sig.symbol, side, sig.strike, sig.expiry,
              sig.ema_type, sig.ema_value, sig.trigger_price, sig.iv_rank,
              sig.underlying_price,
              getattr(sig, "delta", None), getattr(sig, "bid", None),
@@ -335,22 +354,25 @@ def is_contract_in_cooldown(contract_code: str) -> bool:
         conn.close()
 
 
-def set_contract_cooldown(contract_code: str, symbol: str, trading_days: int = 5):
-    """冷却 N 个自然日（近似交易日，取 7 日含周末）"""
+def set_contract_cooldown(contract_code: str, symbol: str, trading_days: int = 5,
+                          timeframe: Optional[str] = None):
+    """冷却 N 个自然日（近似交易日，取 7 日含周末）。timeframe 仅记录。"""
     calendar_days = int(trading_days * 1.4)
     cooldown_until = (datetime.now() + timedelta(days=calendar_days)).isoformat()
     conn = get_db()
     now = _now_iso()
+    tf = _tf(timeframe)
     try:
         conn.execute(
             """
-            INSERT INTO leaps_cooldowns (contract_code, symbol, cooldown_until, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO leaps_cooldowns (contract_code, symbol, cooldown_until, created_at, updated_at, timeframe)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(contract_code) DO UPDATE SET
                 cooldown_until = excluded.cooldown_until,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                timeframe = excluded.timeframe
             """,
-            (contract_code, symbol, cooldown_until, now, now),
+            (contract_code, symbol, cooldown_until, now, now, tf),
         )
         conn.commit()
     finally:
