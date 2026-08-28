@@ -1,10 +1,14 @@
-/** 今日页资金条:利用率 / 闲钱 / 净值 / 压力,与必须处理、待挂 CC、优先开仓分开。 */
+/** 今日页资金条:活权益(现金+持股+期权盯市) / 闲钱 / 利用率,与必须处理、待挂 CC、优先开仓分开。 */
 import { fmt, fmtMoney } from './WheelUi'
 
 type Capital = {
   utilization_pct?: number | null
   idle_cash?: number | null
   equity?: number | null
+  cash?: number | null
+  stock_mv?: number | null
+  option_mtm?: number | null
+  starting_cash?: number | null
   capital_tight?: boolean
   portfolio_put_blocked?: boolean
   buying_power?: number | null
@@ -36,28 +40,31 @@ export default function TodayCapitalBar({
     <div className="panel today-panel">
       <div className="panel-title">资金</div>
       <div className="capital-bar">
-        <div className={`capital-bar-item ${utilTone}`}>
-          <div className="k">利用率</div>
-          <div className="v">{util != null ? `${fmt(util, 0)}%` : '—'}</div>
+        <div className="capital-bar-item ok">
+          <div className="k">权益</div>
+          <div className="v">{capital?.equity != null ? `$${fmtMoney(capital.equity)}` : '—'}</div>
         </div>
         <div className="capital-bar-item">
           <div className="k">闲钱</div>
           <div className="v">{capital?.idle_cash != null ? `$${fmtMoney(capital.idle_cash)}` : '—'}</div>
         </div>
-        <div className="capital-bar-item">
-          <div className="k">净值 / BP</div>
-          <div className="v">
-            {capital?.equity != null ? `$${fmtMoney(capital.equity)}` : '—'}
-            {capital?.buying_power != null ? (
-              <span className="capital-bar-sub">BP ${fmtMoney(capital.buying_power)}</span>
-            ) : null}
-          </div>
+        <div className={`capital-bar-item ${utilTone}`}>
+          <div className="k">利用率</div>
+          <div className="v">{util != null ? `${fmt(util, 0)}%` : '—'}</div>
         </div>
         <div className={`capital-bar-item ${blocked ? 'danger' : 'ok'}`}>
           <div className="k">新 Put</div>
           <div className="v">{blocked ? '停' : '开'}</div>
         </div>
       </div>
+      {(capital?.cash != null || capital?.stock_mv != null || capital?.option_mtm != null) && (
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>
+          现金 ${fmtMoney(capital?.cash ?? 0)}
+          {' · '}持股 ${fmtMoney(capital?.stock_mv ?? 0)}
+          {' · '}期权 ${fmtMoney(capital?.option_mtm ?? 0)}
+          {capital?.buying_power != null ? ` · BP $${fmtMoney(capital.buying_power)}` : ''}
+        </div>
+      )}
       {blocked && (
         <div className="banner error" style={{ marginTop: 10, marginBottom: 0 }}>
           组合压力高:已暂停新开 Put

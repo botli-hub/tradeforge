@@ -708,15 +708,15 @@ function BackendConfigCard({
           <div className="editor-section">
             <h4>组合风控</h4>
             <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
-              <b>组合净值</b>是账户总预算的<b>唯一入口</b>：Wheel 首页可用资金/建议张数、体检资金紧、
-              优化页利用率均读此值。请勿在标的页另设「组合预算」。
+              <b>起始现金</b>是账户现金基数。权益 = 起始现金 ± 登记现金流 + 持股市值 + 期权盯市；
+              股价动、你登记成交，权益就变。占用=CSP 担保 + 持股市值，闲钱=现金 − CSP 担保。
               单标的上限在 <b>Wheel → 标的</b> 的 max_capital。
             </p>
             <div className="settings-row">
-              <label>组合净值 / 预算(USD,0=未设)</label>
+              <label>起始现金(USD,0=用各标的上限之和)</label>
               <input type="number" step="1000" value={cfg.wheel_portfolio?.total_equity ?? 0}
                 placeholder="例如 300000"
-                title="唯一组合预算;保存后同步到 Wheel 首页"
+                title="账户现金基数;权益随股价和登记自动变"
                 onChange={e => up('wheel_portfolio', 'total_equity', Number(e.target.value))} />
             </div>
             <div className="settings-row">

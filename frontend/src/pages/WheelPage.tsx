@@ -23,7 +23,7 @@ import {
   loadPendingQueue, manageToBuyMemoInput, normalizeContractCode, oppToSellMemoInput, removePendingReg,
   resolveOppSellPrice, resolveTradeTier, gradeToTradeTier, savePendingQueue, scanFailureHint,
   setOnboardDone, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
-  subscribePortfolioBudget, syncPortfolioBudgetFromConfig,
+  subscribePortfolioBudget, syncPortfolioBudgetFromConfig, syncPortfolioBudgetFromNav,
   type DteBucket, type PendingRegItem, type RiskTier, type TradeTier,
 } from '../services/wheelProduct'
 import Drawer from '../components/ui/Drawer'
@@ -1429,7 +1429,11 @@ export default function WheelPage() {
         getWheelToday(st.marketHost, st.marketPort, false).catch(() => null),
       ])
       setTargets(t)
-      if (today) setTodayBoard(today)
+      if (today) {
+        setTodayBoard(today)
+        const n = syncPortfolioBudgetFromNav(today.capital?.equity)
+        if (n != null) setBudgetState(n)
+      }
       // 后端未带 suggested_floor 时(旧进程/失败)前端补拉,避免整列「参考 --」
       const needFloor = (t as WheelTarget[]).filter(
         x => x.suggested_floor == null || !Number.isFinite(Number(x.suggested_floor)),
@@ -1489,7 +1493,7 @@ export default function WheelPage() {
   // 设置页保存净值后,首页预算即时刷新
   useEffect(() => subscribePortfolioBudget((n, src) => {
     setBudgetState(n)
-    setBudgetSource(src as 'config' | 'legacy' | 'default')
+    setBudgetSource(src as 'nav' | 'config' | 'legacy' | 'default')
   }), [])
 
   const refreshChecks = useCallback(() => {
@@ -1499,6 +1503,8 @@ export default function WheelPage() {
       r.items.forEach(i => { map[i.cycle_id] = i })
       setOpenChecks(map)
       setPortfolioContext(r.portfolio_context || null)
+      const n = syncPortfolioBudgetFromNav(r.portfolio_context?.equity)
+      if (n != null) setBudgetState(n)
       setProfitTarget(r.profit_target_pct)
       setChecksAt(new Date())
       setOpendOk(true)
@@ -2342,7 +2348,7 @@ export default function WheelPage() {
         <div className="metrics-grid" style={{ marginBottom: 16, border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
           {[
             {
-              label: budgetSource === 'config' ? '组合净值' : '预算(未设净值)',
+              label: budgetSource === 'nav' ? '权益' : budgetSource === 'config' ? '起始现金' : '预算(未设起始现金)',
               value: `$${fmtMoney(ops.budget)}`,
             },
             { label: '占用', value: `$${fmtMoney(ops.committed)}` },
@@ -4087,12 +4093,13 @@ export default function WheelPage() {
               padding: '8px 10px', borderRadius: 8, background: 'var(--bg-secondary)', border: '1px solid var(--border)',
             }}>
               <span>
-                组合净值 / 预算{' '}
+                权益 / 预算{' '}
                 <b style={{ color: 'var(--text)' }}>${fmtMoney(budget)}</b>
                 <span style={{ marginLeft: 6, opacity: 0.85 }}>
-                  {budgetSource === 'config' ? '· 来自设置页(唯一入口)'
-                    : budgetSource === 'legacy' ? '· 本地旧缓存,请到设置页填写组合净值后统一'
-                      : '· 默认值,请到设置页填写组合净值'}
+                  {budgetSource === 'nav' ? '· 现金+持股+期权盯市'
+                    : budgetSource === 'config' ? '· 起始现金(尚未算出活权益)'
+                    : budgetSource === 'legacy' ? '· 本地旧缓存,请到设置页填写起始现金'
+                      : '· 默认值,请到设置页填写起始现金'}
                 </span>
               </span>
               <button
@@ -4100,9 +4107,8 @@ export default function WheelPage() {
                 className="btn btn-sm"
                 style={{ fontSize: 13 }}
                 onClick={() => {
-                  // 跳转设置:用 hash / 自定义事件;无路由时提示
                   window.dispatchEvent(new CustomEvent('tradeforge:navigate', { detail: { page: 'settings', section: 'wheel' } }))
-                  flash('请在「设置 → Wheel → 组合风控」修改组合净值(唯一入口)', 'info')
+                  flash('请在「设置 → Wheel → 组合风控」修改起始现金', 'info')
                 }}
               >
                 去设置修改

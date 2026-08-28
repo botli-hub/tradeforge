@@ -253,25 +253,26 @@ export default function WheelOptimizePanel() {
               }}>
                 {(portfolio.notes as string[]).map((n, i) => <div key={i}>⚠ {n}</div>)}
                 <div style={{ marginTop: 6, color: 'var(--text-secondary)' }}>
-                  去 <b style={{ color: C.blue }}>设置页 → 后端配置 → 组合风控</b> 填「组合净值」；
+                  去 <b style={{ color: C.blue }}>设置页 → 后端配置 → 组合风控</b> 填「起始现金」；
                   单标的上限在 <b style={{ color: C.blue }}>Wheel → 标的设置 / 看板✎编辑</b> 填「资金上限」。
                 </div>
               </div>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 10, fontSize: 13 }}>
               <div>
-                净值参考{' '}
+                权益{' '}
                 <b>{portfolio.equity != null ? fmt(portfolio.equity, 0) : '未设置'}</b>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  {portfolio.equity_source === 'config' ? '来自设置·组合净值'
+                  {portfolio.equity_source === 'nav' ? '现金+持股+期权盯市'
+                    : portfolio.equity_source === 'config' ? '来自设置·起始现金'
                     : portfolio.equity_source === 'max_capital_sum' ? '各标的 max_capital 之和'
-                    : '请设置净值或 max_capital'}
+                    : '请设置起始现金或 max_capital'}
                 </div>
               </div>
               <div>
                 已占用 <b>{fmt(portfolio.total_committed, 0)}</b>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                  CSP {fmt(portfolio.csp_collateral, 0)} + 持股 {fmt(portfolio.holding_cost, 0)}
+                  CSP {fmt(portfolio.csp_collateral, 0)} + 持股市值 {fmt((portfolio as any).holding_mv ?? portfolio.holding_cost, 0)}
                 </div>
               </div>
               <div>
@@ -292,6 +293,12 @@ export default function WheelOptimizePanel() {
               </div>
               <div>全 assign 压力 <b>{fmt(portfolio.assignment_stress, 0)}</b></div>
             </div>
+            {(portfolio.cash != null || portfolio.stock_mv != null) && (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-secondary)' }}>
+                现金 {fmt(portfolio.cash, 0)} · 持股市值 {fmt(portfolio.stock_mv, 0)} · 期权盯市 {fmt(portfolio.option_mtm, 0)}
+                {portfolio.starting_cash != null ? ` · 起始 ${fmt(portfolio.starting_cash, 0)}` : ''}
+              </div>
+            )}
             {(portfolio.violations || []).length > 0 && (
               <div style={{ marginTop: 8, fontSize: 13, color: C.red }}>
                 ⚠ 超限: {(portfolio.violations as any[]).map(v => v.symbol).join(', ')}

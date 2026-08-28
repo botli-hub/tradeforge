@@ -134,7 +134,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "opp_max_per_symbol_side": 10,
     },
     "wheel_portfolio": {
-        "total_equity": 0,  # 0=用 max_capital 之和估算
+        "total_equity": 0,  # 起始现金;0=用 max_capital 之和.权益=现金+持股市值+期权盯市
         "max_portfolio_pct": 0.80,
         "max_symbol_pct": 0.25,
         "high_corr_threshold": 0.70,
