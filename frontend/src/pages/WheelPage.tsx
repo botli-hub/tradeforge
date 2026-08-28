@@ -21,7 +21,7 @@ import {
   dailyRentPer10k, dteBucket, DTE_BUCKET_META, estimateAnnualized, evaluateTradeability, explainOpenOpp,
   fmtRelativeTime, getPortfolioBudget, getPortfolioBudgetSource, getRiskTier, isOnboardDone, isReleaseCandidate,
   loadPendingQueue, manageToBuyMemoInput, normalizeContractCode, oppToSellMemoInput, removePendingReg,
-  resolveOppSellPrice, resolveTradeTier, savePendingQueue, scanFailureHint,
+  resolveOppSellPrice, resolveTradeTier, gradeToTradeTier, savePendingQueue, scanFailureHint,
   setOnboardDone, setRiskTier, STRATEGY_TEMPLATES, stressBlocksNewPuts, suggestQty,
   subscribePortfolioBudget, syncPortfolioBudgetFromConfig,
   type DteBucket, type PendingRegItem, type RiskTier, type TradeTier,
@@ -36,6 +36,8 @@ import ManageDecisionModal from '../components/wheel/ManageDecisionModal'
 import HoldingCcBanner from '../components/wheel/HoldingCcBanner'
 import TargetSellAbove from '../components/wheel/TargetSellAbove'
 import MustManageP0 from '../components/wheel/MustManageP0'
+import TodayCapitalBar from '../components/wheel/TodayCapitalBar'
+import TodayPrimaryOpens from '../components/wheel/TodayPrimaryOpens'
 import TargetStanceSelect from '../components/wheel/TargetStanceSelect'
 import { useToast } from '../components/ui/Toast'
 
@@ -488,49 +490,39 @@ function serverOppToRow(o: WheelOpportunity): OppRow {
   // 深 ITM 启发式：权利金 > 0.25×strike 对 Wheel 卖 Put 通常不合理
   const deepItmPrem = prem != null && o.strike != null && o.strike > 0 && prem / o.strike > 0.25
 
-  // 后端 actionable 优先；dual/强触线 → 优先；可做 timing/score → 可排单
-  let trade_tier: TradeTier = 'WATCH'
-  if (o.grade === 'blocked') trade_tier = 'WATCH'
-  else if (o.actionable && (o.grade === 'dual' || o.source === 'dual' || o.timing?.strength === 'STRONG')) {
-    trade_tier = 'PRIORITY'
-  } else if (o.actionable) {
-    trade_tier = 'QUEUE'
-  } else if (o.grade === 'watch' || o.timing || o.score != null) {
-    trade_tier = 'WATCH'
-  }
-
   const kill: string[] = []
   if (o.grade === 'blocked') {
     kill.push(...(o.flags || ['硬风控阻断']))
   }
   if (px.kind === 'none' || px.kind === 'trigger') kill.push('无买价')
   if (deepItmPrem) kill.push('权利金疑似深ITM')
-  // 软标签不进 kill(已入愿接区等),避免整条被「隐藏不可交易」吃掉
-  if (!o.actionable && o.grade !== 'blocked' && kill.length === 0) {
-    // 可观察但未达可做:不记入 kill,仍可在「观察」展示
-  } else if (!o.actionable && o.grade === 'blocked') {
-    /* already in kill */
-  }
 
-  // 可交易:可做档必须有真实买价;观察档只要有买价也可备忘/展示(不算 killed)
   const hasLiveBid = px.kind === 'bid' || px.kind === 'premium'
   let tradeable = false
   if (o.grade === 'blocked' || deepItmPrem) {
     tradeable = false
-    trade_tier = 'WATCH'
   } else if (o.actionable && hasLiveBid) {
     tradeable = true
   } else if (o.timing && hasLiveBid) {
-    // 触线+买价:至少可观察/复制备忘
     tradeable = true
-    if (!o.actionable) trade_tier = 'WATCH'
   } else if (!hasLiveBid) {
     tradeable = false
-    trade_tier = 'WATCH'
   }
   if (!tradeable && kill.length === 0 && !hasLiveBid) {
     kill.push('无买价')
   }
+
+  const risk_block = o.grade === 'blocked' || !!o.exceeds_capital
+  const trade_tier = gradeToTradeTier({
+    kind: 'OPEN',
+    grade: o.grade,
+    trade_tier: o.trade_tier,
+    actionable: o.actionable,
+    covers_earnings: !!o.covers_earnings,
+    demote_earnings: true,
+    tradeable,
+    risk_block,
+  })
 
   const row: OppRow = {
     id: o.id || oppKey(o.contract_code, o.symbol, side, o.strike, o.expiry),
@@ -2201,6 +2193,62 @@ export default function WheelPage() {
 
   const manageCount = allOppRows.filter(r => r.kind === 'MANAGE').length
   const priorityCount = oppCounts.priority
+  const todayOpen = useMemo(() => {
+    const noCall = (s?: string) => (s || 'PUT').toUpperCase() !== 'CALL'
+    const seen = new Set<string>()
+    const rows: OppRow[] = []
+    const push = (r?: OppRow | null) => {
+      if (!r || r.kind !== 'OPEN' || !noCall(r.side) || seen.has(r.id)) return
+      if (putBlocked && r.side === 'PUT') return
+      seen.add(r.id)
+      rows.push(r)
+    }
+    for (const raw of (todayBoard?.primary_opens || [])) {
+      const p = raw as unknown as WheelOpportunity
+      if (!noCall(String(p.side || 'PUT'))) continue
+      const hit = allOppRows.find(r =>
+        r.kind === 'OPEN' && (
+          (!!p.contract_code && r.contract_code === p.contract_code)
+          || (r.symbol === p.symbol && r.strike === p.strike
+            && (r.expiry || '').slice(0, 10) === String(p.expiry || '').slice(0, 10))
+        ),
+      ) || ((p.grade || p.source) ? serverOppToRow(p) : null)
+      push(hit)
+    }
+    for (const r of allOppRows) {
+      if (r.kind === 'OPEN' && noCall(r.side) && r.trade_tier === 'PRIORITY' && r.tradeable) push(r)
+    }
+    if (rows.length < 3) {
+      for (const r of allOppRows) {
+        if (r.kind === 'OPEN' && noCall(r.side) && r.trade_tier === 'QUEUE' && r.tradeable) {
+          push(r)
+          if (rows.length >= 5) break
+        }
+      }
+    }
+    const sliced = rows.slice(0, 5)
+    return {
+      rows: sliced,
+      picks: sliced.map(r => {
+        const sk = signalKindLabel(resolveOppSignalKind(r))
+        return {
+          id: r.id,
+          symbol: r.symbol,
+          side: r.side,
+          strike: r.strike,
+          annualized: r.annualized,
+          bid: r.bid,
+          dte: r.dte,
+          daily_rent: r.daily_rent,
+          dte_bucket: r.dte_bucket,
+          trade_tier: r.trade_tier,
+          signalText: sk.text,
+          signalColor: sk.color,
+          signalTitle: sk.title,
+        }
+      }),
+    }
+  }, [allOppRows, todayBoard, putBlocked])
   // 主路径：今日/机会/持仓；台账/标的日常配置；触线档案+风控为次级
   const pageTabs: { k: typeof tab; label: string }[] = [
     { k: 'home', label: '今日' },
@@ -2477,175 +2525,86 @@ export default function WheelPage() {
             </div>
           )}
 
-          {/* 今日待办流: P0 该管 → P1 开仓 → P2 待登记 */}
-          <div className="panel" style={{ borderColor: 'rgba(0,200,5,0.28)' }}>
-            <div className="panel-title" style={{ marginBottom: 4 }}>今日待办</div>
-            <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
-              先处理持仓，再开新仓，最后清登记队列
+          <div className="today-stack">
+            <TodayCapitalBar
+              capital={todayBoard?.capital}
+              putBlocked={putBlocked}
+              stale={todayBoard?.stale}
+              staleAgeMinutes={todayBoard?.stale_age_minutes}
+              concentrationWarnings={todayBoard?.concentration?.warnings}
+              events={todayBoard?.events}
+            />
+
+            <div className="panel today-panel">
+              <MustManageP0
+                mustManage={(todayBoard?.must_manage || []) as WheelOpenPositionItem[]}
+                fallbackRows={allOppRows.filter(r => r.kind === 'MANAGE')}
+                manageCount={manageCount}
+                onOpenItem={(item) => setManageCompare(item)}
+                onOpenRow={(row) => openOppRegister(row as OppRow)}
+                onCopyMemo={(item) => copyManageExecMemo(item)}
+                onShowMore={() => { setTab('opps'); setOppCatFilter('MANAGE') }}
+              />
+              {((todayBoard as any)?.capital_release?.n || 0) > 0 && (
+                <div className="banner warn" style={{ marginTop: 10, marginBottom: 0 }}>
+                  <b>可腾 · 浮盈已达标</b>
+                  <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.85 }}>
+                    {(todayBoard as any).capital_release.hint}
+                  </span>
+                  {((todayBoard as any).capital_release.items || []).slice(0, 4).map((it: any) => (
+                    <div key={String(it.cycle_id || it.symbol)} style={{
+                      marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+                    }}>
+                      <Badge color="green">可腾</Badge>
+                      <span style={{ fontSize: 13 }}>
+                        {it.symbol} {it.side} 浮盈{it.profit_pct}%
+                        {it.freed_capital_est != null ? ` · 约释放$${fmt(it.freed_capital_est, 0)}` : ''}
+                      </span>
+                      <button type="button" className="btn btn-sm btn-secondary"
+                        onClick={() => {
+                          const check = Object.values(openChecks).find(c => c.cycle_id === it.cycle_id)
+                          if (check) setManageCompare(check)
+                          else flash('请先刷新体检', 'info')
+                        }}>
+                        决策
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            {putBlocked && (
-              <div className="banner error" style={{ marginBottom: 10 }}>
-                组合压力高:已暂停新开 Put
-                {serverOpps?.portfolio?.utilization_pct != null
-                  && ` · 利用率 ${fmt(serverOpps.portfolio.utilization_pct, 0)}%`}
-              </div>
-            )}
-            {todayBoard?.stale && (
-              <div className="banner warn" style={{ marginBottom: 10 }}>
-                行情缓存(OpenD 弱网) · 决策可看但价格可能旧
-                {todayBoard.stale_age_minutes != null ? ` · ${todayBoard.stale_age_minutes} 分钟前` : ''}
-              </div>
-            )}
-            {(todayBoard?.concentration?.warnings?.length || 0) > 0 && (
-              <div className="banner warn" style={{ marginBottom: 10, fontSize: 13 }}>
-                集中度: {(todayBoard!.concentration!.warnings || []).slice(0, 2).join('；')}
-              </div>
-            )}
-            {(todayBoard?.events?.length || 0) > 0 && (
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-                近事件: {(todayBoard!.events || []).slice(0, 4).map(e =>
-                  `${e.symbol} ${e.label}${e.days === 0 ? '今' : `${e.days}d`}`).join(' · ')}
-              </div>
-            )}
+
             <HoldingCcBanner
               rows={((todayBoard as any)?.holding_cc || todayBoard?.post_assign || []) as any[]}
               loading={suggestLoading}
-              onFindCall={(p) => findCallAfterAssign({
-                symbol: p.symbol,
-                cycle_id: p.cycle_id,
-                cost_basis: p.cost_basis,
-                min_call_strike: p.min_call_strike,
-                cc_contracts: p.cc_contracts,
-              })}
+              onFindCall={(p) => {
+                if (!p.symbol) return
+                findCallAfterAssign({
+                  symbol: p.symbol,
+                  cycle_id: p.cycle_id != null ? String(p.cycle_id) : undefined,
+                  cost_basis: p.cost_basis,
+                  min_call_strike: p.min_call_strike,
+                  cc_contracts: p.cc_contracts,
+                })
+              }}
             />
-            {/* 可腾仓队列 */}
-            {((todayBoard as any)?.capital_release?.n || 0) > 0 && (
-              <div className="banner warn" style={{ marginBottom: 10 }}>
-                <b>可腾 · 浮盈已达标</b>
-                <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.85 }}>
-                  {(todayBoard as any).capital_release.hint}
-                </span>
-                {((todayBoard as any).capital_release.items || []).slice(0, 4).map((it: any) => (
-                  <div key={String(it.cycle_id || it.symbol)} style={{
-                    marginTop: 6, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-                  }}>
-                    <Badge color="green">可腾</Badge>
-                    <span style={{ fontSize: 13 }}>
-                      {it.symbol} {it.side} 浮盈{it.profit_pct}%
-                      {it.freed_capital_est != null ? ` · 约释放$${fmt(it.freed_capital_est, 0)}` : ''}
-                    </span>
-                    <button type="button" className="btn btn-sm btn-secondary"
-                      onClick={() => {
-                        const check = Object.values(openChecks).find(c => c.cycle_id === it.cycle_id)
-                        if (check) setManageCompare(check)
-                        else flash('请先刷新体检', 'info')
-                      }}>
-                      决策
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="home-todo">
-              {/* P0 */}
-              <div className="home-todo-step p0">
-                <div className="home-todo-num">1</div>
-                <div>
-                  <MustManageP0
-                    mustManage={(todayBoard?.must_manage || []) as WheelOpenPositionItem[]}
-                    fallbackRows={allOppRows.filter(r => r.kind === 'MANAGE')}
-                    manageCount={manageCount}
-                    onOpenItem={(item) => setManageCompare(item)}
-                    onOpenRow={(row) => openOppRegister(row as OppRow)}
-                    onCopyMemo={(item) => copyManageExecMemo(item)}
-                    onShowMore={() => { setTab('opps'); setOppCatFilter('MANAGE') }}
-                  />
-                </div>
-              </div>
-              {/* P1 */}
-              <div className="home-todo-step p1">
-                <div className="home-todo-num">2</div>
-                <div>
-                  <div className="home-todo-label">P1 · 优先开仓</div>
-                  {(() => {
-                    if (putBlocked) {
-                      return <div className="home-todo-empty">压力解除前不推新 Put · 可看 CC 或触线</div>
-                    }
-                    const noCall = (s?: string) => (s || 'PUT').toUpperCase() !== 'CALL'
-                    const todayOpens = ((todayBoard as any)?.primary_opens || []).filter((p: any) => noCall(p.side))
-                    const fromToday = todayOpens[0]
-                      ? (allOppRows.find(r => r.kind === 'OPEN' && noCall(r.side) && r.tradeable && r.symbol === todayOpens[0].symbol)
-                        || serverOppToRow(todayOpens[0] as any))
-                      : null
-                    const openPick = fromToday
-                      || (serverOpps?.primary_picks || [])
-                      .filter(p => p.actionable && noCall(p.side) && !(putBlocked && p.side === 'PUT'))
-                      .map(serverOppToRow)[0]
-                      || allOppRows.find(r => r.kind === 'OPEN' && noCall(r.side) && r.is_top_pick && r.tradeable)
-                      || allOppRows.find(r => r.kind === 'OPEN' && noCall(r.side) && (r.trade_tier === 'PRIORITY' || r.trade_tier === 'QUEUE') && r.tradeable)
-                    if (!openPick) {
-                      return (
-                        <div className="home-todo-empty">
-                          暂无主推{' '}
-                          <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleOpportunityScan()}>扫机会</button>
-                        </div>
-                      )
-                    }
-                    const sk = signalKindLabel(resolveOppSignalKind(openPick))
-                    return (
-                      <div className="opp-row" style={{ margin: 0 }}>
-                        <div className="opp-row-main">
-                          <div className="opp-row-title">
-                            <Badge color="green">主推</Badge>
-                            <Badge color={sk.color}>{sk.text}</Badge>
-                            {openPick.symbol} {openPick.side}
-                            {openPick.strike != null && <span style={{ opacity: 0.75 }}>${openPick.strike}</span>}
-                          </div>
-                          <div className="opp-row-meta">
-                            {openPick.annualized != null && <span>年化 {fmt(openPick.annualized, 1)}%</span>}
-                            {openPick.bid != null && <span>bid {fmt(openPick.bid, 2)}</span>}
-                            {openPick.dte != null && <span>DTE {openPick.dte}</span>}
-                          </div>
-                        </div>
-                        <div className="opp-row-actions">
-                          <button type="button" className="btn btn-secondary btn-sm"
-                            onClick={() => copyOppExecMemo(openPick)}>备忘</button>
-                          <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(openPick)}>登记</button>
-                        </div>
-                      </div>
-                    )
-                  })()}
-                  {serverOpps?.headline && (
-                    <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-tertiary)' }}>{serverOpps.headline}</div>
-                  )}
-                </div>
-              </div>
-              {/* P2 */}
-              <div className="home-todo-step p2">
-                <div className="home-todo-num">3</div>
-                <div>
-                  <div className="home-todo-label">P2 · 待登记队列</div>
-                  {pendingQueue.length === 0 ? (
-                    <div className="home-todo-empty">队列为空</div>
-                  ) : (
-                    <div className="opp-row" style={{ margin: 0 }}>
-                      <div className="opp-row-main">
-                        <div className="opp-row-title">
-                          <Badge color="blue">待登记</Badge>
-                          {pendingQueue.length} 笔备忘
-                        </div>
-                        <div className="opp-row-meta">
-                          <span>{pendingQueue.slice(0, 3).map(p => p.symbol).join(' · ')}{pendingQueue.length > 3 ? '…' : ''}</span>
-                        </div>
-                      </div>
-                      <div className="opp-row-actions">
-                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => setTab('opps')}>去清</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+
+            <TodayPrimaryOpens
+              picks={todayOpen.picks}
+              putBlocked={putBlocked}
+              scanning={oppScanning}
+              headline={serverOpps?.headline}
+              onScan={() => { setTab('opps'); handleOpportunityScan() }}
+              onMore={() => { setTab('opps'); setOppCatFilter('PRIORITY') }}
+              onRegister={(id) => {
+                const row = todayOpen.rows.find(r => r.id === id)
+                if (row) openOppRegister(row)
+              }}
+              onCopyMemo={(id) => {
+                const row = todayOpen.rows.find(r => r.id === id)
+                if (row) copyOppExecMemo(row)
+              }}
+            />
           </div>
 
           {!!scanStatus?.report?.length && !timingScanning && (
@@ -2688,58 +2647,6 @@ export default function WheelPage() {
               </div>
             </div>
           )}
-
-          <div className="panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <div className="panel-title" style={{ margin: 0 }}>优先可下单</div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setTab('opps'); setOppCatFilter('PRIORITY') }}>更多</button>
-            </div>
-            {allOppRows.filter(r => r.kind === 'OPEN' && r.side !== 'CALL' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).length === 0 ? (
-              <EmptyState
-                title="暂无优先档"
-                description="需要可交易高分 + 触线确认。可先扫描，或查看可排单/观察。"
-              >
-                <button type="button" className="btn btn-primary btn-sm" disabled={oppScanning}
-                  onClick={() => { setTab('opps'); handleOpportunityScan() }}>扫描</button>
-                <button type="button" className="btn btn-secondary btn-sm"
-                  onClick={() => { setTab('opps'); setOppCatFilter('QUEUE') }}>看可排单</button>
-              </EmptyState>
-            ) : (
-              allOppRows.filter(r => r.kind === 'OPEN' && r.side !== 'CALL' && r.trade_tier === 'PRIORITY' && !(putBlocked && r.side === 'PUT')).slice(0, 3).map((r, i) => {
-                const skHome = signalKindLabel(resolveOppSignalKind(r))
-                return (
-                <div key={r.id} className="opp-row" style={i === rowCursor && tab === 'home' ? { background: 'var(--green-dim)' } : undefined}>
-                  <div className="opp-row-main">
-                    <div className="opp-row-title">
-                      <Badge color={skHome.color} title={skHome.title}>{skHome.text}</Badge>
-                      {r.symbol}
-                      <span style={{ fontWeight: 500, color: r.side === 'PUT' ? 'var(--green)' : 'var(--purple)' }}>
-                        {r.side === 'PUT' ? '卖Put' : '卖Call'}
-                      </span>
-                    </div>
-                    <div className="opp-row-meta">
-                      <span>年化 <b style={{ color: 'var(--green)' }}>{r.annualized != null ? `${fmt(r.annualized, 1)}%` : '—'}</b></span>
-                      <span>日租 {r.daily_rent != null ? fmt(r.daily_rent, 2) : '—'}</span>
-                      <span>{DTE_BUCKET_META[r.dte_bucket]?.label}</span>
-                    </div>
-                  </div>
-                  <div className="opp-row-actions">
-                    <button type="button" className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        const mf = oppMemoFields(r)
-                        copyOrderMemo({
-                          symbol: r.symbol, side: r.side || 'PUT', action: 'SELL',
-                          contract_code: r.contract_code, strike: r.strike, expiry: r.expiry,
-                          price: mf.price, price_kind: mf.price_kind,
-                        })
-                      }}>备忘</button>
-                    <button type="button" className="btn btn-primary btn-sm" onClick={() => openOppRegister(r)}>登记</button>
-                  </div>
-                </div>
-                )
-              })
-            )}
-          </div>
 
           <div className="panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>

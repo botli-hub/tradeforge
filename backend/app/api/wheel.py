@@ -482,17 +482,30 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     floor = target["floor_price"]
 
     expirations = _load_option_expirations(symbol, host, port)
-    in_range = []
-    for exp in expirations:
-        try:
-            dte = (date.fromisoformat(exp[:10]) - date.today()).days
-        except Exception:
-            continue
-        if dte_min <= dte <= dte_max:
-            in_range.append((exp, dte))
-    if not in_range:
-        return {"symbol": symbol, "side": side, "suggestions": [],
-                "message": f"没有 DTE 在 {dte_min}~{dte_max} 天内的到期日"}
+    timing_cfg = _wheel_cfg().get("wheel_timing", {}) or {}
+    max_exp = int(timing_cfg.get("max_expiries", 6) or 6)
+    prefer_core = bool(timing_cfg.get("prefer_core_dte", True))
+    pad_days = int(timing_cfg.get("dte_pad_days", 7) or 0)
+    from app.core.wheel_expiries import pick_windowed_expiries
+    selected_exps, skipped_exps, _eligible_exps = pick_windowed_expiries(
+        expirations, dte_min, dte_max,
+        max_n=max_exp, prefer_core=prefer_core, pad_days=pad_days,
+    )
+    if not selected_exps:
+        win_lo = max(1, int(dte_min) - pad_days)
+        win_hi = int(dte_max) + pad_days
+        return {
+            "symbol": symbol, "side": side, "suggestions": [],
+            "message": f"没有 DTE 在 {win_lo}~{win_hi} 天内的到期日(核心 {dte_min}~{dte_max})",
+            "expiries_scanned": [],
+            "expiries_skipped": [],
+            "expiry_policy": {
+                "max_expiries": max_exp,
+                "prefer_core_dte": prefer_core,
+                "dte_pad_days": pad_days,
+                "core_dte": [dte_min, dte_max],
+            },
+        }
 
     pos_cfg = _wheel_cfg().get("wheel_position", {}) or {}
     margin_ratio = pos_cfg.get("margin_ratio", 0.25)
@@ -523,7 +536,7 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         def _prog(**_kw):  # type: ignore
             return None
 
-    for exp, dte in in_range[:3]:  # 最多取 3 个到期日,控制请求量
+    for exp, dte in selected_exps:
         exp_label = str(exp)[:10]
         _prog(
             symbol=symbol, side=side, expiry=exp_label,
@@ -717,6 +730,14 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                     "floor_price": floor, "premium_pricing": pricing,
                     "earnings_hard_filter": scan_cfg.get("earnings_hard_filter", True),
                     "sort_mode": mode},
+        "expiries_scanned": [str(e[0])[:10] for e in selected_exps],
+        "expiries_skipped": [str(e[0])[:10] for e in skipped_exps],
+        "expiry_policy": {
+            "max_expiries": max_exp,
+            "prefer_core_dte": prefer_core,
+            "dte_pad_days": pad_days,
+            "core_dte": [dte_min, dte_max],
+        },
         "suggestions": suggestions[:20],
         "volatility": volatility,
         "term_structure": term_structure,
