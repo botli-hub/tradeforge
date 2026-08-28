@@ -5,6 +5,7 @@ on:
     paths:
       - backend/patches/call-timing-1h-database.patch
       - backend/patches/call-timing-1h-leaps_monitor.patch
+      - backend/patches/call-timing-1h-leaps_monitor.patch.b64
       - .github/workflows/apply-call-timing-1h-patches.yml
   workflow_dispatch:
 jobs:
@@ -20,7 +21,8 @@ jobs:
         run: |
           set -e
           patch -p1 < backend/patches/call-timing-1h-database.patch
-          patch -p1 < backend/patches/call-timing-1h-leaps_monitor.patch
+          python3 -c 'import gzip,base64,pathlib; pathlib.Path("/tmp/leaps.patch").write_bytes(gzip.decompress(base64.b64decode(pathlib.Path("backend/patches/call-timing-1h-leaps_monitor.patch.b64").read_text())))'
+          patch -p1 < /tmp/leaps.patch
           grep -q TIMEFRAME_HOUR backend/app/core/leaps_monitor.py
           grep -q K_60M backend/app/core/leaps_monitor.py
           grep -q _migrate_price_cache_timeframe backend/app/data/database.py
