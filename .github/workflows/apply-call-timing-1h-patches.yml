@@ -1,0 +1,40 @@
+name: apply-call-timing-1h-patches
+on:
+  push:
+    branches: [feat/call-timing-1h]
+    paths:
+      - backend/patches/call-timing-1h-database.patch
+      - backend/patches/call-timing-1h-leaps_monitor.patch
+      - backend/patches/call-timing-1h-leaps_monitor.patch.b64
+      - .github/workflows/apply-call-timing-1h-patches.yml
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/call-timing-1h
+      - name: Apply patches
+        run: |
+          set -e
+          patch -p1 < backend/patches/call-timing-1h-database.patch
+          python3 -c 'import gzip,base64,pathlib; pathlib.Path("/tmp/leaps.patch").write_bytes(gzip.decompress(base64.b64decode(pathlib.Path("backend/patches/call-timing-1h-leaps_monitor.patch.b64").read_text())))'
+          patch -p1 < /tmp/leaps.patch
+          grep -q TIMEFRAME_HOUR backend/app/core/leaps_monitor.py
+          grep -q K_60M backend/app/core/leaps_monitor.py
+          grep -q _migrate_price_cache_timeframe backend/app/data/database.py
+          grep -q call_holding_cycles backend/app/core/leaps_monitor.py
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/data/database.py backend/app/core/leaps_monitor.py
+          if git diff --staged --quiet; then
+            echo "already patched"
+          else
+            git commit -m "feat(wheel): wire CALL 1h K_60M and timeframe-keyed archives"
+            git push
+          fi

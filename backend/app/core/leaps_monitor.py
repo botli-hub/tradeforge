@@ -16,6 +16,19 @@ import numpy as np
 import pandas as pd
 
 from app.data import leaps_repository as repo
+from app.core.wheel_timing_klines import (
+    TIMEFRAME_DAY,
+    TIMEFRAME_HOUR,
+    bars_on_day,
+    call_holding_cycles,
+    call_strike_min,
+    ema_touch,
+    futu_kl_names,
+    normalize_timeframe,
+    resolve_scan_timeframe,
+    snapshot_bar,
+    bar_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +80,7 @@ class LeapsSignal:
     dte: Optional[int] = None
     below_floor: bool = False            # 标的现价低于接货底线(软警告)
     ema_partial: bool = False            # K 线不足标准周期,EMA 为近似
+    timeframe: str = "1d"                # '1d' Put 日K | '1h' Call 小时K
 
 
 def _compute_ema(series: pd.Series, period: int) -> pd.Series:
@@ -83,14 +97,15 @@ def _iv_percentile(iv_history: List[float], current_iv: float) -> float:
 
 class WheelTimingMonitor:
     """Wheel 开仓时机扫描 —— 核心原则:期权合约价格受长期均线压制,
-    合约价触及自身日K的 EMA50(一级)或 EMA200(强)即为卖出时机。
+    合约价触及自身均线 EMA50(一级)或 EMA200(强)即为卖出时机。
+    PUT 用日K(K_DAY / timeframe 1d)；CALL 用 1 小时 K(K_60M / 1h)。
 
     卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
       - 标的现价 > 接货底线价
       - PUT 合约(DTE/strike 按 wheel_timing 配置)价格触及 EMA50/EMA200
     持股卖 Call 时机(轮子处于 HOLDING):
-      - CALL 合约 strike ≥ cost basis
-      - 合约价格触及 EMA50/EMA200
+      - CALL 合约 strike ≥ max(cost basis, sell_above)
+      - 合约 1h 价格触及自身 EMA50/EMA200
     IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
     信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
     合约冷却复用 LEAPS 的 leaps_cooldowns。
@@ -167,7 +182,7 @@ class WheelTimingMonitor:
             sym = t["symbol"]
             try:
                 cycles = wrepo.get_active_cycles(sym)
-                holding = [c for c in cycles if c["status"] == "HOLDING"]
+                holding = call_holding_cycles(cycles)
                 dte_lo, dte_hi = self._dte_window(t)
                 core_lo, core_hi = self._core_dte_window(t)
 
@@ -198,12 +213,22 @@ class WheelTimingMonitor:
                     max_expiries=self.max_expiries,
                     core_dte_min=core_lo, core_dte_max=core_hi,
                     prefer_core_dte=self.prefer_core_dte,
+                    timeframe=TIMEFRAME_DAY,
                 ))
                 if report is not None:
                     report.append(rep)
 
                 for cyc in holding:
                     cost_basis = cyc.get("cost_basis") or 0
+                    sell_above = t.get("sell_above")
+                    try:
+                        from app.core.wheel_call_timing import get_target_sell_above
+                        sa = get_target_sell_above(sym)
+                        if sa is not None:
+                            sell_above = sa
+                    except Exception:
+                        pass
+                    strike_floor = call_strike_min(cost_basis, sell_above)
                     _prog(
                         target_i=ti, target_n=n_targets, symbol=sym, side="CALL",
                         expiry=None, contract_i=0, contract_n=0,
@@ -218,7 +243,7 @@ class WheelTimingMonitor:
                         sym, 0, is_intraday=is_intraday,
                         option_type="CALL",
                         dte_min=dte_lo, dte_max=dte_hi,
-                        strike_min=cost_basis if cost_basis > 0 else None,
+                        strike_min=strike_floor,
                         level_map={"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"},
                         iv_threshold=self.iv_threshold,
                         respect_30d_cap=False, with_suggestions=False,
@@ -229,6 +254,7 @@ class WheelTimingMonitor:
                         max_expiries=self.max_expiries,
                         core_dte_min=core_lo, core_dte_max=core_hi,
                         prefer_core_dte=self.prefer_core_dte,
+                        timeframe=TIMEFRAME_HOUR,
                     ))
                     if report is not None:
                         report.append(rep)
@@ -418,10 +444,12 @@ class LeapsMonitor:
         core_dte_min: Optional[int] = None,
         core_dte_max: Optional[int] = None,
         prefer_core_dte: bool = True,
+        timeframe: Optional[str] = None,
     ) -> List[LeapsSignal]:
         """通用合约 EMA 触线扫描。默认参数 = 原 LEAPS Put 行为;
         Wheel 时机复用:option_type/dte/strike 可定制,level_map 定制信号级别名,
         iv_threshold=0 表示 IV 仅记录不作硬条件。
+        timeframe: PUT/LEAPS 默认 1d(K_DAY)；CALL 默认 1h(K_60M)。
         report(可选 dict)会被填入扫描明细,便于前端展示诊断。
         progress_cb: 可选进度回调(symbol/side/expiry/contract_i/n/message)。"""
         import futu
@@ -436,6 +464,7 @@ class LeapsMonitor:
         signals: List[LeapsSignal] = []
         level_map = level_map or {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
         iv_thr = self.iv_threshold if iv_threshold is None else iv_threshold
+        tf = resolve_scan_timeframe(option_type, timeframe)
         rep = report if report is not None else {}
         rep.update(
             spot=None, contracts=0, in_cooldown=0, no_history=0,
@@ -443,6 +472,7 @@ class LeapsMonitor:
             ema_partial_hits=0, note=None,
             expiries_scanned=[], expiries_skipped=[],
             strike_lo=None, strike_hi=None,
+            timeframe=tf,
         )
         _p(
             symbol=symbol, side=option_type, expiry=None,
@@ -561,11 +591,11 @@ class LeapsMonitor:
                     rep["in_cooldown"] += 1
                     continue
 
-                # 更新价格缓存 & IV 历史
-                self._update_price_cache(code, contract, today)
+                # 更新价格缓存 & IV 历史（按 timeframe 分桶）
+                self._update_price_cache(code, contract, today, timeframe=tf)
 
                 # 读取历史价格序列
-                price_history = repo.get_option_price_history(code, limit=250)
+                price_history = repo.get_option_price_history(code, limit=250, timeframe=tf)
                 if not price_history:
                     rep["no_history"] += 1
                     continue
@@ -579,7 +609,7 @@ class LeapsMonitor:
                 if is_intraday and self.intraday_use_last:
                     trigger_price = contract.get("last_price") or contract.get("close")
                 else:
-                    today_bar = [b for b in price_history if b["date"] == today]
+                    today_bar = bars_on_day(price_history, today)
                     trigger_price = (
                         today_bar[-1].get("high") or today_bar[-1].get("close")
                         if today_bar else closes.iloc[-1] if len(closes) else None
@@ -599,41 +629,24 @@ class LeapsMonitor:
                     rep["iv_filtered"] += 1
                     continue
 
-                # S1: 价格触及 EMA200 / EMA50
-                # allow_partial_ema: 根数 ≥ min 但仍 < 标准周期时仍算 ewm,标记 ema_partial
-                signal_level = None
-                ema_type = None
-                ema_value = None
-                ema_partial = False
+                # S1: 价格触及 EMA200 / EMA50（CALL=1h 序列 / PUT=日K）
                 n_bars = len(closes)
-
-                def _try_ema(period: int, min_bars: int, level_key: str) -> bool:
-                    nonlocal signal_level, ema_type, ema_value, ema_partial
-                    if n_bars < min_bars:
-                        return False
-                    # 标准:满 period 根; partial:满 min_bars 但不足 period
-                    partial = n_bars < period
-                    if partial and not self.allow_partial_ema:
-                        return False
-                    val = float(_compute_ema(closes, period).iloc[-1])
-                    if trigger_price >= val:
-                        signal_level = level_map[level_key]
-                        ema_type = level_key
-                        ema_value = val
-                        ema_partial = partial
-                        return True
-                    return False
-
-                _try_ema(200, self.ema200_min, "EMA200")
-                if signal_level is None:
-                    _try_ema(50, self.ema50_min, "EMA50")
-
-                if signal_level is None:
+                hit = ema_touch(
+                    closes, float(trigger_price),
+                    ema50_min=self.ema50_min, ema200_min=self.ema200_min,
+                    allow_partial_ema=self.allow_partial_ema,
+                    level_map=level_map, compute_ema=_compute_ema,
+                )
+                if hit is None:
                     if n_bars < self.ema50_min:
                         rep["bars_insufficient"] += 1
                     else:
                         rep["not_touching"] += 1
                     continue
+                signal_level = hit["signal_level"]
+                ema_type = hit["ema_type"]
+                ema_value = hit["ema_value"]
+                ema_partial = hit["ema_partial"]
                 if ema_partial:
                     rep["ema_partial_hits"] = rep.get("ema_partial_hits", 0) + 1
 
@@ -673,11 +686,12 @@ class LeapsMonitor:
                     annualized=_annualized_yield(sell_price, strike, dte_val) if sell_price else None,
                     dte=dte_val,
                     below_floor=below_floor,
+                    timeframe=tf,
                 )
                 signals.append(sig)
 
                 # 设置冷却
-                repo.set_contract_cooldown(code, symbol, self.cooldown_days)
+                repo.set_contract_cooldown(code, symbol, self.cooldown_days, timeframe=tf)
 
                 # 入库
                 repo.log_signal(
@@ -704,6 +718,7 @@ class LeapsMonitor:
                         for s in suggestions
                     ],
                     is_intraday=is_intraday,
+                    timeframe=tf,
                 )
 
         rep["signals"] = len(signals)
@@ -946,55 +961,58 @@ class LeapsMonitor:
 
         return contracts
 
-    def _update_price_cache(self, code: str, contract: Dict, today: str):
-        """增量更新价格缓存；冷启动时拉取历史，后续只追加当日"""
-        latest = repo.get_latest_cached_date(code)
+    def _update_price_cache(self, code: str, contract: Dict, today: str,
+                            timeframe: str = TIMEFRAME_DAY):
+        """增量更新价格缓存；冷启动拉历史，后续按 timeframe 追加。"""
+        tf = normalize_timeframe(timeframe)
+        latest = repo.get_latest_cached_date(code, timeframe=tf)
         bars_to_save: List[Dict] = []
 
         if latest is None:
-            # 冷启动：从 Futu 拉取历史（最多 250 根）
-            bars_to_save = self._fetch_kline_history(code, num=250)
-        elif latest < today:
-            # 增量：仅追加今日 bar
-            bar = {
-                "date": today,
-                "open": contract.get("open"),
-                "high": contract.get("high"),
-                "low": contract.get("low"),
-                "close": contract.get("last_price") or contract.get("close"),
-                "volume": contract.get("volume"),
-                "iv": contract.get("iv"),
-            }
-            bars_to_save = [bar]
+            bars_to_save = self._fetch_kline_history(code, num=250, timeframe=tf)
+        elif tf == TIMEFRAME_HOUR:
+            latest_day = str(latest)[:10]
+            if latest_day < today:
+                fetched = self._fetch_kline_history(code, num=80, timeframe=tf)
+                bars_to_save = fetched or [snapshot_bar(contract, today, tf)]
+            else:
+                bars_to_save = [snapshot_bar(contract, today, tf)]
+        elif str(latest)[:10] < today:
+            bars_to_save = [snapshot_bar(contract, today, tf)]
 
         if bars_to_save:
-            repo.save_option_prices(code, bars_to_save)
+            repo.save_option_prices(code, bars_to_save, timeframe=tf)
 
         # 同步 IV 历史
         iv = contract.get("iv")
         if iv and iv > 0:
             repo.save_iv_snapshot(code, today, iv)
 
-    def _fetch_kline_history(self, code: str, num: int = 250) -> List[Dict]:
-        """拉合约日K历史。注意:get_cur_kline 需要先订阅 K_DAY;
-        订阅随连接关闭自动释放,不占长期配额。"""
+    def _fetch_kline_history(self, code: str, num: int = 250,
+                             timeframe: str = TIMEFRAME_DAY) -> List[Dict]:
+        """拉合约 K 线。PUT=日K K_DAY；CALL=1h K_60M。
+        get_cur_kline 需先订阅对应 SubType；订阅随连接关闭释放。"""
         import futu
+        tf = normalize_timeframe(timeframe)
+        kl_name, sub_name = futu_kl_names(tf)
+        kl_type = getattr(futu.KLType, kl_name)
+        sub_type = getattr(futu.SubType, sub_name)
         bars: List[Dict] = []
         try:
             _throttle(1.0)  # 订阅接口限频较松,1 秒间隔即可
             from app.core.opend import open_quote_context
             ctx = open_quote_context(host=self.futu_host, port=self.futu_port)
             try:
-                ret_sub, sub_err = ctx.subscribe([code], [futu.SubType.K_DAY], subscribe_push=False)
+                ret_sub, sub_err = ctx.subscribe([code], [sub_type], subscribe_push=False)
                 if ret_sub != futu.RET_OK:
-                    logger.warning("subscribe K_DAY(%s) 失败: %s", code, sub_err)
+                    logger.warning("subscribe %s(%s) 失败: %s", kl_name, code, sub_err)
                     return bars
-                ret, data = ctx.get_cur_kline(code, num, futu.KLType.K_DAY)
+                ret, data = ctx.get_cur_kline(code, num, kl_type)
             finally:
                 ctx.close()
             if ret == futu.RET_OK and data is not None and not data.empty:
                 for _, row in data.iterrows():
-                    ts = str(row.get("time_key", ""))[:10]
+                    ts = bar_timestamp(row.get("time_key", ""), tf)
                     bars.append({
                         "date": ts,
                         "open": float(row.get("open", 0) or 0),

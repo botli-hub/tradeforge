@@ -6,6 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+from app.data.wheel_timing_schema import (
+    apply_timeframe_alters,
+    _migrate_price_cache_timeframe,
+    _migrate_timing_history_timeframe,
+)
+
 DB_PATH = Path(__file__).parent.parent / "tradeforge.db"
 
 
@@ -528,6 +534,7 @@ def init_db():
             PRIMARY KEY (contract_code, date)
         )
     """)
+    _migrate_price_cache_timeframe(cursor)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS leaps_iv_history (
@@ -674,6 +681,9 @@ def init_db():
             cursor.execute(ddl)
         except Exception:
             pass
+
+    apply_timeframe_alters(cursor)
+    _migrate_timing_history_timeframe(cursor)
 
     # 一次性回填:历史表为空时,从既有 WHEEL 信号导入(按合约合并)
     try:
