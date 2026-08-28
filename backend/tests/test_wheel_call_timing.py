@@ -34,16 +34,18 @@ def test_income_candidate_or_uncovered_is_priority():
     assert r["candidate_ok"] is True
 
 
-def test_acquire_below_cushion_is_watch():
+def test_acquire_below_cushion_still_ready():
+    """离开成本 3% 不再拦截找 Call。"""
     r = evaluate_cc_timing(stance="acquire", shares=100, cost_basis=100, spot=101)
-    assert r["grade"] == GRADE_WATCH
-    assert r["show_find_call"] is False
+    assert r["grade"] == GRADE_READY
+    assert r["show_find_call"] is True
+    assert r["timing_ready"] is True
     assert r["cushion_pct"] == 1.0
 
 
-def test_acquire_left_cost_is_ready():
+def test_acquire_left_cost_is_priority():
     r = evaluate_cc_timing(stance="acquire", shares=100, cost_basis=100, spot=104)
-    assert r["grade"] == GRADE_READY
+    assert r["grade"] == GRADE_PRIORITY
     assert r["show_find_call"] is True
 
 
@@ -54,25 +56,27 @@ def test_acquire_left_cost_plus_iv_is_priority():
     assert r["grade"] == GRADE_PRIORITY
 
 
-def test_acquire_iv_lift_at_cost_promotes_ready():
+def test_acquire_iv_lift_at_cost_is_priority():
     r = evaluate_cc_timing(
         stance="acquire", shares=100, cost_basis=100, spot=100.2, iv_rank=70,
     )
-    assert r["grade"] == GRADE_READY
+    assert r["grade"] == GRADE_PRIORITY
     assert r["iv_lift"] is True
+    assert r["show_find_call"] is True
 
 
-def test_cfg_overrides_cushion_not_position_quant():
+def test_cfg_overrides_cushion_only_lifts_priority():
     r = evaluate_cc_timing(
         stance="acquire", shares=100, cost_basis=100, spot=102,
         cfg={"wheel_timing": {"call_acquire_cushion_pct": 5}, "wheel_position": {"profit_target_pct": 50}},
     )
-    assert r["grade"] == GRADE_WATCH  # 2% < 5%
+    assert r["grade"] == GRADE_READY  # 2% < 5%,仍可找 Call
+    assert r["show_find_call"] is True
     r2 = evaluate_cc_timing(
         stance="acquire", shares=100, cost_basis=100, spot=106,
         cfg={"wheel_timing": {"call_acquire_cushion_pct": 5}},
     )
-    assert r2["grade"] == GRADE_READY
+    assert r2["grade"] == GRADE_PRIORITY
 
 
 def test_call_opp_only_when_holding():
@@ -86,12 +90,12 @@ def test_attach_and_split():
     hint = {"symbol": "AAA", "cycle_id": 1, "notes": ["x"], "cc_contracts": 1}
     t = evaluate_cc_timing(stance="acquire", shares=100, cost_basis=10, spot=10.1)
     row = attach_cc_timing(hint, t)
-    assert row["cc_grade"] == GRADE_WATCH
-    assert row["next_step"] == "WAIT_CC_TIMING"
-    assert row["show_find_call"] is False
+    assert row["cc_grade"] == GRADE_READY
+    assert row["next_step"] == "SELL_CALL"
+    assert row["show_find_call"] is True
     buckets = split_holding_cc([row])
-    assert len(buckets["watch"]) == 1
-    assert buckets["priority"] == []
+    assert len(buckets["ready"]) == 1
+    assert buckets["watch"] == []
 
 
 def test_strike_floor_uses_sell_above_when_higher():
