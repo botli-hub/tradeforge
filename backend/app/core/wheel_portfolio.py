@@ -22,6 +22,7 @@ def portfolio_overview(
     from app.data import wheel_repository as repo
     from app.core.wheel_nav import compute_account_nav
 
+    usage = repo.get_capital_usage()
     targets = repo.get_targets()
     enabled = [t for t in targets if t.get("enabled")]
 
@@ -119,7 +120,7 @@ def portfolio_overview(
         "idle_pct": idle_pct,
         "per_symbol": symbol_rows,
         "violations": over_symbol,
-        "assignment_stress": nav.get("total_committed"),
+        "assignment_stress": usage.get("assignment_stress"),
         "notes": notes,
         "ok": has_equity,
         "nav_formula": "cash + stock_mv + option_mtm",
