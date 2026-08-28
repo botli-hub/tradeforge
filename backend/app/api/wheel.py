@@ -766,21 +766,23 @@ def _position_hints(item: Dict[str, Any], min_annualized: float, profit_target: 
     return decide_position(item, min_annualized, profit_target, pos_cfg or _wheel_cfg().get("wheel_position"))
 
 
-def _portfolio_context_for_manage() -> Dict[str, Any]:
+def _portfolio_context_for_manage(
+    spots: Optional[Dict[str, float]] = None,
+    option_marks: Optional[Dict[str, float]] = None,
+) -> Dict[str, Any]:
     """体检用组合上下文:利用率 / 是否资金紧 / 是否停新 Put。不触发扫描。"""
     full_cfg = _wheel_cfg()
     pos_cfg = full_cfg.get("wheel_position", {}) or {}
     pcfg = full_cfg.get("wheel_portfolio", {}) or {}
     tight_util = float(pos_cfg.get("capital_tight_util_pct", 75.0))
     try:
-        from app.core.wheel_opportunities import _portfolio_put_stress
         from app.core.wheel_portfolio import portfolio_overview
-
-        put_blocked, stress_meta = _portfolio_put_stress(full_cfg)
         overview = portfolio_overview(
             total_equity=float(pcfg["total_equity"]) if pcfg.get("total_equity") else None,
             max_portfolio_pct=float(pcfg.get("max_portfolio_pct", 0.80)),
             max_symbol_pct=float(pcfg.get("max_symbol_pct", 0.25)),
+            spots=spots,
+            option_marks=option_marks,
         )
         util = overview.get("utilization_pct")
         over_pf = bool(overview.get("over_portfolio"))
@@ -788,6 +790,13 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
             over_pf
             or (util is not None and float(util) >= tight_util)
         )
+        stress = float(overview.get("assignment_stress") or 0)
+        committed = float(overview.get("total_committed") or 0)
+        equity = overview.get("equity")
+        ratio = float(pos_cfg.get("stress_put_block_ratio", 1.5) or 1.5)
+        base = max(committed, float(equity or 0) * 0.3) if equity else committed
+        stress_block = bool(stress > 0 and base > 0 and stress >= base * ratio)
+        put_blocked = bool(stress_block or over_pf)
         headroom_by: Dict[str, Optional[float]] = {}
         committed_by: Dict[str, float] = {}
         max_cap_by: Dict[str, Optional[float]] = {}
@@ -802,11 +811,16 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
         return {
             "utilization_pct": util,
             "capital_tight": capital_tight,
-            "portfolio_put_blocked": put_blocked,
+            "portfolio_put_blocked": put_blocked or over_pf,
             "idle_cash": overview.get("idle_cash"),
             "over_portfolio": over_pf,
             "equity": overview.get("equity"),
-            "assignment_stress": stress_meta.get("assignment_stress"),
+            "cash": overview.get("cash"),
+            "stock_mv": overview.get("stock_mv"),
+            "option_mtm": overview.get("option_mtm"),
+            "starting_cash": overview.get("starting_cash"),
+            "equity_source": overview.get("equity_source"),
+            "assignment_stress": stress,
             "headroom_by_symbol": headroom_by,
             "committed_by_symbol": committed_by,
             "max_capital_by_symbol": max_cap_by,
@@ -821,6 +835,11 @@ def _portfolio_context_for_manage() -> Dict[str, Any]:
             "idle_cash": None,
             "over_portfolio": False,
             "equity": None,
+            "cash": None,
+            "stock_mv": None,
+            "option_mtm": None,
+            "starting_cash": None,
+            "equity_source": None,
             "assignment_stress": None,
             "headroom_by_symbol": {},
             "committed_by_symbol": {},
@@ -868,7 +887,13 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         return out
 
     codes = [c["open_contract_code"] for c in cycles]
-    und_codes = list({_to_futu_symbol(c["symbol"]) for c in cycles})
+    hold_syms = list({
+        c["symbol"] for c in repo.get_cycles(include_closed=False)
+        if (c.get("shares") or 0) > 0
+    })
+    und_syms = list({c["symbol"] for c in cycles} | set(hold_syms))
+    und_codes = [_to_futu_symbol(s) for s in und_syms]
+    futu_to_sym = {_to_futu_symbol(s): s for s in und_syms}
     quotes: Dict[str, Dict[str, float]] = {}
     try:
         ctx = futu.OpenQuoteContext(host=host, port=port)
@@ -903,6 +928,29 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             }
             return data
         raise
+
+    live_spots: Dict[str, float] = {}
+    live_marks: Dict[str, float] = {}
+    for code, q in quotes.items():
+        last = q.get("last") or 0
+        ask = q.get("ask") or 0
+        sym = futu_to_sym.get(code)
+        if sym and last > 0:
+            live_spots[sym] = last
+        if code in codes:
+            px = ask or last
+            if px > 0:
+                live_marks[code] = px
+    if live_spots or live_marks:
+        portfolio_ctx = _portfolio_context_for_manage(spots=live_spots, option_marks=live_marks)
+        if bp and bp.get("buying_power") is not None:
+            portfolio_ctx = dict(portfolio_ctx)
+            portfolio_ctx["buying_power"] = bp.get("buying_power")
+            portfolio_ctx["bp_source"] = bp.get("source")
+        capital_tight = bool(portfolio_ctx.get("capital_tight"))
+        put_blocked = bool(portfolio_ctx.get("portfolio_put_blocked"))
+        util_pct = portfolio_ctx.get("utilization_pct")
+        headroom_by = portfolio_ctx.get("headroom_by_symbol") or {}
 
     min_ann_by_symbol: Dict[str, float] = {}
     target_by_symbol: Dict[str, Any] = {}

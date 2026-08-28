@@ -752,6 +752,11 @@ export interface WheelPortfolioContext {
   idle_cash?: number | null
   over_portfolio?: boolean
   equity?: number | null
+  cash?: number | null
+  stock_mv?: number | null
+  option_mtm?: number | null
+  starting_cash?: number | null
+  equity_source?: string
   assignment_stress?: number | null
   capital_tight_util_pct?: number
 }
@@ -1500,12 +1505,20 @@ export async function getWheelPortfolio(equity?: number) {
   const qs = equity && equity > 0 ? `?equity=${equity}` : ''
   return request<{
     equity: number
+    equity_source?: string
+    starting_cash?: number
+    cash?: number
+    stock_mv?: number
+    option_mtm?: number
     total_committed: number
     utilization_pct: number
     max_portfolio_pct: number
     over_portfolio: boolean
     idle_cash: number
     idle_pct: number
+    csp_collateral?: number
+    holding_cost?: number
+    holding_mv?: number
     per_symbol: {
       symbol: string
       committed: number
@@ -1726,6 +1739,11 @@ export type WheelTodayBoard = {
     utilization_pct?: number | null
     idle_cash?: number | null
     equity?: number | null
+    cash?: number | null
+    stock_mv?: number | null
+    option_mtm?: number | null
+    starting_cash?: number | null
+    equity_source?: string
     capital_tight?: boolean
     portfolio_put_blocked?: boolean
     buying_power?: number | null

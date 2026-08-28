@@ -9,69 +9,75 @@ def portfolio_overview(
     total_equity: Optional[float] = None,
     max_portfolio_pct: float = 0.80,
     max_symbol_pct: float = 0.25,
+    spots: Optional[Dict[str, float]] = None,
+    option_marks: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
-    """汇总占用、余量、超限标的。
+    """权益 = 现金 + 持股市值 + 期权盯市。
 
-    净值参考优先级:
+    起始现金优先级:
       1) 入参 / 设置 total_equity > 0
       2) 启用标的 max_capital 之和 > 0
-      3) 都没有 → equity 未知,不计算利用率%(避免除以 1 炸出千万级百分比)
+      3) 0(仍按成交+市值算,可能为负)
     """
     from app.data import wheel_repository as repo
+    from app.core.wheel_nav import compute_account_nav
 
-    usage = repo.get_capital_usage()
     targets = repo.get_targets()
     enabled = [t for t in targets if t.get("enabled")]
 
-    total_committed = float(usage.get("total_committed") or 0)
     caps_sum = sum(float(t.get("max_capital") or 0) for t in enabled)
-
-    equity: Optional[float] = None
-    equity_source = "unknown"
     notes: List[str] = []
-
+    starting = 0.0
+    starting_source = "zero"
     if total_equity is not None and float(total_equity) > 0:
-        equity = float(total_equity)
-        equity_source = "config"  # 设置页 wheel_portfolio.total_equity
+        starting = float(total_equity)
+        starting_source = "config"
     elif caps_sum > 0:
-        equity = caps_sum
-        equity_source = "max_capital_sum"
-        notes.append("净值参考=各启用标的 max_capital 之和(未单独配置组合净值)")
+        starting = float(caps_sum)
+        starting_source = "max_capital_sum"
+        notes.append("起始现金参考=各启用标的 max_capital 之和(未单独配置)")
     else:
-        equity = None
-        equity_source = "unknown"
         notes.append(
-            "未配置组合净值且标的 max_capital 均为 0:无法计算利用率/净值%。"
-            "请在设置→组合风控填写「组合净值」,或在标的设置为各标的填写 max_capital"
+            "未配置起始现金且标的 max_capital 均为 0:权益只随已登记成交和市值走。"
+            "请在设置→组合风控填写「起始现金」"
         )
 
-    has_equity = equity is not None and equity > 0
-    util = (total_committed / equity) if has_equity else None
-    per = usage.get("per_symbol") or {}
-    # 无占用的启用标的也要列出
-    all_syms = {t["symbol"] for t in enabled} | set(per.keys())
+    nav = compute_account_nav(starting, spots=spots, option_marks=option_marks)
+    equity = nav["equity"]
+    has_equity = True
+    live_n = sum(1 for _ in (nav.get("per_symbol") or {}))
+    if starting <= 0 and not nav.get("cash_delta") and live_n == 0 and equity == 0:
+        has_equity = False
+        notes.append("无起始现金、无持仓:无法计算利用率")
+
+    total_committed = float(nav["total_committed"] or 0)
+    util = (total_committed / equity) if has_equity and equity else None
+    per_nav = nav.get("per_symbol") or {}
+    resolved_spots = nav.get("spots_used") or {}
+    all_syms = {t["symbol"] for t in enabled} | set(per_nav.keys())
     target_by = {t["symbol"]: t for t in targets}
 
     over_symbol = []
     symbol_rows = []
     for sym in all_syms:
         t = target_by.get(sym) or {"symbol": sym, "max_capital": 0, "enabled": 1}
-        if not t.get("enabled") and sym not in per:
+        if not t.get("enabled") and sym not in per_nav:
             continue
-        u = per.get(sym, {})
-        committed = float(u.get("csp_collateral") or 0) + float(u.get("holding_cost") or 0)
+        u = per_nav.get(sym, {})
+        committed = float(u.get("csp_collateral") or 0) + float(u.get("holding_mv") or 0)
         cap = float(t.get("max_capital") or 0)
-        # 上限 0 = 未设限额,不计算余量、不因「超上限」告警
         headroom = (cap - committed) if cap > 0 else None
         pct_eq = (committed / equity * 100) if has_equity and equity else None
         over_cap = bool(cap > 0 and committed > cap + 1e-6)
-        # 仅在有真实净值时做「占净值%」超限
         over_pct = bool(has_equity and pct_eq is not None and pct_eq > max_symbol_pct * 100)
         row = {
             "symbol": sym,
             "committed": round(committed, 2),
             "csp_collateral": round(float(u.get("csp_collateral") or 0), 2),
             "holding_cost": round(float(u.get("holding_cost") or 0), 2),
+            "holding_mv": round(float(u.get("holding_mv") or 0), 2),
+            "option_mtm": round(float(u.get("option_mtm") or 0), 2),
+            "spot": resolved_spots.get(sym),
             "max_capital": cap,
             "headroom": round(headroom, 2) if headroom is not None else None,
             "headroom_ratio": round(headroom / cap, 3) if cap > 0 and headroom is not None else None,
@@ -85,7 +91,7 @@ def portfolio_overview(
             over_symbol.append(row)
 
     symbol_rows.sort(key=lambda x: x["committed"], reverse=True)
-    idle_cash = round(equity - total_committed, 2) if has_equity else None
+    idle_cash = nav["idle_cash"] if has_equity else None
     idle_pct = round(idle_cash / equity * 100, 2) if has_equity and equity and idle_cash is not None else None
     over_portfolio = bool(has_equity and util is not None and util > max_portfolio_pct)
 
@@ -94,11 +100,17 @@ def portfolio_overview(
 
     return {
         "equity": round(equity, 2) if has_equity else None,
-        "equity_source": equity_source,
-        "equity_configured": equity_source == "config",
+        "equity_source": "nav" if has_equity else "unknown",
+        "equity_configured": starting_source == "config",
+        "starting_cash": nav["starting_cash"],
+        "starting_cash_source": starting_source,
+        "cash": nav["cash"] if has_equity else None,
+        "stock_mv": nav["stock_mv"],
+        "option_mtm": nav["option_mtm"],
         "total_committed": round(total_committed, 2),
-        "csp_collateral": usage.get("csp_collateral"),
-        "holding_cost": usage.get("holding_cost"),
+        "csp_collateral": nav["csp_collateral"],
+        "holding_cost": nav["holding_cost"],
+        "holding_mv": nav["holding_mv"],
         "utilization_pct": round(util * 100, 2) if util is not None else None,
         "max_portfolio_pct": max_portfolio_pct * 100,
         "max_symbol_pct": max_symbol_pct * 100,
@@ -107,9 +119,10 @@ def portfolio_overview(
         "idle_pct": idle_pct,
         "per_symbol": symbol_rows,
         "violations": over_symbol,
-        "assignment_stress": usage.get("assignment_stress"),
+        "assignment_stress": nav.get("total_committed"),
         "notes": notes,
-        "ok": has_equity,  # 前端可用:净值是否可计算
+        "ok": has_equity,
+        "nav_formula": "cash + stock_mv + option_mtm",
     }
 
 
@@ -179,7 +192,6 @@ def stress_test(
         if (c.get("shares") or 0) > 0
     ]
 
-    # spot 用本地日K最后收盘
     spots: Dict[str, float] = {}
     for c in cycles + holdings:
         sym = c["symbol"]
@@ -209,7 +221,6 @@ def stress_test(
                     "spot_shocked": round(shocked, 2),
                     "assign_cost": round(cost, 2),
                 })
-        # 持股市值下跌(仅展示浮亏粗估)
         holding_mtm = 0.0
         for c in holdings:
             spot = spots.get(c["symbol"]) or 0
@@ -225,10 +236,8 @@ def stress_test(
             "itm_positions": itm_list,
         })
 
-    equity = total_equity
-    if not equity:
-        targets = [t for t in repo.get_targets() if t.get("enabled")]
-        equity = sum((t.get("max_capital") or 0) for t in targets) or 0
+    ov = portfolio_overview(total_equity=total_equity)
+    equity = ov.get("equity")
 
     return {
         "spots_used": {k: round(v, 2) for k, v in spots.items()},
@@ -240,11 +249,8 @@ def stress_test(
 
 
 def headroom_ratio_for_symbol(symbol: str) -> Optional[float]:
-    from app.data import wheel_repository as repo
-    t = repo.get_target(symbol)
-    if not t or not (t.get("max_capital") or 0):
-        return None
-    usage = repo.get_capital_usage()["per_symbol"].get(symbol, {})
-    committed = (usage.get("csp_collateral") or 0) + (usage.get("holding_cost") or 0)
-    cap = t["max_capital"]
-    return max(0.0, (cap - committed) / cap)
+    ov = portfolio_overview()
+    for row in ov.get("per_symbol") or []:
+        if row.get("symbol") == symbol:
+            return row.get("headroom_ratio")
+    return None
