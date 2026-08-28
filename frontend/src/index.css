@@ -2236,6 +2236,47 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   padding: 4px 0 2px;
 }
 
+.today-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.today-panel .panel-title { margin-bottom: 8px; }
+.capital-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.capital-bar-item {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.capital-bar-item .k {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.capital-bar-item .v {
+  font-size: 16px;
+  font-weight: 700;
+  margin-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.capital-bar-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+.capital-bar-item.warn .v { color: #fb923c; }
+.capital-bar-item.danger .v { color: var(--red, #f87171); }
+.capital-bar-item.ok .v { color: var(--green); }
+@media (max-width: 640px) {
+  .capital-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .manage-modal-overlay {
   position: fixed;
   inset: 0;

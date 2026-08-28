@@ -1260,6 +1260,8 @@ export interface WheelOpportunity {
   id: string
   source: 'dual' | 'timing' | 'score' | string
   grade: 'dual' | 'timing' | 'score' | 'watch' | 'blocked' | string
+  /** 与前端 TradeTier 同一套: WATCH|QUEUE|PRIORITY|MANAGE */
+  trade_tier?: 'WATCH' | 'QUEUE' | 'PRIORITY' | 'MANAGE' | string
   actionable: boolean
   symbol: string
   side: 'PUT' | 'CALL' | string

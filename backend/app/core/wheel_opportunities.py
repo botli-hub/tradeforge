@@ -218,6 +218,43 @@ def _grade_actionable(
     return "watch", False
 
 
+def grade_to_trade_tier(
+    grade: Optional[str],
+    *,
+    kind: str = "OPEN",
+    actionable: bool = True,
+    covers_earnings: bool = False,
+    demote_earnings: bool = True,
+) -> str:
+    """后端 grade → 与前端 TradeTier 同一套: WATCH|QUEUE|PRIORITY|MANAGE。
+
+    dual 可做 → PRIORITY(含财报默认可排单)
+    score/timing 可做 → QUEUE
+    watch/blocked/不可做 → WATCH
+    """
+    if kind == "MANAGE":
+        return "MANAGE"
+    g = (grade or "watch").lower()
+    if not actionable or g in ("blocked", "watch"):
+        return "WATCH"
+    if g == "dual":
+        if covers_earnings and demote_earnings:
+            return "QUEUE"
+        return "PRIORITY"
+    if g in ("score", "timing"):
+        return "QUEUE"
+    return "WATCH"
+
+
+def attach_trade_tier(item: Dict[str, Any]) -> Dict[str, Any]:
+    item["trade_tier"] = grade_to_trade_tier(
+        item.get("grade"),
+        actionable=bool(item.get("actionable")),
+        covers_earnings=bool(item.get("covers_earnings")),
+    )
+    return item
+
+
 def _portfolio_put_stress(cfg: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     """是否应暂停新开 Put:利用率超限 或 行权压力过高。"""
     from app.core.wheel_portfolio import portfolio_overview
@@ -610,6 +647,8 @@ def build_opportunities(
         }
 
     items = [_fill_from_code(x) for x in merged.values()]
+    for x in items:
+        attach_trade_tier(x)
     from app.core.wheel_call_timing import is_holding_call_opp
     items = [x for x in items if is_holding_call_opp(x)]
 

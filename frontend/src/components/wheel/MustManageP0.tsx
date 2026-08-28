@@ -49,7 +49,8 @@ export default function MustManageP0({
 
   return (
     <>
-      <div className="home-todo-label">P0 · 必须处理持仓</div>
+      <div className="panel-title" style={{ marginBottom: 8 }}>必须处理</div>
+      <div className="home-todo-label" style={{ marginTop: 0 }}>持仓浮盈对账 · action_code 仅参考</div>
       {!list.length && (
         <div className="home-todo-empty">暂无紧急项 — 持仓健康</div>
       )}

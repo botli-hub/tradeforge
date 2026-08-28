@@ -61,6 +61,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_expiries": 6,
         # 优先覆盖标的核心 DTE(无 pad),再补 pad 外的近月/远月
         "prefer_core_dte": True,
+        # 相对标的 dte_min/dte_max 外扩天数,给近月/远月补位
+        "dte_pad_days": 7,
         # Wheel 触线 EMA 最少 K 线根数(LEAPS 默认 60/210 过严,短历史合约触不到)
         "ema50_min_bars": 45,
         "ema200_min_bars": 120,
