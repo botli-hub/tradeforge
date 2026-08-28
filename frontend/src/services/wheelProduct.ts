@@ -525,6 +525,34 @@ export function evaluateTradeability(p: TradeabilityInput): { ok: boolean; reaso
   return { ok: reasons.length === 0, reasons }
 }
 
+/** 后端 grade ↔ 前端 TradeTier 同一套。后端已算 trade_tier 时优先采用,本地只套执行门槛。 */
+export function gradeToTradeTier(p: {
+  kind?: 'OPEN' | 'MANAGE'
+  grade?: string | null
+  trade_tier?: string | null
+  actionable?: boolean
+  covers_earnings?: boolean
+  demote_earnings?: boolean
+  tradeable?: boolean
+  risk_block?: boolean
+}): TradeTier {
+  if (p.kind === 'MANAGE') return 'MANAGE'
+  if (p.risk_block || p.tradeable === false) return 'WATCH'
+  const given = (p.trade_tier || '').toUpperCase()
+  if (given === 'PRIORITY' || given === 'QUEUE' || given === 'WATCH' || given === 'MANAGE') {
+    if (given === 'PRIORITY' && p.covers_earnings && p.demote_earnings !== false) return 'QUEUE'
+    return given as TradeTier
+  }
+  const g = (p.grade || 'watch').toLowerCase()
+  if (!p.actionable || g === 'blocked' || g === 'watch') return 'WATCH'
+  if (g === 'dual') {
+    if (p.covers_earnings && p.demote_earnings !== false) return 'QUEUE'
+    return 'PRIORITY'
+  }
+  if (g === 'score' || g === 'timing') return 'QUEUE'
+  return 'WATCH'
+}
+
 export function resolveTradeTier(p: {
   kind: 'OPEN' | 'MANAGE'
   hasRanked: boolean
@@ -537,16 +565,16 @@ export function resolveTradeTier(p: {
   demote_earnings?: boolean
 }): TradeTier {
   if (p.kind === 'MANAGE') return 'MANAGE'
-  if (p.risk_block || !p.tradeable) return 'WATCH'
-  // 优先:可交易高分 + 触线;强触线可放宽到高分可交易
-  const strongTouch = p.ema_type === 'EMA200' || (p.iv_rank ?? 0) >= 50
-  if (p.hasRanked && p.tradeable && p.hasTouch) {
-    if (p.covers_earnings && p.demote_earnings) return 'QUEUE' // 含财报不进优先
-    return 'PRIORITY'
-  }
-  if (p.hasRanked && p.tradeable && strongTouch && p.hasTouch) return 'PRIORITY'
-  if (p.hasRanked && p.tradeable) return 'QUEUE'
-  return 'WATCH'
+  const grade = p.hasRanked && p.hasTouch ? 'dual' : p.hasRanked ? 'score' : p.hasTouch ? 'timing' : 'watch'
+  return gradeToTradeTier({
+    kind: p.kind,
+    grade,
+    actionable: p.tradeable && !p.risk_block,
+    covers_earnings: p.covers_earnings,
+    demote_earnings: p.demote_earnings,
+    tradeable: p.tradeable,
+    risk_block: p.risk_block,
+  })
 }
 
 export function explainOpenOpp(row: {

@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from app.data import leaps_repository as repo
+from app.core.wheel_expiries import pick_windowed_expiries, select_expiries  # noqa: F401
 from app.core.wheel_timing_klines import (
     TIMEFRAME_DAY,
     TIMEFRAME_HOUR,
@@ -351,44 +352,6 @@ def _annualized_yield(premium: float, strike: float, dte: int) -> float:
     if strike <= 0 or dte <= 0:
         return 0.0
     return round(premium / strike * (365 / dte) * 100, 2)
-
-
-def select_expiries(
-    eligible: List[Tuple[str, int]],
-    max_n: int = 6,
-    core_dte_min: Optional[int] = None,
-    core_dte_max: Optional[int] = None,
-    prefer_core: bool = True,
-) -> Tuple[List[Tuple[str, int]], List[Tuple[str, int]]]:
-    """从 DTE 窗口内的到期日中选取最多 max_n 个。
-
-    优先核心带(core_dte_min~max,通常=标的 dte 无 pad),再按 DTE 近→远补齐。
-    返回 (selected, skipped)。
-    """
-    if not eligible:
-        return [], []
-    max_n = max(1, int(max_n or 6))
-    # 已按 dte 升序更稳
-    ordered = sorted(eligible, key=lambda x: x[1])
-    if not prefer_core or core_dte_min is None or core_dte_max is None:
-        selected = ordered[:max_n]
-        skipped = ordered[max_n:]
-        return selected, skipped
-    core = [e for e in ordered if core_dte_min <= e[1] <= core_dte_max]
-    outer = [e for e in ordered if e not in core]
-    selected: List[Tuple[str, int]] = []
-    for e in core:
-        if len(selected) >= max_n:
-            break
-        selected.append(e)
-    for e in outer:
-        if len(selected) >= max_n:
-            break
-        selected.append(e)
-    selected.sort(key=lambda x: x[1])
-    sel_set = set(selected)
-    skipped = [e for e in ordered if e not in sel_set]
-    return selected, skipped
 
 
 class LeapsMonitor:
