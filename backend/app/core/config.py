@@ -52,7 +52,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "yield_method": "premium_over_strike",
     },
     "wheel_timing": {
-        "dte_min": 30, "dte_max": 500, "contract_max_per_symbol": 0,
+        "dte_min": 10, "dte_max": 55, "contract_max_per_symbol": 0,
         "iv_percentile_threshold": 0, "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
         # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
@@ -63,6 +63,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "prefer_core_dte": True,
         # 相对标的 dte_min/dte_max 外扩天数,给近月/远月补位
         "dte_pad_days": 7,
+        # 持股卖 Call:触线历史多久内算「时机到」(小时)
+        "call_touch_max_age_hours": 72,
         # Wheel 触线 EMA 最少 K 线根数(LEAPS 默认 60/210 过严,短历史合约触不到)
         "ema50_min_bars": 45,
         "ema200_min_bars": 120,
@@ -223,7 +225,17 @@ def get_db_overrides() -> Dict[str, Any]:
 
 def get_effective_config() -> Dict[str, Any]:
     """全项目唯一的“当前生效配置”:代码默认值 ← 数据库覆盖(设置页保存)。"""
-    return deep_merge(DEFAULT_CONFIG, get_db_overrides())
+    cfg = deep_merge(DEFAULT_CONFIG, get_db_overrides())
+    wt = cfg.get("wheel_timing") or {}
+    try:
+        lo, hi = int(wt.get("dte_min")), int(wt.get("dte_max"))
+    except (TypeError, ValueError):
+        return cfg
+    # 旧代码默认 30–500 / 21–60 视为未定制,收窄到 Wheel 舒适区 10–55
+    if (lo, hi) in ((30, 500), (21, 60)):
+        wt["dte_min"], wt["dte_max"] = 10, 55
+        cfg["wheel_timing"] = wt
+    return cfg
 
 
 def get_settings() -> dict:

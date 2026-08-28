@@ -514,7 +514,7 @@ function BackendConfigCard({
             </div>
 
             <div className="settings-row">
-              <label>全局 DTE 兜底(天)</label>
+              <label>全局 DTE 兜底(天,默认 10–55)</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <input type="number" style={{ width: 90 }} value={cfg.wheel_timing.dte_min}
                   onChange={e => up('wheel_timing', 'dte_min', Number(e.target.value))} />

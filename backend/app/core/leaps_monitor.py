@@ -119,8 +119,8 @@ class WheelTimingMonitor:
         cd = cfg.get("cooldown_trading_days")
         if cd:
             self.monitor.cooldown_days = cd
-        self.dte_min = cfg.get("dte_min", 21)
-        self.dte_max = cfg.get("dte_max", 60)
+        self.dte_min = cfg.get("dte_min", 10)
+        self.dte_max = cfg.get("dte_max", 55)
         self.iv_threshold = cfg.get("iv_percentile_threshold", 0)
         # strike 扫描区间(相对现价,非对称):[spot×(1−down), spot×(1+up)]
         self.strike_range_down = cfg.get("strike_range_down", 0.20)

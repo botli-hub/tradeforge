@@ -339,6 +339,39 @@ def get_timing_history(page: int = 1, page_size: int = 20,
         conn.close()
 
 
+def get_latest_call_touch(symbol: str, max_age_hours: float = 72) -> Optional[Dict[str, Any]]:
+    """该标的最近一次 CALL 触线(1h)。过期返回 None。"""
+    if not symbol:
+        return None
+    from datetime import datetime, timedelta
+    try:
+        hours = max(1.0, float(max_age_hours or 72))
+    except (TypeError, ValueError):
+        hours = 72.0
+    cutoff = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """SELECT * FROM wheel_timing_history
+               WHERE symbol = ? AND UPPER(side) = 'CALL' AND last_seen >= ?
+               ORDER BY last_seen DESC LIMIT 1""",
+            (str(symbol).strip().upper(), cutoff),
+        ).fetchone()
+        if row:
+            return dict(row)
+        row = conn.execute(
+            """SELECT * FROM leaps_signals
+               WHERE symbol = ? AND signal_level = 'WHEEL_CALL' AND created_at >= ?
+               ORDER BY created_at DESC LIMIT 1""",
+            (str(symbol).strip().upper(), cutoff),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 # ── 冷却状态 ──────────────────────────────────────────────────────────────────
 
 def is_contract_in_cooldown(contract_code: str) -> bool:

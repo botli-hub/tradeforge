@@ -164,8 +164,8 @@ class TargetIn(BaseModel):
     max_capital: float = 0
     delta_min: float = 0.15
     delta_max: float = 0.30
-    dte_min: int = 21
-    dte_max: int = 45
+    dte_min: int = 10
+    dte_max: int = 55
     min_annualized: float = 15.0
     min_open_interest: int = 100
     enabled: bool = True
@@ -1232,8 +1232,8 @@ def roll_options(
     div_date = (div or {}).get("date")
 
     # 到期日:目标 DTE + 优先覆盖 30–45
-    dte_lo = int(target.get("dte_min") or 21)
-    dte_hi = int(target.get("dte_max") or 60)
+    dte_lo = int(target.get("dte_min") or 10)
+    dte_hi = int(target.get("dte_max") or 55)
     dte_hi_eff = max(dte_hi, 45)
     next_exps = []
     if opend_ok:

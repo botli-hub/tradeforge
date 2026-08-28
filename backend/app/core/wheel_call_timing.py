@@ -1,10 +1,8 @@
 """持股卖 Call 时机层。
 
 池 = HOLDING(已持股待挂 CC), 不是全市场。
-触线 = 现货相对成本基础/愿卖价, 不照搬 Put 的期权价穿 EMA。
-立场:
-  acquire 允许接货: HOLDING 即可找 CC; 现价离开成本只升优先,不拦截。
-  income  只收租: 一旦 HOLDING 就更积极; 不挂才是异常。
+发现 = 合约 1h K 穿自身 EMA(WHEEL_CALL 触线)。无触线不算时机到。
+立场只影响触线之后的升档,不单独当发现。
 action / hint 仅参考, 不自动下单, 不改 POSITION_QUANT。
 """
 from __future__ import annotations
@@ -198,9 +196,14 @@ def evaluate_cc_timing(
     candidate_ann: Optional[float] = None,
     candidate_dte: Optional[int] = None,
     candidate_spread: Optional[float] = None,
+    ema_touch: bool = False,
+    ema_type: Optional[str] = None,
     cfg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """纯函数。返回 grade/hint/reasons, 不含交易结论。"""
+    """纯函数。返回 grade/hint/reasons, 不含交易结论。
+
+    ema_touch: 该标的近期有 WHEEL_CALL 1h 触线。无触线 → 待时机,不给找 Call。
+    """
     st = normalize_stance(stance)
     tc = call_timing_cfg(cfg)
     cushion = cushion_pct(spot, cost_basis)
@@ -246,6 +249,8 @@ def evaluate_cc_timing(
             "cc_contracts": contracts,
             "iv_lift": iv_lift,
             "candidate_ok": cand_ok,
+            "ema_touch": False,
+            "ema_type": ema_type,
             "hint": "持股不足一张,暂不能标准 CC",
             "tag": "不足一张",
             "reasons": reasons + ["持股不足 100 股"],
@@ -256,36 +261,46 @@ def evaluate_cc_timing(
     elif cost_basis:
         reasons.append("缺现价,无法判断是否离开成本")
 
-    grade = GRADE_WATCH
-    hint = "持股待时机"
-    tag = "待时机"
-
-    if st == STANCE_INCOME:
-        # 只收租:HOLDING 就该找 CC;过线/裸奔升优先
-        grade = GRADE_READY
-        hint = "只收租·持股待挂 CC"
-        tag = "待挂CC"
-        reasons.append("只收租:不挂 CC 视为异常")
-        if cand_ok or (uncovered_days is not None and int(uncovered_days) >= 3):
-            grade = GRADE_PRIORITY
-            hint = "只收租·优先找 CC"
-            tag = "优先挂CC"
-            if uncovered_days is not None and int(uncovered_days) >= 3:
-                reasons.append(f"已裸奔 {int(uncovered_days)} 天")
+    touched = bool(ema_touch)
+    if touched:
+        reasons.append(f"1h 触线{(' · ' + ema_type) if ema_type else ''}".strip())
     else:
-        # 允许接货:HOLDING 即可找 CC;离开成本 3% 只升优先,不再挡住「找 Call」
-        grade = GRADE_READY
-        hint = "允许接货·持股可挂 CC"
-        tag = "可找CC"
-        reasons.append("允许接货:不因现价相对成本拦截找 Call")
-        need = tc["acquire_cushion_pct"]
-        left = cushion is not None and cushion >= need
-        if left:
-            reasons.append(f"现价已离开成本≥{need:g}%")
-        if left or iv_lift or cand_ok:
-            grade = GRADE_PRIORITY
-            hint = "允许接货·优先找 CC"
-            tag = "优先挂CC"
+        reasons.append("无近期 1h 触线,不发现卖 Call")
+
+    grade = GRADE_WATCH
+    hint = "待触线(1h EMA)"
+    tag = "待触线"
+
+    if not touched:
+        if st == STANCE_INCOME:
+            hint = "只收租·等待 1h 触线"
+            reasons.append("只收租:发现仍走触线,不因持股就挂")
+        else:
+            hint = "允许接货·等待 1h 触线"
+    else:
+        if st == STANCE_INCOME:
+            grade = GRADE_READY
+            hint = "只收租·触线可挂 CC"
+            tag = "时机到"
+            reasons.append("只收租:触线后应挂 CC")
+            if cand_ok or (uncovered_days is not None and int(uncovered_days) >= 3):
+                grade = GRADE_PRIORITY
+                hint = "只收租·优先找 CC"
+                tag = "优先挂CC"
+                if uncovered_days is not None and int(uncovered_days) >= 3:
+                    reasons.append(f"已裸奔 {int(uncovered_days)} 天")
+        else:
+            grade = GRADE_READY
+            hint = "允许接货·触线可挂 CC"
+            tag = "时机到"
+            need = tc["acquire_cushion_pct"]
+            left = cushion is not None and cushion >= need
+            if left:
+                reasons.append(f"现价已离开成本≥{need:g}%")
+            if left or iv_lift or cand_ok:
+                grade = GRADE_PRIORITY
+                hint = "允许接货·优先找 CC"
+                tag = "优先挂CC"
 
     return {
         "stance": st,
@@ -297,6 +312,8 @@ def evaluate_cc_timing(
         "cc_contracts": contracts,
         "iv_lift": iv_lift,
         "candidate_ok": cand_ok,
+        "ema_touch": touched,
+        "ema_type": ema_type,
         "hint": hint,
         "tag": tag,
         "reasons": reasons,

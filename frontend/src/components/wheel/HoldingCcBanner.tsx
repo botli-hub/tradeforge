@@ -69,7 +69,7 @@ export default function HoldingCcBanner({
     <div className="panel today-panel">
       <div className="panel-title">待挂 CC</div>
       <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
-        持股卖 Call · 与 Put 优先开仓分档 · 参考,不自动下单
+        发现走 1h 触线 · 无触线不算时机到 · 参考,不自动下单
       </div>
       {rows.length === 0 && (
         <div className="home-todo-empty">暂无持股待挂</div>
@@ -77,7 +77,7 @@ export default function HoldingCcBanner({
       {hot.length > 0 && hot.map(line)}
       {wait.length > 0 && (
         <>
-          <div style={{ fontSize: 12, margin: '8px 0 4px', opacity: 0.75 }}>其它持股(不足一张等)</div>
+          <div style={{ fontSize: 12, margin: '8px 0 4px', opacity: 0.75 }}>待触线(1h EMA)</div>
           {wait.map(line)}
         </>
       )}
