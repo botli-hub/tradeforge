@@ -3,7 +3,7 @@
 池 = HOLDING(已持股待挂 CC), 不是全市场。
 触线 = 现货相对成本基础/愿卖价, 不照搬 Put 的期权价穿 EMA。
 立场:
-  acquire 允许接货: 不默认天天挂; 现价离开成本一段才进 ready。
+  acquire 允许接货: HOLDING 即可找 CC; 现价离开成本只升优先,不拦截。
   income  只收租: 一旦 HOLDING 就更积极; 不挂才是异常。
 action / hint 仅参考, 不自动下单, 不改 POSITION_QUANT。
 """
@@ -273,28 +273,19 @@ def evaluate_cc_timing(
             if uncovered_days is not None and int(uncovered_days) >= 3:
                 reasons.append(f"已裸奔 {int(uncovered_days)} 天")
     else:
-        # 允许接货:现价离开成本一段才挂;被 call 走是计划内
+        # 允许接货:HOLDING 即可找 CC;离开成本 3% 只升优先,不再挡住「找 Call」
+        grade = GRADE_READY
+        hint = "允许接货·持股可挂 CC"
+        tag = "可找CC"
+        reasons.append("允许接货:不因现价相对成本拦截找 Call")
         need = tc["acquire_cushion_pct"]
         left = cushion is not None and cushion >= need
         if left:
-            grade = GRADE_READY
-            hint = f"现价已离开成本≥{need:g}%"
-            tag = "时机到"
-            reasons.append(f"缓冲≥{need:g}%(允许接货不默认天天挂)")
-            if iv_lift or cand_ok:
-                grade = GRADE_PRIORITY
-                hint = "允许接货·时机到"
-                tag = "优先挂CC"
-        else:
-            grade = GRADE_WATCH
-            hint = f"允许接货·现价未离开成本{need:g}%"
-            tag = "待时机"
-            reasons.append(f"缓冲未达 {need:g}%,不默认挂 CC")
-            if iv_lift and cushion is not None and cushion >= 0:
-                grade = GRADE_READY
-                hint = "现价已站上成本且 IV 抬升"
-                tag = "可找CC"
-                reasons.append("IV 抬升作可选加成,仍锚在成本之上")
+            reasons.append(f"现价已离开成本≥{need:g}%")
+        if left or iv_lift or cand_ok:
+            grade = GRADE_PRIORITY
+            hint = "允许接货·优先找 CC"
+            tag = "优先挂CC"
 
     return {
         "stance": st,

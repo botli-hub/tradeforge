@@ -74,7 +74,7 @@ export default function HoldingCcBanner({
       {hot.length > 0 && hot.map(line)}
       {wait.length > 0 && (
         <>
-          <div style={{ fontSize: 12, marginTop: 8, opacity: 0.75 }}>待时机(允许接货不默认天天挂)</div>
+          <div style={{ fontSize: 12, marginTop: 8, opacity: 0.75 }}>其它持股(不足一张等)</div>
           {wait.map(line)}
         </>
       )}
