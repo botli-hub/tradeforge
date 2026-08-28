@@ -80,6 +80,19 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
     sell_above = get_target_sell_above(symbol) if symbol else None
     if sell_above is None:
         sell_above = target.get("sell_above") or target.get("call_floor")
+
+    touch = None
+    try:
+        from app.data.leaps_repository import get_latest_call_touch
+        age_h = 72.0
+        try:
+            age_h = float(((cfg.get("wheel_timing") or {}).get("call_touch_max_age_hours") or 72))
+        except (TypeError, ValueError):
+            age_h = 72.0
+        touch = get_latest_call_touch(str(symbol or ""), max_age_hours=age_h)
+    except Exception:
+        touch = None
+
     timing = evaluate_cc_timing(
         stance=target.get("stance") or cycle.get("stance"),
         spot=spot,
@@ -87,12 +100,24 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
         sell_above=sell_above,
         shares=shares,
         uncovered_days=cycle.get("uncovered_days"),
-        iv_rank=iv_rank,
+        iv_rank=iv_rank if iv_rank is not None else (touch or {}).get("iv_rank"),
         min_annualized=target.get("min_annualized"),
         dte_min=target.get("dte_min"),
         dte_max=target.get("dte_max"),
+        candidate_ann=(touch or {}).get("annualized"),
+        candidate_dte=(touch or {}).get("dte"),
+        ema_touch=bool(touch),
+        ema_type=(touch or {}).get("ema_type"),
         cfg=cfg,
     )
+    if touch:
+        timing["touch"] = {
+            "contract_code": touch.get("contract_code"),
+            "strike": touch.get("strike"),
+            "last_seen": touch.get("last_seen") or touch.get("created_at"),
+            "ema_type": touch.get("ema_type"),
+            "dte": touch.get("dte"),
+        }
 
     hint = {
         "cycle_id": cycle.get("id"),

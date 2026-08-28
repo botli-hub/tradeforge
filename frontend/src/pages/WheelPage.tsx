@@ -121,7 +121,7 @@ const FEE_OPTS = [0, 0.65, 1, 1.5, 2, 3, 5, 10]
 const CONTRACT_SIZE_OPTS = [100]
 
 const DELTA_OPTS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4]
-const DTE_OPTS = [7, 14, 21, 30, 35, 45, 60, 90]
+const DTE_OPTS = [10, 14, 21, 30, 35, 45, 55, 60]
 const ANN_OPTS = [8, 10, 12, 15, 18, 20, 25, 30, 40]
 const OI_OPTS = [10, 50, 100, 200, 500, 1000]
 
