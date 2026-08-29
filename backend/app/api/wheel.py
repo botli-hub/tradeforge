@@ -963,6 +963,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         q = quotes.get(c["open_contract_code"], {})
         cur = q.get("last") or q.get("ask") or 0
         buyback = q.get("ask") or q.get("last") or 0
+        bid = q.get("bid") or 0
         open_price = c.get("open_price") or 0
         # 浮盈用买回 ask(卖方真实平仓成本),无 ask 再退 last
         close_for_pnl = buyback or cur
@@ -1020,6 +1021,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "contract_code": c["open_contract_code"], "strike": strike,
             "expiry": c.get("open_expiry"), "dte": dte,
             "open_price": open_price, "current_price": cur, "buyback_ask": buyback,
+            "buyback_bid": bid or None,
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
             "delta": q.get("delta") or 0,
             "theta": q.get("theta") or 0,

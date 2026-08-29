@@ -42,6 +42,7 @@ POSITION_QUANT: Dict[str, float] = {
     "fast_profit_days": 7.0,
     "iv_low_rank": 25.0,
     "iv_high_rank": 60.0,
+    "wide_spread_pct": 8.0,             # 点差占中间价超过则不可宣称止盈
 }
 
 
@@ -66,7 +67,7 @@ def merge_pos_quant(pos_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float
                 "dividend_warn_days", "threat_otm_buffer_pct",
                 "deep_itm_delta", "shallow_itm_delta_max",
                 "deep_itm_delta_call", "fast_profit_days",
-                "iv_low_rank", "iv_high_rank",
+                "iv_low_rank", "iv_high_rank", "wide_spread_pct",
                 "early_assign_delta_deep", "early_assign_delta_div",
                 "early_assign_delta_shallow_div", "early_assign_delta_otm_div",
                 "open_caution_buffer_pct",
