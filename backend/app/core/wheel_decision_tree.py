@@ -10,6 +10,7 @@ from app.core.wheel_decision_lib import (  # noqa: F401
     ACTION_CLOSE, ACTION_HOLD_THETA, ACTION_NONE, ACTION_PREPARE_ASSIGN,
     ACTION_REPLACE, ACTION_ROLL, ACTION_ROLL_ADJUST, POSITION_QUANT,
     build_assign_checklist, eval_hold_for_theta, eval_would_open_today,
+    capital_employed, captured_annualized, parse_days_held,
     merge_pos_quant, otm_buffer_pct, remaining_annualized, residual_floor,
 )
 
@@ -51,7 +52,8 @@ def decide_position(
     hold_theta_max_dte = int(q["hold_theta_max_dte"])
     shallow_itm_pct = float(q["shallow_itm_pct"])
     deep_moneyness_pct = float(q["deep_itm_moneyness_pct"])
-    deep_itm_delta = float(q["deep_itm_delta"])
+    deep_itm_delta_put = float(q["deep_itm_delta"])
+    deep_itm_delta_call = float(q.get("deep_itm_delta_call", deep_itm_delta_put))
     shallow_delta_max = float(q["shallow_itm_delta_max"])
     thin_otm_pct = float(q["thin_otm_buffer_pct"])
     threat_buf = float(q["threat_otm_buffer_pct"])
@@ -76,6 +78,7 @@ def decide_position(
     soft_hit = profit_pct is not None and profit_pct >= soft_profit
     underwater = profit_pct is not None and profit_pct < 0
     side = item.get("side")
+    deep_itm_delta = deep_itm_delta_call if str(side or "").upper() == "CALL" else deep_itm_delta_put
     floor_price = item.get("floor_price")
     try:
         floor_price = float(floor_price) if floor_price is not None else None
@@ -109,7 +112,23 @@ def decide_position(
             capital_util_pct is not None and capital_util_pct >= capital_tight_util
         )
 
-    remaining_ann = remaining_annualized(close_px, float(strike), dte if isinstance(dte, int) else None)
+    cap = capital_employed(
+        side=side,
+        strike=float(strike or 0),
+        spot=float(spot or 0) or None,
+        cost_basis=item.get("cost_basis") or item.get("share_cost"),
+    )
+    remaining_ann = remaining_annualized(
+        close_px, float(cap or 0), dte if isinstance(dte, int) else None,
+    )
+    days_held = parse_days_held(item)
+    captured_ann = captured_annualized(profit_pct, days_held)
+    iv_rank = item.get("iv_rank")
+    try:
+        iv_rank = float(iv_rank) if iv_rank is not None else None
+    except (TypeError, ValueError):
+        iv_rank = None
+    fast_profit_days = int(q["fast_profit_days"])
 
     low_yield = bool(
         not itm and remaining_ann is not None
@@ -146,6 +165,7 @@ def decide_position(
         close_notional=close_notional,
         min_annualized=min_annualized,
         pos_cfg=cfg,
+        iv_rank=iv_rank,
     )
     fee_trap = hold_meta["fee_trap"]
     residual_worth_keeping = hold_meta["residual_worth_keeping"]
@@ -163,6 +183,18 @@ def decide_position(
     )
     if profit_cap_close:
         hold_for_theta = False
+
+    velocity_close = False
+    if (
+        profit_hit
+        and days_held is not None
+        and days_held <= fast_profit_days
+        and dte is not None
+        and dte > hold_theta_max_dte
+        and not fee_trap
+    ):
+        hold_for_theta = False
+        velocity_close = True
 
     # 薄 OTM + 已止盈 + 非临期 → 不鼓励死拿 θ
     if thin_otm and hold_for_theta and dte is not None and dte > gamma_dte and profit_hit:
@@ -265,6 +297,18 @@ def decide_position(
         )
     if profit_cap_close:
         reasons.append(f"浮盈 {profit_pct}% ≥ 过高持有 {max_hold_profit_pct:g}% 且 DTE>{gamma_dte} → 落袋")
+    if velocity_close:
+        reasons.append(
+            f"已持{days_held}天兑现年化{captured_ann:g}%,剩余DTE{dte}> {hold_theta_max_dte} → 落袋周转"
+        )
+    if hold_meta.get("iv_crush"):
+        reasons.append(f"IV分位 {iv_rank:.0f}<{q['iv_low_rank']:.0f} 塌缩,止盈优先于吃θ")
+    elif hold_meta.get("iv_rich"):
+        reasons.append(f"IV分位 {iv_rank:.0f}≥{q['iv_high_rank']:.0f} 高位,剩余权利金偏贵")
+    if cap:
+        reasons.append(
+            f"占用权益 ${cap:g}" + ("(持股)" if str(side or "").upper() == "CALL" else "(CSP担保)")
+        )
     if capital_tight and (low_yield or soft_hit):
         util_txt = f"{capital_util_pct:.0f}%" if capital_util_pct is not None else f"≥{capital_tight_util:g}%"
         reasons.append(f"资金紧(利用率 {util_txt}),优先释放低效担保")
@@ -345,13 +389,15 @@ def decide_position(
                 if capital_tight
                 else f"已达硬止盈{profit_target:g}%;需腾仓仍可买回"
             )
-    # 5 效率:硬止盈 / 过高持有
+    # 5 效率:硬止盈 / 过高持有 / 快速兑现周转
     elif profit_hit or profit_cap_close:
-        branch = "close_profit"
+        branch = "close_velocity" if velocity_close else "close_profit"
         code, priority = ACTION_CLOSE, 2
         prefer_card = "no_roll"
         if profit_cap_close and not profit_hit:
             hint = f"过高持有(≥{max_hold_profit_pct:g}%)落袋"
+        elif velocity_close:
+            hint = f"止盈周转(持{days_held}天兑现年化{captured_ann:g}%)"
         elif side == "CALL":
             hint = f"止盈(≥{profit_target:g}%)结束Call义务"
         else:
@@ -360,10 +406,16 @@ def decide_position(
             secondary_hint = f"OTM垫<{thin_otm_pct:g}%,落袋后择机再开"
     # 6 效率:软止盈+低效
     elif soft_hit and low_yield:
-        branch = "replace_soft"
-        code, priority = ACTION_REPLACE, 3
-        prefer_card = "no_roll"
-        hint = f"软止盈≥{soft_profit:g}%+剩余年化<{min_annualized}% → 换仓"
+        if str(side or "").upper() == "CALL":
+            branch = "lift_cover_soft"
+            code, priority = ACTION_CLOSE, 3
+            prefer_card = "no_roll"
+            hint = f"软止盈≥{soft_profit:g}%+覆盖年化<{min_annualized}% → 揭盖"
+        else:
+            branch = "replace_soft"
+            code, priority = ACTION_REPLACE, 3
+            prefer_card = "no_roll"
+            hint = f"软止盈≥{soft_profit:g}%+剩余年化<{min_annualized}% → 换仓"
     # 7 ≤硬处理窗
     elif needs_roll_near and itm:
         branch = "roll_itm_near"
@@ -388,10 +440,16 @@ def decide_position(
         hint = "Roll out(" + ",".join(bits) + ")"
     # 8 纯低效
     elif low_yield:
-        branch = "replace_low_yield"
-        code, priority = ACTION_REPLACE, 4
-        prefer_card = "no_roll"
-        hint = f"剩余年化{remaining_ann}%<{min_annualized}% → 换仓"
+        if str(side or "").upper() == "CALL":
+            branch = "lift_cover"
+            code, priority = ACTION_CLOSE, 4
+            prefer_card = "no_roll"
+            hint = f"覆盖年化{remaining_ann}%<{min_annualized}% → 揭盖等更好时机"
+        else:
+            branch = "replace_low_yield"
+            code, priority = ACTION_REPLACE, 4
+            prefer_card = "no_roll"
+            hint = f"剩余年化{remaining_ann}%<{min_annualized}% → 换仓"
     # 9 超愿接 / 纪律硬否决 → 平
     elif underwater and not itm and strike_above_floor:
         branch = "close_above_floor"
@@ -562,6 +620,9 @@ def decide_position(
         "shallow_itm_pct": shallow_itm_pct,
         "deep_itm_moneyness_pct": deep_moneyness_pct,
         "deep_itm_delta": deep_itm_delta,
+        "deep_itm_delta_put": deep_itm_delta_put,
+        "deep_itm_delta_call": deep_itm_delta_call,
+        "fast_profit_days": fast_profit_days,
         "thin_otm_buffer_pct": thin_otm_pct,
         "threat_otm_buffer_pct": threat_buf,
         "min_close_notional": hold_meta["min_close_notional"],
@@ -581,6 +642,13 @@ def decide_position(
         "strike_above_floor": strike_above_floor,
         "thin_otm": thin_otm,
         "profit_cap_close": profit_cap_close,
+        "velocity_close": velocity_close,
+        "days_held": days_held,
+        "captured_annualized": captured_ann,
+        "capital_employed": cap,
+        "iv_rank": iv_rank,
+        "iv_crush": bool(hold_meta.get("iv_crush")),
+        "iv_rich": bool(hold_meta.get("iv_rich")),
         "needs_roll_near": needs_roll_near,
         "shallow_itm": shallow_itm,
         "soft_profit_pct": soft_profit,

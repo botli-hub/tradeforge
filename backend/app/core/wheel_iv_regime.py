@@ -128,6 +128,19 @@ def collect_symbol_ivr(symbols: Optional[List[str]] = None) -> List[Dict[str, An
     return out
 
 
+def symbol_iv_rank(symbol: Optional[str]) -> Optional[float]:
+    if not symbol:
+        return None
+    rows = collect_symbol_ivr([str(symbol)])
+    if not rows:
+        return None
+    try:
+        v = rows[0].get("iv_rank")
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def median_ivr(rows: List[Dict[str, Any]]) -> Tuple[Optional[float], int]:
     vals = [r["iv_rank"] for r in rows if r.get("iv_rank") is not None]
     if not vals:

@@ -23,7 +23,8 @@ POSITION_QUANT: Dict[str, float] = {
     "gamma_warn_dte": 7.0,              # 临期/gamma
     "shallow_itm_pct": 1.5,             # 浅 ITM 价内%
     "deep_itm_moneyness_pct": 3.0,      # 深 ITM 价内%
-    "deep_itm_delta": 0.50,             # 深 ITM Δ
+    "deep_itm_delta": 0.38,             # PUT 深 ITM Δ(允许接货时=更早准备接货)
+    "deep_itm_delta_call": 0.35,        # CALL 更早管,低于愿卖/成本则防守
     "shallow_itm_delta_max": 0.55,
     "thin_otm_buffer_pct": 1.5,         # 薄 OTM 垫%
     "threat_otm_buffer_pct": 5.0,       # 浮亏威胁垫% (≤hard_roll 内)
@@ -37,6 +38,10 @@ POSITION_QUANT: Dict[str, float] = {
     "early_assign_delta_otm_div": 0.70,
     # would_open 薄垫 caution
     "open_caution_buffer_pct": 2.0,
+    # 几天内打到硬止盈且剩余 DTE 仍长 → 落袋周转
+    "fast_profit_days": 7.0,
+    "iv_low_rank": 25.0,
+    "iv_high_rank": 60.0,
 }
 
 
@@ -60,6 +65,8 @@ def merge_pos_quant(pos_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float
                 "deep_itm_moneyness_pct", "capital_tight_util_pct",
                 "dividend_warn_days", "threat_otm_buffer_pct",
                 "deep_itm_delta", "shallow_itm_delta_max",
+                "deep_itm_delta_call", "fast_profit_days",
+                "iv_low_rank", "iv_high_rank",
                 "early_assign_delta_deep", "early_assign_delta_div",
                 "early_assign_delta_shallow_div", "early_assign_delta_otm_div",
                 "open_caution_buffer_pct",
@@ -71,10 +78,66 @@ def merge_pos_quant(pos_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float
     return out
 
 
-def remaining_annualized(close_px: float, strike: float, dte: Optional[int]) -> Optional[float]:
-    if not strike or not dte or dte <= 0 or close_px <= 0:
+def capital_employed(
+    *,
+    side: Optional[str],
+    strike: float,
+    spot: Optional[float] = None,
+    cost_basis: Optional[float] = None,
+) -> Optional[float]:
+    """占用权益分母。PUT=现金担保 strike; CALL=持股市值/成本。"""
+    if str(side or "").upper() == "CALL":
+        for v in (cost_basis, spot, strike):
+            try:
+                if v is not None and float(v) > 0:
+                    return float(v)
+            except (TypeError, ValueError):
+                continue
         return None
-    return round(close_px / strike * 365 / dte * 100, 2)
+    try:
+        return float(strike) if strike else None
+    except (TypeError, ValueError):
+        return None
+
+
+def remaining_annualized(close_px: float, capital: float, dte: Optional[int]) -> Optional[float]:
+    """剩余权利金 / 占用权益 × 365/DTE。"""
+    if not capital or not dte or dte <= 0 or close_px <= 0:
+        return None
+    return round(close_px / capital * 365 / dte * 100, 2)
+
+
+def captured_annualized(profit_pct: Optional[float], days_held: Optional[int]) -> Optional[float]:
+    """已兑现浮盈折年化:几天赚到 50% 和一个月赚到 50% 不是一回事。"""
+    if profit_pct is None or days_held is None:
+        return None
+    try:
+        d = int(days_held)
+        if d < 1:
+            d = 1
+        return round(float(profit_pct) / d * 365, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_days_held(item: Dict[str, Any]) -> Optional[int]:
+    if item.get("days_held") is not None:
+        try:
+            return max(0, int(item["days_held"]))
+        except (TypeError, ValueError):
+            pass
+    from datetime import datetime, date
+    for key in ("opened_at", "sold_at", "started_at", "updated_at"):
+        raw = item.get(key)
+        if not raw:
+            continue
+        try:
+            s = str(raw)[:19].replace("T", " ")
+            dt = datetime.fromisoformat(s)
+            return max(0, (date.today() - dt.date()).days)
+        except Exception:
+            continue
+    return None
 
 
 def residual_floor(min_annualized: float, pos_cfg: Optional[Dict[str, Any]] = None) -> float:
@@ -96,6 +159,7 @@ def eval_hold_for_theta(
     close_notional: float,
     min_annualized: float,
     pos_cfg: Optional[Dict[str, Any]] = None,
+    iv_rank: Optional[float] = None,
 ) -> Dict[str, Any]:
     """统一「是否吃 θ」判定,持仓树与 Roll 场景共用。"""
     q = merge_pos_quant(pos_cfg)
@@ -104,6 +168,8 @@ def eval_hold_for_theta(
     gamma_dte = int(q["gamma_warn_dte"])
     min_close_notional = float(q["min_close_notional"])
     rem_floor = residual_floor(min_annualized, pos_cfg)
+    iv_low = float(q["iv_low_rank"])
+    iv_high = float(q["iv_high_rank"])
 
     underwater = profit_pct is not None and profit_pct < 0
     fee_trap = bool(
@@ -113,8 +179,6 @@ def eval_hold_for_theta(
         and profit_pct is not None
         and profit_pct >= hold_theta_min_profit
     )
-    # 仅浮盈仓:「剩余年化高」= 权利金还值得继续收
-    # 浮亏仓:剩余权利金高 = 市场仍定价风险,不可当成健康收租信号
     residual_worth = bool(
         not underwater
         and remaining_ann is not None
@@ -133,6 +197,25 @@ def eval_hold_for_theta(
             or (dte <= hold_theta_max_dte and residual_worth)
         )
     )
+    iv_crush = False
+    iv_rich = False
+    try:
+        if iv_rank is not None:
+            ivr = float(iv_rank)
+            if ivr < iv_low:
+                iv_crush = True
+                if hold and profit_pct is not None and profit_pct >= hold_theta_min_profit and not fee_trap:
+                    hold = False
+            elif ivr >= iv_high:
+                iv_rich = True
+                if (
+                    not hold and residual_worth and not itm and not underwater
+                    and dte is not None and dte <= int(q["hard_roll_dte"])
+                    and profit_pct is not None and profit_pct >= hold_theta_min_profit
+                ):
+                    hold = True
+    except (TypeError, ValueError):
+        pass
     return {
         "hold_for_theta": hold,
         "fee_trap": fee_trap,
@@ -143,6 +226,8 @@ def eval_hold_for_theta(
         "hold_theta_max_dte": hold_theta_max_dte,
         "gamma_dte": gamma_dte,
         "min_close_notional": min_close_notional,
+        "iv_crush": iv_crush,
+        "iv_rich": iv_rich,
     }
 
 
