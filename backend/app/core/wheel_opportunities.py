@@ -142,6 +142,7 @@ def _symbol_context(symbol: str) -> Dict[str, Any]:
         "committed": round(committed, 2),
         "cost_basis": (holding or {}).get("cost_basis"),
         "floor_price": t.get("floor_price"),
+        "stance": t.get("stance") or "acquire",
         "enabled": bool(t.get("enabled", True)),
     }
 
@@ -157,13 +158,18 @@ def _red_flags(
     portfolio_stress: bool = False,
     iv_rank: Optional[float] = None,
     iv_low_threshold: float = 25.0,
+    stance: Optional[str] = None,
 ) -> List[str]:
     flags = []
+    st = str(stance or "").strip().lower()
+    income = st in ("income", "只收租", "rent", "premium")
     if exceeds_capital:
         flags.append("超资金上限")
+    if side == "PUT" and income:
+        flags.append("不愿接货·不做")
     if side == "PUT" and covers_earnings and earnings_hard:
         flags.append("覆盖财报")
-    if side == "PUT" and trend == "DOWN":
+    if side == "PUT" and trend == "DOWN" and income:
         flags.append("趋势DOWN")
     if side == "PUT" and below_floor:
         flags.append("已入愿接区·指派风险升")
@@ -184,10 +190,10 @@ def _grade_actionable(
 ) -> Tuple[str, bool]:
     """返回 (grade, actionable)。grade: dual|timing|score|blocked|watch
 
-    硬阻断:超资金 / 覆盖财报 / 组合压力高(新 Put)
+    硬阻断:超资金 / 覆盖财报 / 组合压力高(新 Put) / 不愿接货·不做
     「已入愿接区」「IV低位」仅软标签或软降档,不单独 hard block。
     """
-    hard = [f for f in flags if f in ("超资金上限", "覆盖财报", "组合压力高")]
+    hard = [f for f in flags if f in ("超资金上限", "覆盖财报", "组合压力高", "不愿接货·不做")]
     soft_all = [f for f in flags if f not in hard]
     # 不参与降档的软标签(仍出现在 flags 里给前端角标)
     soft_demote = [f for f in soft_all if f not in (
@@ -402,7 +408,9 @@ def build_opportunities(
         exceeds: bool,
         below: bool,
         iv_rank: Optional[float] = None,
+        symbol: Optional[str] = None,
     ) -> List[str]:
+        st = (ensure_ctx(symbol) or {}).get("stance") if symbol else None
         return _red_flags(
             side=side,
             trend=trend,
@@ -413,6 +421,7 @@ def build_opportunities(
             portfolio_stress=put_stress and side == "PUT",
             iv_rank=iv_rank,
             iv_low_threshold=iv_low_thr,
+            stance=st,
         )
 
     # 1) timing history
@@ -432,7 +441,7 @@ def build_opportunities(
         below = bool(h.get("below_floor"))
         ivr = h.get("iv_rank") if h.get("iv_rank") is not None else (pool_o or {}).get("iv_rank")
         flags = flags_for(
-            side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr,
+            side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr, symbol=symbol,
         )
         score = (pool_o or {}).get("score")
         grade, actionable = _grade_actionable(
@@ -522,7 +531,7 @@ def build_opportunities(
         below = bool(s.get("below_floor")) if "below_floor" in s else False
         ivr = s.get("iv_rank") if s.get("iv_rank") is not None else (pool_o or {}).get("iv_rank")
         flags = flags_for(
-            side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr,
+            side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr, symbol=symbol,
         )
         score = (pool_o or {}).get("score")
         grade, actionable = _grade_actionable(
@@ -590,6 +599,7 @@ def build_opportunities(
                     exceeds=bool(o.get("exceeds_capital")),
                     below=bool((m.get("timing") or {}).get("below_floor")),
                     iv_rank=m.get("iv_rank") if m.get("iv_rank") is not None else o.get("iv_rank"),
+                    symbol=symbol,
                 )
                 m["flags"] = flags
                 m["trend"] = o.get("trend")
@@ -610,6 +620,7 @@ def build_opportunities(
             exceeds=bool(o.get("exceeds_capital")),
             below=False,
             iv_rank=o.get("iv_rank"),
+            symbol=symbol,
         )
         score = o.get("score")
         grade, actionable = _grade_actionable(

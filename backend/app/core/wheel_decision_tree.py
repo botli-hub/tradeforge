@@ -1,4 +1,10 @@
-"""decide_position 核心树. 包装入口见 wheel_decision."""
+"""decide_position 核心树. 包装入口见 wheel_decision.
+
+产品默认允许接货:深 ITM Put 是接货窗口,不是默认 Roll。
+不愿接货的标的不应进轮子;income 仅作偏离守卫。
+"""
+from typing import Any, Dict, List, Optional
+
 from app.core.wheel_decision_lib import *  # noqa: F401,F403
 from app.core.wheel_decision_lib import (  # noqa: F401
     ACTION_CLOSE, ACTION_HOLD_THETA, ACTION_NONE, ACTION_PREPARE_ASSIGN,
@@ -6,6 +12,17 @@ from app.core.wheel_decision_lib import (  # noqa: F401
     build_assign_checklist, eval_hold_for_theta, eval_would_open_today,
     merge_pos_quant, otm_buffer_pct, remaining_annualized, residual_floor,
 )
+
+
+def _call_ok_to_deliver(item: Dict[str, Any], strike: float) -> bool:
+    """Call strike 已在成本/愿卖之上 → 交货符合预设。"""
+    from app.core.wheel_call_timing import strike_floor
+    fl = strike_floor(item.get("cost_basis") or item.get("share_cost"), item.get("sell_above"))
+    try:
+        return bool(fl is not None and float(fl) > 0 and float(strike) >= float(fl))
+    except (TypeError, ValueError):
+        return False
+
 
 def decide_position(
     item: Dict[str, Any],
@@ -176,6 +193,7 @@ def decide_position(
         target_enabled=target_enabled,
         dte=dte if isinstance(dte, int) else None,
         pos_cfg=cfg,
+        stance=item.get("stance"),
     )
     would_open = would_meta["would_open_today"]
     would_open_reasons = list(would_meta["would_open_reasons"] or [])
@@ -252,6 +270,9 @@ def decide_position(
         reasons.append(f"资金紧(利用率 {util_txt}),优先释放低效担保")
 
     # ── 决策树(量化序,命中即停) ──
+    from app.core.wheel_stance import STANCE_INCOME, normalize_stance
+    st = normalize_stance(item.get("stance"))
+
     code: str = ACTION_NONE
     hint: Optional[str] = None
     priority = 9
@@ -259,23 +280,45 @@ def decide_position(
     secondary_hint: Optional[str] = None
     branch = "none"
 
-    # 1 风险:深 ITM
+    # 1 深 ITM:允许接货的 Put = 接货窗口;超愿接或只收租才 Roll
     if deep_itm:
-        branch = "deep_itm"
-        code, priority = ACTION_ROLL_ADJUST, 1
-        prefer_card = "adjust_strike"
-        hint = (
-            f"深ITM(Δ>{deep_itm_delta:g}/价内>{deep_moneyness_pct:g}%):Roll调strike或评估接货"
-            if side == "PUT"
-            else f"深ITM(Δ>{deep_itm_delta:g}/价内>{deep_moneyness_pct:g}%):Roll调strike或评估交货"
-        )
+        if side == "PUT" and st != STANCE_INCOME and not strike_above_floor:
+            branch = "deep_itm_acquire"
+            code, priority = ACTION_PREPARE_ASSIGN, 1
+            prefer_card = "adjust_strike"
+            hint = "深ITM·准备接货(轮子成功路径)"
+            secondary_hint = "不愿按此 strike 接:才 Roll 调低"
+            reasons.append("允许接货:深ITM Put 视为接货窗口,不默认 Roll")
+        elif side == "PUT" and st != STANCE_INCOME and strike_above_floor:
+            branch = "deep_itm_above_floor"
+            code, priority = ACTION_ROLL_ADJUST, 1
+            prefer_card = "adjust_strike"
+            hint = f"深ITM且 strike>{floor_price:g}:超愿接,Roll 调低或平"
+        elif side == "CALL" and _call_ok_to_deliver(item, float(strike or 0)):
+            branch = "deep_itm_call_deliver"
+            code, priority = ACTION_PREPARE_ASSIGN, 1
+            prefer_card = "adjust_strike"
+            hint = "深ITM Call·已在愿卖/成本之上,准备交货"
+            secondary_hint = "想继续持股:Roll 调高 strike"
+        elif side == "CALL":
+            branch = "deep_itm"
+            code, priority = ACTION_ROLL_ADJUST, 2
+            prefer_card = "adjust_strike"
+            hint = f"深ITM(Δ>{deep_itm_delta:g}/价内>{deep_moneyness_pct:g}%):低于成本/愿卖,Roll 调高"
+        else:
+            branch = "deep_itm"
+            code, priority = ACTION_ROLL_ADJUST, 1
+            prefer_card = "adjust_strike"
+            hint = f"深ITM(Δ>{deep_itm_delta:g}/价内>{deep_moneyness_pct:g}%):不愿接货,Roll 调 strike"
     # 2 风险:临期 ITM
     elif itm and expiring:
         branch = "prepare_assign"
         code, priority = ACTION_PREPARE_ASSIGN, 1
         prefer_card = "adjust_strike"
         hint = (
-            f"临期ITM(DTE≤{gamma_dte}):Roll 或准备接货"
+            f"临期ITM(DTE≤{gamma_dte}):准备接货"
+            if side == "PUT" and st != STANCE_INCOME
+            else f"临期ITM(DTE≤{gamma_dte}):Roll 或准备接货"
             if side == "PUT"
             else f"临期ITM(DTE≤{gamma_dte}):Roll 或准备被call"
         )

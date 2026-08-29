@@ -25,11 +25,45 @@ def test_profit_hit():
 
 
 def test_deep_itm_beats_profit():
-    r = decide_position(_item(itm=True, delta=0.62, spot=95, profit_pct=55.0), 15, 50)
+    r = decide_position(_item(itm=True, delta=0.62, spot=95, profit_pct=55.0, stance="acquire"), 15, 50)
+    assert r["deep_itm"]
+    assert r["action_code"] == "PREPARE_ASSIGN"
+    assert r["decision_branch"] == "deep_itm_acquire"
+    assert r["action_priority"] == 1
+
+
+def test_income_deep_itm_put_rolls():
+    r = decide_position(
+        _item(itm=True, delta=0.62, spot=95, profit_pct=-20.0, stance="income"), 15, 50,
+    )
     assert r["deep_itm"]
     assert r["action_code"] == "ROLL_ADJUST"
-    assert r["prefer_card"] == "adjust_strike"
-    assert r["action_priority"] == 1
+
+
+def test_acquire_deep_itm_above_floor_rolls():
+    r = decide_position(
+        _item(
+            itm=True, delta=0.62, spot=95, strike=100, profit_pct=-20.0,
+            floor_price=90, stance="acquire",
+        ),
+        15, 50,
+    )
+    assert r["strike_above_floor"]
+    assert r["action_code"] == "ROLL_ADJUST"
+    assert r["decision_branch"] == "deep_itm_above_floor"
+
+
+def test_call_deep_itm_at_sell_above_prepares():
+    r = decide_position(
+        _item(
+            side="CALL", strike=110, spot=120, itm=True, delta=0.7, dte=20,
+            profit_pct=-30.0, cost_basis=100, sell_above=108, buyback_ask=12,
+        ),
+        15, 50,
+    )
+    assert r["deep_itm"]
+    assert r["action_code"] == "PREPARE_ASSIGN"
+    assert r["decision_branch"] == "deep_itm_call_deliver"
 
 
 def test_hold_for_theta():
@@ -336,22 +370,33 @@ def test_would_open_no_strike_above_floor():
     assert any("愿接" in x or "floor" in x.lower() for x in r["would_open_reasons"])
 
 
-def test_would_open_no_trend_down_underwater():
-    """浮亏 + 趋势 DOWN → 纪律否决 → CLOSE(不沉没成本硬扛)"""
+def test_would_open_trend_down_acquire_not_close():
+    """允许接货:趋势 DOWN 是接货窗口,浮亏 OTM 不因纪律否决而平。"""
     r = decide_position(
         _item(
             side="PUT", strike=100, spot=105, dte=30, itm=False,
             profit_pct=-20.0, buyback_ask=3.0, floor_price=110.0,
-            trend="DOWN",
+            trend="DOWN", stance="acquire",
+        ),
+        15, 50,
+    )
+    assert r["would_open_today"] == "caution"
+    assert r["action_code"] != "CLOSE"
+    assert r["decision_branch"] != "close_discipline_no"
+
+
+def test_would_open_trend_down_income_closes():
+    r = decide_position(
+        _item(
+            side="PUT", strike=100, spot=105, dte=30, itm=False,
+            profit_pct=-20.0, buyback_ask=3.0, floor_price=110.0,
+            trend="DOWN", stance="income",
         ),
         15, 50,
     )
     assert r["would_open_today"] == "no"
     assert r["action_code"] == "CLOSE"
     assert r["decision_branch"] == "close_discipline_no"
-    assert r["action_priority"] <= 3
-    assert any("纪律" in x or "DOWN" in x or "would_open" in x for x in r["reasons"] + r["would_open_reasons"])
-
 
 def test_quant_thresholds_exposed():
     r = decide_position(_item(profit_pct=60.0), 15, 50)

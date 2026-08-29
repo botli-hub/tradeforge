@@ -266,16 +266,10 @@ def build_today(
         code = (i.get("action_code") or "")
         if prio <= 3 or code in ("PREPARE_ASSIGN", "ROLL_ADJUST", "CLOSE", "ROLL", "REPLACE"):
             return True
-        # 浮盈两本账:HOLD_THETA/NONE 即使 priority 4–7 也进必须处理
-        if i.get("books") and code in ("HOLD_THETA", "NONE", "REPLACE"):
-            return True
         return False
 
     must = [i for i in items if _is_must(i)]
-    must.sort(key=lambda x: (
-        0 if x.get("books") and (x.get("action_code") or "") in ("HOLD_THETA", "NONE") else 1,
-        x.get("action_priority") or 9,
-    ))
+    must.sort(key=lambda x: (x.get("action_priority") or 9))
 
     # 机会(缓存,不强制重扫)
     opps_summary = {}

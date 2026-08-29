@@ -43,6 +43,27 @@ def test_attach_trade_tier_on_item():
     assert item2["trade_tier"] == "QUEUE"
 
 
+def test_income_put_is_hard_block():
+    from app.core.wheel_opportunities import _grade_actionable, _red_flags
+    flags = _red_flags(
+        side="PUT", trend="DOWN", covers_earnings=False, exceeds_capital=False,
+        below_floor=False, earnings_hard=True, stance="income",
+    )
+    assert "不愿接货·不做" in flags
+    g, a = _grade_actionable("dual", "READY", 80.0, 50.0, flags)
+    assert g == "blocked" and a is False
+
+
+def test_acquire_downtrend_not_flagged():
+    from app.core.wheel_opportunities import _red_flags
+    flags = _red_flags(
+        side="PUT", trend="DOWN", covers_earnings=False, exceeds_capital=False,
+        below_floor=False, earnings_hard=True, stance="acquire",
+    )
+    assert "趋势DOWN" not in flags
+    assert "不愿接货·不做" not in flags
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
