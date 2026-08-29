@@ -13,6 +13,7 @@ import StocksPage from './pages/StocksPage'
 import LeapsMonitorPage from './pages/LeapsMonitorPage'
 import Plan2032Page from './pages/Plan2032Page'
 import WheelPage from './pages/WheelPage'
+import ChanPage from './pages/ChanPage'
 import { getAppMode, setAppMode, type AppMode } from './services/wheelProduct'
 import {
   getUiStyle,
@@ -23,7 +24,7 @@ import {
   type UiStyle,
 } from './services/uiStyle'
 
-type PageKey = 'wheel' | 'market' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
+type PageKey = 'wheel' | 'market' | 'chan' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
 
 const TRADE_NAV: { key: PageKey; label: string }[] = [
   { key: 'wheel', label: 'Wheel' },
@@ -32,6 +33,7 @@ const TRADE_NAV: { key: PageKey; label: string }[] = [
 
 const RESEARCH_NAV: { key: PageKey; label: string }[] = [
   { key: 'market', label: '行情' },
+  { key: 'chan', label: '缠论' },
   { key: 'options', label: '期权' },
   { key: 'strategy', label: '策略' },
   { key: 'backtest', label: '回测' },
@@ -51,6 +53,7 @@ const MOBILE_TRADE_TABS: { key: PageKey; label: string; ico: string }[] = [
 
 const MOBILE_RESEARCH_TABS: { key: PageKey; label: string; ico: string }[] = [
   { key: 'market', label: '行情', ico: '📈' },
+  { key: 'chan', label: '缠论', ico: '〰' },
   { key: 'options', label: '期权', ico: '◉' },
   { key: 'strategy', label: '策略', ico: '⌘' },
   { key: 'settings', label: '设置', ico: '⚙' },
@@ -80,7 +83,7 @@ function App() {
 
   useEffect(() => {
     const valid: PageKey[] = [
-      'wheel', 'market', 'strategy', 'backtest', 'options', 'orders',
+      'wheel', 'market', 'chan', 'strategy', 'backtest', 'options', 'orders',
       'positions', 'history', 'stocks', 'leaps', 'plan2032', 'settings',
     ]
     const onNav = (e: Event) => {
@@ -118,6 +121,7 @@ function App() {
   const pages: Record<PageKey, JSX.Element> = {
     wheel: <WheelPage />,
     market: <MarketPage />,
+    chan: <ChanPage />,
     strategy: <StrategyPage />,
     backtest: <BacktestPage />,
     options: <OptionsPage />,

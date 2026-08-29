@@ -159,6 +159,72 @@ export async function getKlines(symbol: string, timeframe: string = '1d', limit:
   return request<KlineBar[]>(`/api/market/klines?${qs}`)
 }
 
+export type ChanSignal = {
+  kind: string
+  label: string
+  ts: string
+  price: number
+  note: string
+}
+
+export type ChanHub = {
+  zg: number
+  zd: number
+  start_ts: string
+  end_ts: string
+  direction: string
+  bi_count: number
+}
+
+export type ChanStroke = {
+  direction: 'up' | 'down' | string
+  start_ts: string
+  end_ts: string
+  start_price: number
+  end_price: number
+  finished?: boolean
+}
+
+export type ChanAnalyze = {
+  symbol: string
+  timeframe: string
+  level_label: string
+  bar_count: number
+  merged_count: number
+  fenxing_count: number
+  bi_count: number
+  segment_count: number
+  trend: {
+    type: string
+    label: string
+    zhongshu_count: number
+    summary: string
+  }
+  zhongshu: ChanHub[]
+  bis: ChanStroke[]
+  segments: ChanStroke[]
+  signals: ChanSignal[]
+  klines: KlineBar[]
+  source?: string
+}
+
+export async function getChanAnalyze(
+  symbol: string,
+  timeframe: string = '1d',
+  limit: number = 400,
+  settings = getAppSettings(),
+) {
+  const qs = buildMarketQuery({
+    symbol,
+    timeframe,
+    limit,
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<ChanAnalyze>(`/api/chan/analyze?${qs}`)
+}
+
 export async function getOptionExpirations(symbol: string, settings = getAppSettings()) {
   const qs = buildMarketQuery({
     symbol,
