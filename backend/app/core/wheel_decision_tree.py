@@ -13,6 +13,9 @@ from app.core.wheel_decision_lib import (  # noqa: F401
     capital_employed, captured_annualized, parse_days_held,
     merge_pos_quant, otm_buffer_pct, remaining_annualized, residual_floor,
 )
+from app.core.wheel_paths import (
+    apply_fill_gate, build_paths, close_claimable, profit_from, quote_quality,
+)
 
 
 def _call_ok_to_deliver(item: Dict[str, Any], strike: float) -> bool:
@@ -71,10 +74,27 @@ def decide_position(
     buyback = item.get("buyback_ask")
     last = item.get("current_price") or 0
     close_px = float(buyback) if buyback is not None and float(buyback) > 0 else float(last or 0)
+    quote = quote_quality(
+        item.get("buyback_bid") or item.get("bid"),
+        buyback if buyback is not None else item.get("ask"),
+        last,
+        wide_pct=float(q.get("wide_spread_pct", 8)),
+    )
     delta = abs(item.get("delta") or 0)
     itm = bool(item.get("itm"))
+    open_px = item.get("open_price")
+    profit_mid = profit_from(open_px, quote.get("mid"))
+    profit_cons = profit_from(open_px, quote.get("conservative"))
     profit_pct = item.get("profit_pct")
+    if profit_pct is None:
+        profit_pct = profit_cons if profit_cons is not None else profit_from(open_px, close_px)
     profit_hit = profit_pct is not None and profit_pct >= profit_target
+    claimable = close_claimable(
+        profit_pct=profit_pct,
+        profit_target=profit_target,
+        quote=quote,
+        profit_conservative=profit_cons,
+    )
     soft_hit = profit_pct is not None and profit_pct >= soft_profit
     underwater = profit_pct is not None and profit_pct < 0
     side = item.get("side")
@@ -186,7 +206,7 @@ def decide_position(
 
     velocity_close = False
     if (
-        profit_hit
+        claimable
         and days_held is not None
         and days_held <= fast_profit_days
         and dte is not None
@@ -389,8 +409,8 @@ def decide_position(
                 if capital_tight
                 else f"已达硬止盈{profit_target:g}%;需腾仓仍可买回"
             )
-    # 5 效率:硬止盈 / 过高持有 / 快速兑现周转
-    elif profit_hit or profit_cap_close:
+    # 5 效率:硬止盈 / 过高持有 / 快速兑现周转 — 必须可成交
+    elif (claimable and profit_hit) or (claimable and profit_cap_close):
         branch = "close_velocity" if velocity_close else "close_profit"
         code, priority = ACTION_CLOSE, 2
         prefer_card = "no_roll"
@@ -509,6 +529,26 @@ def decide_position(
         )
     else:
         branch = "idle"
+
+    if quote.get("wide_spread"):
+        reasons.append(
+            f"点差 {quote.get('spread_pct')}% > {q.get('wide_spread_pct', 8):g}%,不能按 ask 宣称止盈"
+        )
+    if profit_hit and not claimable:
+        reasons.append("账面止盈但保守买回/点差未达标,不平仓")
+
+    gated = apply_fill_gate(
+        code=code,
+        branch=branch,
+        close_claimable_flag=claimable,
+        wide=bool(quote.get("wide_spread")),
+        hold_for_theta=hold_for_theta,
+    )
+    if gated:
+        code = gated["action_code"]
+        branch = gated["decision_branch"]
+        hint = gated.get("action_hint") or hint
+        prefer_card = gated.get("prefer_card") or prefer_card
 
     # 资金紧:低效/换仓腿升权
     if capital_tight and code == ACTION_REPLACE:
@@ -668,7 +708,23 @@ def decide_position(
         "would_open_today": would_open,
         "trend": trend,
         "quant": quant_used,
+        "close_claimable": claimable,
+        "wide_spread": bool(quote.get("wide_spread")),
+        "spread_pct": quote.get("spread_pct"),
+        "profit_pct_mid": profit_mid,
+        "profit_pct_conservative": profit_cons,
     }
+
+    paths = build_paths(
+        item,
+        quote=quote,
+        action_code=code,
+        branch=branch,
+        stance=st,
+        profit_mid=profit_mid,
+        profit_conservative=profit_cons,
+        close_claimable_flag=claimable,
+    )
 
     return {
         "remaining_annualized": remaining_ann,
@@ -697,6 +753,9 @@ def decide_position(
         "quant_thresholds": quant_used,
         "reasons": reasons,
         "decision_tree": tree,
+        "quote": quote,
+        "paths": paths,
+        "close_claimable": claimable,
         "moneyness_pct": round(moneyness_pct, 2) if moneyness_pct else 0.0,
     }
 

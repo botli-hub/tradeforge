@@ -684,6 +684,7 @@ export interface WheelOpenPositionItem {
   open_price: number
   current_price: number
   buyback_ask: number
+  buyback_bid?: number | null
   delta?: number
   theta?: number
   remaining_annualized?: number | null
@@ -743,6 +744,45 @@ export interface WheelOpenPositionItem {
   dividend_warn?: { date: string; days_to_ex: number } | null
   decision_tree?: Record<string, unknown>
   moneyness_pct?: number
+  paths?: {
+    quote?: {
+      bid?: number | null
+      ask?: number | null
+      mid?: number | null
+      conservative?: number | null
+      spread_pct?: number | null
+      wide_spread?: boolean
+      fillable?: boolean
+    }
+    assign?: {
+      label?: string
+      effective_cost?: number | null
+      vs_spot?: number | null
+      floor_ok?: boolean
+      cash_due?: number | null
+      note?: string
+    }
+    close?: {
+      label?: string
+      price?: number | null
+      fillable?: boolean
+      spread_pct?: number | null
+      pnl_usd?: number | null
+      pnl_pct_mid?: number | null
+      pnl_pct_conservative?: number | null
+      freed?: number | null
+      note?: string
+    }
+    roll?: {
+      label?: string
+      close_cost?: number | null
+      min_new_premium?: number | null
+      strike_cap?: number | null
+      note?: string
+    }
+    recommend?: 'assign' | 'close' | 'roll' | 'hold' | string
+    recommend_reason?: string
+  }
 }
 
 export interface WheelPortfolioContext {

@@ -1,5 +1,6 @@
-/** 持仓管理决策弹窗 — 分层主建议 / 详情 / 三选一 */
+/** 持仓管理决策弹窗 — 分层主建议 / 三列路径 / 三选一 */
 import type { WheelOpenPositionItem, WheelOpportunitiesResult } from '../../services/api'
+import PathsCompare from './PathsCompare'
 
 type ItemWithBooks = WheelOpenPositionItem & {
   books?: {
@@ -74,20 +75,26 @@ export default function ManageDecisionModal({
   onCopyMemo,
   pickReplaceCandidates,
 }: Props) {
-  const releaseReady = mc.profit_pct != null && mc.profit_pct >= 50
+  const releaseReady = mc.profit_pct != null && mc.profit_pct >= 50 && mc.paths?.close?.fillable !== false
   const isCall = mc.side === 'CALL'
   const code = (mc.action_code || '').toUpperCase()
   const underwater = mc.profit_pct != null && mc.profit_pct < 0
   const books = mc.books
   const dt = (mc.decision_tree || {}) as Record<string, unknown>
+  const paths = mc.paths
+  const rec = paths?.recommend
   const softReplace = code === 'REPLACE' && (dt.soft_profit_hit === true || dt.branch === 'replace_soft')
-  const booksChoice = !!(books && (code === 'HOLD_THETA' || code === 'NONE' || softReplace))
+  const booksChoice = !!(books && (code === 'HOLD_THETA' || code === 'NONE' || softReplace) && rec === 'hold')
   const prefer: 'expire' | 'close' | 'roll' | 'none' =
-    booksChoice ? 'none'
-      : code === 'HOLD_THETA' || code === 'NONE' ? 'expire'
-        : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
-          : (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') ? 'roll'
-            : (mc.profit_hit ? 'close' : 'expire')
+    rec === 'assign' ? 'expire'
+      : rec === 'close' ? 'close'
+        : rec === 'roll' ? 'roll'
+          : rec === 'hold' ? 'none'
+            : booksChoice ? 'none'
+              : code === 'HOLD_THETA' || code === 'NONE' ? 'expire'
+                : (code === 'CLOSE' || code === 'REPLACE') ? 'close'
+                  : (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN') ? 'roll'
+                    : (mc.profit_hit ? 'close' : 'expire')
   const buy = fmt(mc.buyback_ask || mc.current_price)
   const expireBody = isCall
     ? (mc.itm
@@ -118,7 +125,9 @@ export default function ManageDecisionModal({
     : (underwater
       ? '买回 + 卖更远/更低 strike:经典 CSP 防守;确认仍愿接货再 roll。'
       : '买回 + 卖更远到期(可 roll down)。临期/ITM 风险升、尚未想接货时用。')
-  const preferLabel = prefer === 'expire' ? '放任到期' : prefer === 'close' ? '买回平仓' : prefer === 'roll' ? 'Roll 展期' : '三选一'
+  const preferLabel = prefer === 'expire'
+    ? (isCall ? '准备交货 / 放任到期' : '准备接货 / 放任到期')
+    : prefer === 'close' ? '买回平仓' : prefer === 'roll' ? 'Roll 展期' : '对照三列后选'
   const primaryWhy = (mc.reasons && mc.reasons[0])
     || (isCall && prefer === 'close' && !underwater
       ? '权利金目标已达成;Call 买回结束义务,不显著降低组合占用。'
@@ -153,8 +162,11 @@ export default function ManageDecisionModal({
               <span className="manage-chip">DTE <strong>{mc.dte ?? '--'}</strong></span>
               <span className="manage-chip">浮盈 <strong>{mc.profit_pct ?? '--'}%</strong></span>
               <span className="manage-chip">买回 <strong>${buy}</strong></span>
-              {mc.remaining_annualized != null && (
-                <span className="manage-chip">剩余年化 <strong>{mc.remaining_annualized}%</strong></span>
+              {paths?.quote?.spread_pct != null && (
+                <span className="manage-chip" title="买回点差">
+                  点差 <strong>{paths.quote.spread_pct}%</strong>
+                  {paths.quote.wide_spread ? ' 宽' : ''}
+                </span>
               )}
               {mc.capital_tight && (
                 <span className="manage-chip warn">
@@ -173,6 +185,8 @@ export default function ManageDecisionModal({
           </div>
           <button type="button" className="btn btn-sm" onClick={onDismiss}>关闭</button>
         </div>
+
+        {paths && <PathsCompare paths={paths} />}
 
         {books && (
           <div className="books-grid">
@@ -220,7 +234,7 @@ export default function ManageDecisionModal({
             disabled={(prefer === 'roll' && rollLoading) || !!executeLoading}
             onClick={doPrimary}>
             {executeLoading ? '执行中…'
-              : prefer === 'expire' ? (onQuickExecute ? '一键登记到期' : '登记到期')
+              : prefer === 'expire' ? (onQuickExecute ? '一键登记到期/接货' : '登记到期/接货')
                 : prefer === 'close' ? (onQuickExecute ? '一键买回记账' : '登记买回')
                   : '打开 Roll 对比'}
           </button>
