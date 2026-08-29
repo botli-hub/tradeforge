@@ -1042,7 +1042,15 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "cost_basis": c.get("cost_basis"),
             "stance": (tgt or {}).get("stance") or "acquire",
             "sell_above": None,
+            "started_at": c.get("started_at"),
+            "updated_at": c.get("updated_at"),
+            "iv_rank": None,
         }
+        try:
+            from app.core.wheel_iv_regime import symbol_iv_rank
+            item["iv_rank"] = symbol_iv_rank(c["symbol"])
+        except Exception:
+            item["iv_rank"] = (tgt or {}).get("iv_rank")
         try:
             from app.core.wheel_call_timing import get_target_sell_above
             item["sell_above"] = get_target_sell_above(c["symbol"])

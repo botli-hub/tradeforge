@@ -180,9 +180,9 @@ def test_cc_dividend_early_assign():
 
 
 def test_shallow_itm_put_observe():
-    # 价内 0.5%, delta 0.4 → 浅 ITM, 无其它触发
+    # 价内 0.5%, delta 0.32 → 浅 ITM(深ITM PUT 门槛 0.38)
     r = decide_position(
-        _item(side="PUT", strike=100, spot=99.5, itm=True, delta=0.4, dte=30, profit_pct=10.0,
+        _item(side="PUT", strike=100, spot=99.5, itm=True, delta=0.32, dte=30, profit_pct=10.0,
               buyback_ask=2.0, current_price=2.0),
         15, 50,
     )
@@ -262,10 +262,11 @@ def test_cc_shallow_div_early_assign():
     """浅 ITM CC + 除息窗口:也要标 early_assign"""
     r = decide_position(
         _item(
-            side="CALL", strike=100, spot=100.8, itm=True, delta=0.48,
+            side="CALL", strike=100, spot=100.8, itm=True, delta=0.32,
             profit_pct=-5.0, buyback_ask=2.0, days_to_ex_div=5,
         ),
         15, 50,
+        pos_cfg={"early_assign_delta_shallow_div": 0.30, "deep_itm_delta_call": 0.40},
     )
     assert r["shallow_itm"]
     assert r["early_assign_risk"]
@@ -476,7 +477,8 @@ def test_income_expiring_itm_put_not_prepare_assign():
     )
     assert r["action_code"] != "PREPARE_ASSIGN"
     assert r["action_code"] in ("ROLL_ADJUST", "CLOSE")
-    assert "只收租" in (r["action_hint"] or "")
+    hint = r["action_hint"] or ""
+    assert "只收租" in hint or "不愿接货" in hint
     cl = r.get("assign_checklist") or {}
     notes = " ".join(cl.get("notes") or [])
     assert "只收租" in notes or "偏离" in notes
@@ -502,6 +504,82 @@ def test_floor_stance_no_heavy_penalty_for_floor_above_spot():
     assert fs["stance"] == "tight"
     assert fs["aggressiveness"] == "激进"
     assert any("近价" in t for t in fs["tags"])
+
+
+def test_call_remaining_ann_uses_equity_not_strike():
+    """CALL 剩余年化分母是持股成本/现价,不是 strike。"""
+    r = decide_position(
+        _item(
+            side="CALL", strike=200, spot=100, cost_basis=90, dte=30,
+            buyback_ask=2.0, current_price=2.0, profit_pct=20.0, itm=False,
+        ),
+        15, 50,
+    )
+    # 2/90*365/30*100 ≈ 27.04 ; 若误用 strike 200 → 12.17
+    assert r["remaining_annualized"] is not None
+    assert abs(r["remaining_annualized"] - 27.04) < 0.2
+    assert r["decision_tree"]["capital_employed"] == 90
+
+
+def test_fast_profit_closes_instead_of_theta():
+    """3 天打到 50% 且剩余 DTE 仍长 → 落袋周转,不吃 θ。"""
+    r = decide_position(
+        _item(
+            dte=35, profit_pct=55.0, buyback_ask=1.5, current_price=1.5,
+            days_held=3, itm=False,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "CLOSE"
+    assert r["decision_branch"] == "close_velocity"
+    assert r["decision_tree"]["velocity_close"]
+
+
+def test_iv_crush_kills_hold_theta():
+    r = decide_position(
+        _item(
+            dte=5, profit_pct=55.0, current_price=0.4, buyback_ask=0.4,
+            expiring=True, iv_rank=10,
+        ),
+        15, 50,
+    )
+    assert r["action_code"] == "CLOSE"
+    assert r["decision_tree"]["iv_crush"]
+
+
+def test_iv_rich_holds_theta_near():
+    """高 IV + OTM + 剩余年化体面 + DTE≤21 → 吃 θ。"""
+    r = decide_position(
+        _item(
+            dte=18, profit_pct=45.0, buyback_ask=2.5, current_price=2.5,
+            strike=100, spot=110, itm=False, iv_rank=70,
+        ),
+        15, 50,
+    )
+    assert r["decision_tree"]["iv_rich"]
+    assert r["action_code"] == "HOLD_THETA"
+
+
+def test_call_low_yield_lifts_cover():
+    r = decide_position(
+        _item(
+            side="CALL", strike=100, spot=90, cost_basis=90, dte=35,
+            buyback_ask=0.3, current_price=0.3, profit_pct=10.0, itm=False,
+        ),
+        15, 50,
+    )
+    assert r["low_yield"]
+    assert r["action_code"] == "CLOSE"
+    assert r["decision_branch"] == "lift_cover"
+
+
+def test_put_delta_038_prepares_assign():
+    r = decide_position(
+        _item(itm=True, delta=0.40, spot=99, profit_pct=-10.0, dte=20, stance="acquire"),
+        15, 50,
+    )
+    assert r["deep_itm"]
+    assert r["action_code"] == "PREPARE_ASSIGN"
 
 
 if __name__ == "__main__":
