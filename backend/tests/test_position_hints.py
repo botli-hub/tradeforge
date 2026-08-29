@@ -22,8 +22,7 @@ def test_profit_hit_first():
 
 def test_deep_itm_by_delta():
     r = _position_hints(_item(itm=True, delta=0.62, spot=95, profit_pct=-30.0, buyback_ask=5.0), 15, 50)
-    assert r["deep_itm"] and r["action_code"] == "ROLL_ADJUST"
-    assert "Roll" in (r["action_hint"] or "")
+    assert r["deep_itm"] and r["action_code"] == "PREPARE_ASSIGN"
 
 
 def test_deep_itm_by_moneyness():

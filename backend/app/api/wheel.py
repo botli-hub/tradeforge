@@ -1040,7 +1040,14 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "symbol_committed": committed_by.get(c["symbol"]),
             "share_cost": c.get("share_cost"),
             "cost_basis": c.get("cost_basis"),
+            "stance": (tgt or {}).get("stance") or "acquire",
+            "sell_above": None,
         }
+        try:
+            from app.core.wheel_call_timing import get_target_sell_above
+            item["sell_above"] = get_target_sell_above(c["symbol"])
+        except Exception:
+            item["sell_above"] = (tgt or {}).get("sell_above")
         item.update(_position_hints(item, min_ann_by_symbol[c["symbol"]], profit_target, cfg))
         # 与决策树对齐:profit_hit 以树内结果为准
         item["profit_hit"] = bool((item.get("decision_tree") or {}).get("profit_hit"))

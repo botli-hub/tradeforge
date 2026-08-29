@@ -2974,7 +2974,7 @@ export default function WheelPage() {
                     {editParams && (
                       <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
                         <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}
-                          title="只收租=接货当预警、更早腾仓；允许接货=floor 是愿接股东价，临期 ITM 走准备接货">
+                          title="允许接货=主路径，深ITM准备接货。只收租=不愿接货，不新开Put">
                           立场
                           <select value={editParams.stance} style={{
                             display: 'block', width: 110, padding: '4px 6px', marginTop: 2,
@@ -4227,7 +4227,7 @@ export default function WheelPage() {
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
                 {['标的', '现价 · 愿接 · 参考', '立场', '愿卖价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
-                    title={h === '愿卖价' ? 'CC strike 锚,与 Put 愿接价分开' : h === '立场' ? '只收租 / 允许接货（默认允许接货，floor 仍是愿接价）' : h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
+                    title={h === '愿卖价' ? 'CC strike 锚,与 Put 愿接价分开' : h === '立场' ? '默认允许接货。不愿接的标的不要加入（只收租会停新 Put）' : h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
                   >{h}</th>
                 ))}
               </tr>

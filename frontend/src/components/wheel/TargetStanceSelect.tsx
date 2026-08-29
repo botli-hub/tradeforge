@@ -59,7 +59,7 @@ export default function TargetStanceSelect({ symbol, stance, disabled, onSaved }
   }
 
   return (
-    <span title="只收租=接货当预警、更早腾仓；允许接货=floor 是愿接股东价，临期 ITM 走准备接货">
+    <span title="允许接货=轮子主路径，深 ITM Put 准备接货。只收租=不愿接货，不新开 Put，已有仓当偏离处理">
       <select
         value={value}
         disabled={disabled || busy}
@@ -71,7 +71,7 @@ export default function TargetStanceSelect({ symbol, stance, disabled, onSaved }
         onChange={e => onChange(e.target.value === 'income' ? 'income' : 'acquire')}
       >
         <option value="acquire">允许接货</option>
-        <option value="income">只收租</option>
+        <option value="income">不愿接货</option>
       </select>
       {err && <span style={{ color: 'var(--red)', fontSize: 11 }}>{err}</span>}
     </span>

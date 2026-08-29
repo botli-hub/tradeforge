@@ -22,7 +22,7 @@
 
 ### 今日一页
 - **必须处理**：深 ITM / 临期接货 / 止盈 / Roll 等；浮盈腿展示卖方账 | 股东判断（`action_code` 仅参考，不把 HOLD 当绿灯）
-- **标的立场**：只收租 / 允许接货（默认允许接货，floor 仍是愿接价）
+- **标的立场**：默认允许接货。不愿接货的标的不要加入（只收租会硬挡新 Put）。floor 仍是愿接最高价
 - **优先开仓**：高分扫描 ∩ 触线时机，可执行过滤（Put）
 - **持股待挂 CC**：仅 HOLDING。发现走合约 1h 触线（无触线不算时机到）；立场只升档。DTE 默认 10–55。
 - **愿卖价** `sell_above` 是 CC strike 锚，与 Put 愿接价 `floor_price` 分开
@@ -32,15 +32,15 @@
 - OpenD 弱网时可用**行情缓存**（标 stale）
 
 ### 持仓决策树（量化）
-对在场 CSP/CC 给出 `action_code` + 优先级 + 置信度 + 带数字的理由：
+对在场 CSP/CC 给出 `action_code` + 优先级 + 置信度 + 带数字的理由。**默认允许接货**：深 ITM Put 走准备接货，不是默认 Roll。超愿接价才 Roll/平。
 
 | 动作 | 含义 |
 |------|------|
-| `CLOSE` | 买回止盈 / 纪律否决后不硬扛 |
+| `CLOSE` | 买回止盈 / 超愿接 / 只收租纪律否决 |
 | `REPLACE` | 软止盈或低效 → 腾仓 |
-| `ROLL` / `ROLL_ADJUST` | 展期（后者调 strike） |
-| `HOLD_THETA` | 高浮盈 OTM 继续收租 |
-| `PREPARE_ASSIGN` | 临期 ITM 准备接货/交货 |
+| `ROLL` / `ROLL_ADJUST` | 展期（后者调 strike；超愿接或 Call 低于成本） |
+| `HOLD_THETA` | 高浮盈 OTM 继续收租（不进必须处理） |
+| `PREPARE_ASSIGN` | 深 ITM / 临期 ITM：Put 准备接货，Call 在愿卖之上准备交货 |
 | `NONE` | 观察 / 条件持有 |
 
 默认阈值（可在设置 `wheel_position` 覆盖）包括：硬止盈 50%、软止盈 30%、过高持有 80%、吃 θ 40%/14DTE/年化 12%、硬处理窗 21DTE、临期 7DTE、深 ITM 3% 或 Δ0.5、薄垫 1.5%、资金紧利用率 75%、Put **strike ≤ 愿接价 floor** 等。

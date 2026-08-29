@@ -175,11 +175,13 @@ def eval_would_open_today(
     target_enabled: Optional[bool] = None,
     dte: Optional[int] = None,
     pos_cfg: Optional[Dict[str, Any]] = None,
+    stance: Optional[str] = None,
 ) -> Dict[str, Any]:
     """反事实:以今天纪律还会不会新开这张腿。
 
+    允许接货:趋势 DOWN 是接货窗口,不硬否决。
+    只收租/不愿接货:趋势 DOWN 仍 hard no。
     返回 would_open_today: yes|no|caution|unknown + reasons。
-    轻量规则,不跑全量 admission。
     """
     q = merge_pos_quant(pos_cfg)
     caution_buf = float(q.get("open_caution_buffer_pct", 2.0))
@@ -188,6 +190,8 @@ def eval_would_open_today(
     hard_no = False
     caution = False
     missing_key = False
+    st = str(stance or "").strip().lower()
+    income = st in ("income", "只收租", "rent", "premium")
 
     if target_enabled is False:
         hard_no = True
@@ -203,8 +207,12 @@ def eval_would_open_today(
                 f"strike {strike:g} > 愿接最高价 {floor_price:g},超过愿接价不宜等接货/不会新开"
             )
         if trend == "DOWN":
-            hard_no = True
-            reasons.append("趋势 DOWN,按纪律不新开 Put")
+            if income:
+                hard_no = True
+                reasons.append("趋势 DOWN,不愿接货不新开 Put")
+            else:
+                caution = True
+                reasons.append("趋势 DOWN·允许接货窗口,不否决新开")
         elif trend == "WEAK":
             caution = True
             reasons.append("趋势 WEAK,新开 Put 需谨慎")
