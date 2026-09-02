@@ -39,6 +39,7 @@ class BackendConfigIn(BaseModel):
     wheel_portfolio: Optional[Dict[str, Any]] = None
     wheel_profiles: Optional[Dict[str, Any]] = None
     wheel_iv_regime: Optional[Dict[str, Any]] = None
+    chan_alerts: Optional[Dict[str, Any]] = None
 
 
 @router.get("/backend")

@@ -45,6 +45,8 @@ async def startup():
     threading.Thread(target=auto_push_loop, daemon=True).start()
     # 在场合约高优先级行动 Telegram 告警
     threading.Thread(target=_position_alert_loop, daemon=True).start()
+    # 缠论 5m/30m 买卖点 Telegram(chan_alerts.enabled; 同指纹只推一次; 不自动下单)
+    threading.Thread(target=_chan_alert_loop, daemon=True).start()
     # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
     threading.Thread(target=_backfill_codes_once, daemon=True).start()
 
@@ -205,6 +207,38 @@ def _position_alert_loop():
                 )
         except Exception as e:
             log.warning("position alert cycle failed: %s", e)
+
+
+
+def _chan_alert_loop():
+    """美股盘中短轮询缠论 5m/30m 买卖点,只推增量。0/关闭见 chan_alerts.enabled。"""
+    import time
+    import logging
+    log = logging.getLogger("chan_alerts")
+    time.sleep(120)
+    while True:
+        try:
+            from app.api.leaps import _load_config
+            from app.services.chan_alerts import get_chan_alert_cfg, run_chan_alert_cycle, tick_seconds
+            cfg = _load_config()
+            ca = get_chan_alert_cfg(cfg)
+            if not ca.get("enabled", True):
+                time.sleep(300)
+                continue
+            sleep_s = tick_seconds(cfg)
+        except Exception:
+            time.sleep(300)
+            continue
+        try:
+            out = run_chan_alert_cycle(cfg=cfg)
+            if out.get("sent_count"):
+                log.info(
+                    "chan alerts sent=%s primed=%s due=%s",
+                    out.get("sent_count"), out.get("primed"), out.get("due"),
+                )
+        except Exception as e:
+            log.warning("chan alert cycle failed: %s", e)
+        time.sleep(sleep_s)
 
 
 def _startup_backfill_check(scheduler):
