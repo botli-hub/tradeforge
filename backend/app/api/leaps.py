@@ -214,6 +214,12 @@ def _run_wheel_scan(symbol: Optional[str] = None):
                     repo.set_contract_cooldown(key, cyc["symbol"], 1)
         except Exception as e:
             logger.info("在场合约体检跳过: %s", e)
+        # 缠论 5m/30m 买卖点增量推送(fingerprint 去重; 不自动下单)
+        try:
+            from app.services.chan_alerts import run_chan_alert_cycle
+            run_chan_alert_cycle(cfg=cfg)
+        except Exception as e:
+            logger.info("缠论买卖点推送跳过: %s", e)
     except Exception as e:
         logger.error("_run_wheel_scan 异常: %s", e)
         _timing_prog.mark_error(str(e))
