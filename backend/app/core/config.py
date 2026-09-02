@@ -178,6 +178,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "high_enter": 60.0,
         "high_exit": 55.0,
     },
+    # 缠论买卖点 Telegram(仅 5m/30m; enabled=false 关闭; 不自动下单)
+    "chan_alerts": {
+        "enabled": True,
+        "timeframes": ["5m", "30m"],
+        "symbols": [],  # 空=启用 Wheel 标的
+        "poll_minutes_5m": 5,
+        "poll_minutes_30m": 30,
+        "session_only": True,  # 仅美股 RTH
+        "bar_limit": 400,
+        "recent_bars": 3,
+    },
 }
 
 
