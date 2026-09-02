@@ -262,6 +262,12 @@ def build_today(
     items = positions.get("items") or []
 
     def _is_must(i: Dict[str, Any]) -> bool:
+        try:
+            from app.core.wheel_dispose import item_must_manage
+            if item_must_manage(i):
+                return True
+        except Exception:
+            pass
         prio = i.get("action_priority") or 9
         code = (i.get("action_code") or "")
         if prio <= 3 or code in ("PREPARE_ASSIGN", "ROLL_ADJUST", "CLOSE", "ROLL", "REPLACE"):
