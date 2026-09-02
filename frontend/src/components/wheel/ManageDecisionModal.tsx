@@ -1,8 +1,18 @@
 /** 持仓管理决策弹窗 — 分层主建议 / 三列路径 / 三选一 */
 import type { WheelOpenPositionItem, WheelOpportunitiesResult } from '../../services/api'
 import PathsCompare from './PathsCompare'
+import DisposeFork from './DisposeFork'
+import CspOpportunityCost from './CspOpportunityCost'
 
 type ItemWithBooks = WheelOpenPositionItem & {
+  premium_uncalibrated?: boolean
+  premium?: { calibrated?: boolean; reason?: string }
+  dispose_fork?: {
+    bag?: { label?: string; copy?: string }
+    hold?: { label?: string; copy?: string; directional_bet?: boolean }
+    profit_target_pct?: number
+  } | null
+  csp_opportunity_cost?: any
   books?: {
     seller?: {
       premium_captured_pct?: number | null
@@ -175,7 +185,7 @@ export default function ManageDecisionModal({
                 </span>
               )}
               {mc.strike_above_floor && <span className="manage-chip warn">超过愿接价</span>}
-              {releaseReady && (
+              {releaseReady && !mc.premium_uncalibrated && mc.premium?.calibrated !== false && (
                 <span className="manage-chip" style={{ background: 'var(--green-dim)', color: 'var(--green)', fontWeight: 700 }}
                   title="浮盈≥50%,组合年化视角可落袋腾担保">
                   可腾
@@ -187,6 +197,28 @@ export default function ManageDecisionModal({
         </div>
 
         {paths && <PathsCompare paths={paths} />}
+
+        {(mc.premium_uncalibrated || mc.premium?.calibrated === false) && (
+          <div className="manage-primary warn" style={{ marginBottom: 10 }}>
+            <div className="manage-primary-title">未校准</div>
+            <div className="manage-primary-why">
+              权利金未校准（台账无开仓成交），不能宣称已止盈/过线。请先回填 SELL 成交。
+              {mc.premium?.reason ? <div style={{ marginTop: 4 }}>{mc.premium.reason}</div> : null}
+            </div>
+          </div>
+        )}
+
+        {mc.dispose_fork && mc.premium?.calibrated !== false && !mc.premium_uncalibrated && (
+          <DisposeFork
+            fork={mc.dispose_fork}
+            onBag={onBuyback}
+            onHold={onExpire}
+          />
+        )}
+
+        {mc.csp_opportunity_cost && (
+          <CspOpportunityCost cost={mc.csp_opportunity_cost} />
+        )}
 
         {books && (
           <div className="books-grid">
