@@ -121,7 +121,6 @@ def backfill_kline_range(symbol: str, timeframe: str, start_date: str, end_date:
                         pass
         except KlineRateLimited as e:
             last_error = e
-            # Yahoo 限流：不再换源硬打，向上游软失败
             message = str(e)
             update_backfill_job(job_id, 'failed', message)
             upsert_sync_state(symbol, timeframe, src, 'error', message)
@@ -142,17 +141,30 @@ def ensure_local_kline_range(symbol: str, timeframe: str, start_date: str, end_d
     start_date = normalize_ts(start_date)
     end_date = normalize_ts(end_date)
     source = resolve_history_source(symbol, preferred_adapter)
+    fetch_error: Optional[BaseException] = None
 
     if force or not is_kline_range_covered(symbol, timeframe, start_date, end_date):
-        backfill_kline_range(symbol, timeframe, start_date, end_date, host=host, port=port, source=source)
+        try:
+            backfill_kline_range(symbol, timeframe, start_date, end_date, host=host, port=port, source=source)
+        except Exception as e:
+            fetch_error = e
 
     rows = get_kline_bars(symbol, timeframe, start_date, end_date)
-    return {
-        'symbol': symbol,
-        'timeframe': timeframe,
-        'source': source,
-        'bars': rows,
-    }
+    if rows:
+        payload: Dict[str, Any] = {
+            'symbol': symbol,
+            'timeframe': timeframe,
+            'source': source,
+            'bars': rows,
+        }
+        if fetch_error is not None:
+            payload['degraded'] = True
+            payload['error'] = str(fetch_error)
+        return payload
+
+    if fetch_error is not None:
+        raise fetch_error
+    raise RuntimeError(f'{source} 未返回任何K线')
 
 
 def get_history_jobs(limit: int = 50) -> List[Dict[str, Any]]:
