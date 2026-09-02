@@ -45,6 +45,21 @@ def _bar_row(ts="2026-01-02 09:30:00"):
     }
 
 
+def _local_rows(n=80):
+    rows = []
+    for i in range(n):
+        rows.append({
+            "ts": f"2026-01-02T09:{i % 60:02d}:00",
+            "timestamp": f"2026-01-02T09:{i % 60:02d}:00",
+            "open": 10.0 + i * 0.01,
+            "high": 11.0 + i * 0.01,
+            "low": 9.5,
+            "close": 10.5 + i * 0.01,
+            "volume": 100 + i,
+        })
+    return rows
+
+
 def test_router_prefers_futu_for_us_when_adapter_available():
     with patch("app.data.source_router.is_futu_adapter_available", return_value=True):
         assert resolve_kline_source("AAPL") == "futu"
@@ -52,7 +67,6 @@ def test_router_prefers_futu_for_us_when_adapter_available():
         assert resolve_kline_source("US.AAPL") == "futu"
         assert resolve_kline_source("AAPL", "yahoo") == "futu"
         assert resolve_kline_source("AAPL", "finnhub") == "futu"
-        # A/H 仍走 futu
         assert resolve_kline_source("600519.SH") == "futu"
         assert resolve_kline_source("00700.HK") == "futu"
     with patch("app.data.source_router.is_futu_adapter_available", return_value=False):
@@ -103,7 +117,7 @@ def test_futu_get_klines_calls_request_history_kline():
     assert len(bars) == 1
     assert ctx.request_history_kline.call_args[0][0] == "US.AAPL"
 
-    for tf in ("30m", "1h", "60m"):
+    for tf in ("30m", "1h", "60m", "1d"):
         ctx.request_history_kline.reset_mock()
         adapter.get_klines("SPCX", tf, "2026-01-01T00:00:00", "2026-01-02T00:00:00")
         assert ctx.request_history_kline.called, tf
@@ -148,6 +162,26 @@ def test_yahoo_429_soft_error_not_hard_exception():
     assert "429" in (adapter.last_error or "")
 
 
+def test_ensure_429_returns_local_bars():
+    from app.data.history_backfill import ensure_local_kline_range
+
+    local = _local_rows(3)
+    with patch("app.data.history_backfill.is_kline_range_covered", return_value=False), \
+            patch(
+                "app.data.history_backfill.backfill_kline_range",
+                side_effect=KlineRateLimited("Yahoo HTTP 429 Too Many Requests", retry_after=30),
+            ), \
+            patch("app.data.history_backfill.get_kline_bars", return_value=local), \
+            patch("app.data.history_backfill.resolve_history_source", return_value="futu"), \
+            patch("app.data.history_backfill.normalize_symbol", side_effect=lambda s: s.upper()), \
+            patch("app.data.history_backfill.normalize_ts", side_effect=lambda s: s):
+        result = ensure_local_kline_range(
+            "AAPL", "5m", "2026-01-01T00:00:00", "2026-01-02T00:00:00",
+        )
+    assert result["bars"] == local
+    assert result.get("degraded") is True
+
+
 def test_chan_yahoo_429_is_not_502():
     from fastapi import HTTPException
     from app.api.chan import chan_analyze
@@ -162,6 +196,22 @@ def test_chan_yahoo_429_is_not_502():
         except HTTPException as exc:
             assert exc.status_code != 502, exc.status_code
             assert exc.status_code == 429
+
+
+def test_chan_local_bars_keep_analyze_alive():
+    from app.api.chan import chan_analyze
+
+    rows = _local_rows(80)
+    payload = {"fractals": [], "bi": [], "duan": [], "buy_sell": [], "bar_count": len(rows)}
+    with patch(
+        "app.api.chan.ensure_local_kline_range",
+        side_effect=KlineRateLimited("Yahoo HTTP 429 Too Many Requests", retry_after=30),
+    ), patch("app.api.chan.get_kline_bars", return_value=rows), \
+            patch("app.api.chan.analyze", return_value=dict(payload)):
+        out = asyncio.run(chan_analyze(symbol="AAPL", timeframe="5m"))
+    assert out["symbol"] == "AAPL"
+    assert out["bar_count"] == 80
+    assert out["source"] in ("futu", "yahoo")
 
 
 if __name__ == "__main__":
