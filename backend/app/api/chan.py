@@ -1,11 +1,11 @@
 """缠论走势分析 API."""
 from datetime import datetime, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app.core.chan_engine import analyze
 from app.data.history_backfill import ensure_local_kline_range
+from app.data.history_repository import get_kline_bars
 from app.data.source_router import normalize_symbol, resolve_kline_source
 
 router = APIRouter()
@@ -44,7 +44,15 @@ async def chan_analyze(
             force=False,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"K线加载失败: {e}") from e
+        rows = get_kline_bars(normalized, timeframe, start_date, end_date)
+        if not rows:
+            raise HTTPException(status_code=502, detail=f"K线加载失败: {e}") from e
+        result = {
+            "bars": rows,
+            "source": source,
+            "degraded": True,
+            "error": str(e),
+        }
     rows = result.get("bars") or []
     if limit and len(rows) > limit:
         rows = rows[-limit:]
@@ -62,7 +70,11 @@ async def chan_analyze(
     ]
     out = analyze(payload, timeframe)
     out["symbol"] = normalized
-    out["source"] = source
+    out["source"] = result.get("source") or source
+    if result.get("degraded"):
+        out["degraded"] = True
+        if result.get("error"):
+            out["source_error"] = result["error"]
     return out
 
 
