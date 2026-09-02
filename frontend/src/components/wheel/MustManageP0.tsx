@@ -3,6 +3,8 @@ import type { WheelOpenPositionItem } from '../../services/api'
 import { Badge, type SemColor } from './WheelUi'
 import { isReleaseCandidate } from '../../services/wheelProduct'
 import PathsCompare from './PathsCompare'
+import DisposeFork from './DisposeFork'
+import CspOpportunityCost from './CspOpportunityCost'
 
 function fmt(v: number | null | undefined, digits = 2) {
   if (v === null || v === undefined || Number.isNaN(v)) return '--'
@@ -58,20 +60,29 @@ export default function MustManageP0({
       {list.map((raw, idx) => {
         const item = useBoard ? (raw as WheelOpenPositionItem) : (raw as MustManageRow).check
         const row = useBoard ? null : (raw as MustManageRow)
-        const books = (item as WheelOpenPositionItem & { books?: any })?.books
+        const extra = item as WheelOpenPositionItem & {
+          books?: any
+          dispose_fork?: any
+          csp_opportunity_cost?: any
+          premium_uncalibrated?: boolean
+          premium?: { calibrated?: boolean }
+        }
+        const books = extra?.books
         const paths = (item as WheelOpenPositionItem)?.paths
         const rec = paths?.recommend
         const code = (item?.action_code || row?.action_code || '').toUpperCase()
-        const isHoldish = code === 'HOLD_THETA' || code === 'NONE'
-        const badgeText = books ? '浮盈对账' : (row?.tags?.[0] || (isHoldish ? '参考' : '该管'))
-        const badgeColor = (books || isHoldish ? 'orange' : (row?.categories?.includes('CLOSE') ? 'green' : 'orange')) as SemColor
+        const uncal = !!(extra?.premium_uncalibrated || extra?.premium?.calibrated === false)
+        const fork = extra?.dispose_fork
+        const isHoldish = !fork && (code === 'HOLD_THETA' || code === 'NONE')
+        const badgeText = uncal ? '未校准' : (fork ? '过线分叉' : (books ? '浮盈对账' : (row?.tags?.[0] || (isHoldish ? '参考' : '该管'))))
+        const badgeColor = (uncal ? 'orange' : (fork ? 'green' : (books || isHoldish ? 'orange' : (row?.categories?.includes('CLOSE') ? 'green' : 'orange')))) as SemColor
         const key = item?.cycle_id || row?.id || String(idx)
         return (
           <div key={key} className="opp-row" style={{ margin: '0 0 6px' }}>
             <div className="opp-row-main">
               <div className="opp-row-title">
                 <Badge color={badgeColor}>{badgeText}</Badge>
-                {isReleaseCandidate(item?.profit_pct ?? row?.profit_pct) && !books && paths?.close?.fillable !== false && (
+                {isReleaseCandidate(item?.profit_pct ?? row?.profit_pct) && !books && !uncal && paths?.close?.fillable !== false && (
                   <Badge color="green" title="浮盈≥50%可腾仓">可腾</Badge>
                 )}
                 {item?.symbol || row?.symbol} {item?.side || row?.side}
@@ -108,6 +119,15 @@ export default function MustManageP0({
                   )}
                 </div>
               )}
+              {uncal && (
+                <div className="opp-row-meta" style={{ marginTop: 4 }}>权利金未校准 · 不能宣称已止盈/过线 · 请回填台账成交</div>
+              )}
+              {fork && !uncal && (
+                <DisposeFork fork={fork} compact onBag={() => item && onOpenItem(item)} onHold={() => item && onOpenItem(item)} />
+              )}
+              {!uncal && extra?.csp_opportunity_cost && (
+                <CspOpportunityCost cost={extra.csp_opportunity_cost} compact />
+              )}
             </div>
             <div className="opp-row-actions">
               <button
@@ -118,9 +138,11 @@ export default function MustManageP0({
                   else if (row) onOpenRow(row)
                 }}
               >
-                {(code === 'ROLL' || code === 'ROLL_ADJUST' || rec === 'roll')
-                  ? '看 Roll'
-                  : rec === 'assign' ? '接货' : '处理'}
+                {fork
+                  ? '落袋/续拿'
+                  : (code === 'ROLL' || code === 'ROLL_ADJUST' || rec === 'roll')
+                    ? '看 Roll'
+                    : rec === 'assign' ? '接货' : '处理'}
               </button>
               {item && (
                 <button
