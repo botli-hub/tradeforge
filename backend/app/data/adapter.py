@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.config import get_effective_config
+from app.data.kline_errors import KlineRateLimited
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +85,24 @@ class FutuAdapter:
             "5m": "K_5M",
             "15m": "K_15M",
             "30m": "K_30M",
+            "60m": "K_60M",
             "1h": "K_60M",
             "4h": "K_240M",
             "1d": "K_DAY",
             "1w": "K_WEEK",
+            "1M": "K_MON",
         }
         self._timeframe_minutes = {
             "1m": 1,
             "5m": 5,
             "15m": 15,
             "30m": 30,
+            "60m": 60,
             "1h": 60,
             "4h": 240,
             "1d": 1440,
             "1w": 10080,
+            "1M": 43200,
         }
 
     def _normalize_symbol(self, symbol: str) -> str:
@@ -170,42 +175,38 @@ class FutuAdapter:
 
     def get_klines(self, symbol: str, timeframe: str,
                    start_date: str, end_date: str) -> List[Bar]:
-        """获取K线数据"""
+        """历史K线：OpenD request_history_kline 分页；未连接时先 connect，不直接返回 []。"""
         if not self.is_connected():
-            return []
+            if not self.connect():
+                return []
 
         try:
-            from futu import SubType, AuType, RET_OK, Session
+            from app.data.futu_history_kline import fetch_history_bars
 
             code = self._normalize_symbol(symbol)
-            subtype_name = self._ktype_map.get(timeframe, 'K_DAY')
-            subtype = getattr(SubType, subtype_name)
-
-            ret_sub, err = self._quote_ctx.subscribe([code], [subtype], subscribe_push=False, session=Session.ALL)
-            if ret_sub != RET_OK:
-                self.last_error = f"订阅K线失败: {err}"
+            rows, err = fetch_history_bars(
+                self._quote_ctx,
+                code=code,
+                timeframe=timeframe,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            if err:
+                self.last_error = err
                 logger.error(self.last_error)
-                return []
-
-            num = self._estimate_bar_count(timeframe, start_date, end_date)
-            ret, data = self._quote_ctx.get_cur_kline(code, num, subtype, AuType.QFQ)
-            if ret != RET_OK:
-                self.last_error = f"获取K线失败: {data}"
-                logger.error(self.last_error)
-                return []
-
-            bars = []
-            for _, row in data.iterrows():
-                bars.append(Bar(
-                    timestamp=str(row['time_key']),
+            else:
+                self.last_error = None
+            return [
+                Bar(
+                    timestamp=str(row['timestamp']),
                     open=float(row['open']),
                     high=float(row['high']),
                     low=float(row['low']),
                     close=float(row['close']),
-                    volume=int(row['volume'])
-                ))
-            self.last_error = None
-            return bars
+                    volume=int(row['volume']),
+                )
+                for row in rows
+            ]
         except Exception as e:
             self.last_error = f"获取K线异常: {e}"
             logger.error(self.last_error)
@@ -487,6 +488,7 @@ class YahooAdapter:
             "5m": "5m",
             "15m": "15m",
             "30m": "30m",
+            "60m": "60m",
             "1h": "60m",
             "4h": "1h",
             "1d": "1d",
@@ -546,9 +548,9 @@ class YahooAdapter:
             })
             normalized = self._normalize_symbol(symbol)
             url = f"{self.base_url}/{urllib.parse.quote(normalized)}?{query}"
+            from app.data.yahoo_http import urlopen_with_429_backoff
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                payload = json.loads(resp.read().decode('utf-8'))
+            payload = json.loads(urlopen_with_429_backoff(req, timeout=15).decode('utf-8'))
 
             result = (((payload or {}).get('chart') or {}).get('result') or [None])[0] or {}
             timestamps = result.get('timestamp') or []
@@ -577,6 +579,10 @@ class YahooAdapter:
                 return []
             self.last_error = None
             return bars
+        except KlineRateLimited as e:
+            self.last_error = str(e)
+            logger.warning(self.last_error)
+            return []
         except Exception as e:
             self.last_error = f"Yahoo K线异常: {e}"
             return []

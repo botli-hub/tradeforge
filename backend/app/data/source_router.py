@@ -2,7 +2,7 @@
 
 统一规则：
 - 美股 quote -> finnhub
-- 美股 history/kline -> yahoo
+- 美股 history/kline -> futu（OpenD request_history_kline）；适配器不可用时 Yahoo
 - A股 / 港股 quote -> futu
 - A股 / 港股 history/kline -> futu
 - options -> futu
@@ -62,6 +62,15 @@ def normalize_symbol(symbol: str) -> str:
 _INVALID_ADAPTERS = {'mock', 'auto', None, ''}
 
 
+def is_futu_adapter_available() -> bool:
+    """futu-api 可导入即视为 K 线适配器可用；OpenD 连通性由 FutuAdapter.connect 负责。"""
+    try:
+        import futu  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def resolve_quote_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:
     """解析实时报价来源。"""
     normalized = normalize_symbol(symbol)
@@ -79,13 +88,15 @@ def resolve_quote_source(symbol: str, preferred_adapter: Optional[str] = None) -
 
 
 def resolve_kline_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:
-    """解析历史 K 线来源。"""
+    """解析历史 K 线来源。美股优先 OpenD，Yahoo 仅作适配器不可用时的回退。"""
     normalized = normalize_symbol(symbol)
     market = infer_market(normalized)
 
     if market in ('SH', 'SZ', 'HK'):
         return 'futu'
     if market == 'US':
+        if is_futu_adapter_available():
+            return 'futu'
         return 'yahoo'
 
     if preferred_adapter == 'futu':
