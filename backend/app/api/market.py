@@ -6,6 +6,7 @@ import threading
 import time
 from app.data.adapter import get_adapter
 from app.data.history_backfill import ensure_local_kline_range
+from app.data.kline_errors import KlineRateLimited, is_rate_limited_error
 from app.data.source_router import (
     normalize_symbol,
     is_cn_symbol,
@@ -290,5 +291,13 @@ async def market_klines(
         ]
     except HTTPException:
         raise
+    except KlineRateLimited as e:
+        raise HTTPException(
+            status_code=429,
+            detail=f"行情限流，请稍后重试: {e}",
+            headers={"Retry-After": str(getattr(e, "retry_after", 60) or 60)},
+        ) from e
     except Exception as e:
+        if is_rate_limited_error(e):
+            raise HTTPException(status_code=429, detail=f"行情限流，请稍后重试: {e}") from e
         raise HTTPException(status_code=502, detail=str(e))
