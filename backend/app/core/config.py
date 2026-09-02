@@ -96,6 +96,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "threat_otm_buffer_pct": 5.0,  # 浮亏+≤21DTE 且垫薄 → Roll
         "capital_tight_util_pct": 75.0,
         "alert_push_minutes": 0,  # 在场体检告警轮询间隔(分钟),0=关;事件变化才真推
+        # 持仓期事件日(财报/除息覆盖存续)强制分叉;不自动下单,不改止盈线
+        "event_dispose_enabled": True,
+        "event_window_days": 7,   # T-7 进入窗口(含事件当日)
+        "event_urgent_days": 2,   # T-2 加急(含事件当日)
     },
     # 推送策略(通知中心);与 wheel_position.notify_mode / alert_push 互补
     "wheel_alerts": {

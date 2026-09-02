@@ -73,9 +73,10 @@ export default function MustManageP0({
         const code = (item?.action_code || row?.action_code || '').toUpperCase()
         const uncal = !!(extra?.premium_uncalibrated || extra?.premium?.calibrated === false)
         const fork = extra?.dispose_fork
+        const isEvent = fork?.kind === 'event_dispose'
         const isHoldish = !fork && (code === 'HOLD_THETA' || code === 'NONE')
-        const badgeText = uncal ? '未校准' : (fork ? '过线分叉' : (books ? '浮盈对账' : (row?.tags?.[0] || (isHoldish ? '参考' : '该管'))))
-        const badgeColor = (uncal ? 'orange' : (fork ? 'green' : (books || isHoldish ? 'orange' : (row?.categories?.includes('CLOSE') ? 'green' : 'orange')))) as SemColor
+        const badgeText = uncal ? '未校准' : (fork && !isEvent ? '过线分叉' : (isEvent ? '事件日' : (books ? '浮盈对账' : (row?.tags?.[0] || (isHoldish ? '参考' : '该管')))))
+        const badgeColor = (uncal ? 'orange' : (isEvent ? 'orange' : (fork ? 'green' : (books || isHoldish ? 'orange' : (row?.categories?.includes('CLOSE') ? 'green' : 'orange'))))) as SemColor
         const key = item?.cycle_id || row?.id || String(idx)
         return (
           <div key={key} className="opp-row" style={{ margin: '0 0 6px' }}>

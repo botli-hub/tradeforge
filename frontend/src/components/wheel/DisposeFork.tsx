@@ -1,9 +1,18 @@
-/** 过线分叉:落袋 vs 续拿(方向赌注,不是默认吃θ) */
+/** 过线 / 持仓期事件日分叉:落袋 vs 续拿(方向赌注,不是默认吃θ) */
 export type DisposeForkData = {
+  kind?: string
   bag?: { label?: string; copy?: string }
   hold?: { label?: string; copy?: string; directional_bet?: boolean }
   profit_target_pct?: number
   note?: string
+  event?: {
+    type?: string
+    type_label?: string
+    date?: string
+    days_to_event?: number
+    days_to_expiry?: number
+    urgent?: boolean
+  }
 }
 
 export default function DisposeFork({
@@ -21,8 +30,21 @@ export default function DisposeFork({
   return (
     <div className="dispose-fork" style={{ marginTop: compact ? 6 : 10 }}>
       <div className="home-todo-label" style={{ marginTop: 0 }}>
-        过线分叉 · 落袋 vs 续拿
+        {fork.kind === 'event_dispose'
+          ? `${fork.event?.type_label || '事件'}日分叉 · 落袋 vs 续拿`
+          : '过线分叉 · 落袋 vs 续拿'}
       </div>
+      {fork.event?.date && (
+        <div className="opp-row-meta" style={{ marginTop: 4 }}>
+          {fork.event.type_label || '事件'} {fork.event.date}
+          {fork.event.days_to_expiry != null ? ` · DTE${fork.event.days_to_expiry}` : ''}
+          {fork.event.days_to_event === 0
+            ? ' · 事件当日'
+            : fork.event.days_to_event != null
+              ? ` · T-${fork.event.days_to_event}`
+              : ''}
+        </div>
+      )}
       <div className="manage-alt-grid" style={{ marginTop: 6 }}>
         <div className="manage-alt-card preferred">
           <h4>{fork.bag?.label || '落袋'}</h4>

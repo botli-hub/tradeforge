@@ -1,7 +1,7 @@
 """Wheel 持仓动态决策树(量化阈值版).
 
 核心树在 wheel_decision_tree(默认允许接货);
-本模块叠加只收租偏离守卫、浮盈两本账、台账权利金与过线分叉.
+本模块叠加只收租偏离守卫、浮盈两本账、台账权利金、过线分叉与持仓期事件日分叉.
 不改 POSITION_QUANT 数值,不自动下单.
 """
 from app.core.wheel_decision_lib import *  # noqa: F401,F403
@@ -24,6 +24,11 @@ def decide_position(item, min_annualized, profit_target, pos_cfg=None):
         result["premium"] = prem
         if not prem.get("calibrated"):
             result["premium_uncalibrated"] = True
+    try:
+        from app.core.wheel_event_dispose import apply_event_dispose
+        result = apply_event_dispose(result, item, pos_cfg)
+    except Exception:
+        pass
     try:
         from app.core.wheel_paths import build_paths
         from app.core.wheel_stance import resolve_stance
