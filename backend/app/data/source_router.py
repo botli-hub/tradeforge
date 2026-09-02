@@ -2,7 +2,7 @@
 
 统一规则：
 - 美股 quote -> finnhub
-- 美股 history/kline -> yahoo
+- 美股 history/kline -> futu OpenD（Yahoo 仅作回填兜底）
 - A股 / 港股 quote -> futu
 - A股 / 港股 history/kline -> futu
 - options -> futu
@@ -83,16 +83,14 @@ def resolve_kline_source(symbol: str, preferred_adapter: Optional[str] = None) -
     normalized = normalize_symbol(symbol)
     market = infer_market(normalized)
 
-    if market in ('SH', 'SZ', 'HK'):
+    if market in ('SH', 'SZ', 'HK', 'US'):
         return 'futu'
-    if market == 'US':
-        return 'yahoo'
 
     if preferred_adapter == 'futu':
         return 'futu'
     if preferred_adapter == 'yahoo':
         return 'yahoo'
-    return 'yahoo'
+    return 'futu'
 
 
 def resolve_runtime_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:
