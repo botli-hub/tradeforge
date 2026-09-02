@@ -191,7 +191,7 @@ def test_chan_yahoo_429_is_not_502():
         side_effect=KlineRateLimited("Yahoo HTTP 429 Too Many Requests", retry_after=30),
     ), patch("app.api.chan.get_kline_bars", return_value=[]):
         try:
-            asyncio.run(chan_analyze(symbol="AAPL", timeframe="5m"))
+            asyncio.run(chan_analyze(symbol="AAPL", timeframe="5m", limit=400))
             raise AssertionError("expected HTTPException")
         except HTTPException as exc:
             assert exc.status_code != 502, exc.status_code
@@ -208,7 +208,8 @@ def test_chan_local_bars_keep_analyze_alive():
         side_effect=KlineRateLimited("Yahoo HTTP 429 Too Many Requests", retry_after=30),
     ), patch("app.api.chan.get_kline_bars", return_value=rows), \
             patch("app.api.chan.analyze", return_value=dict(payload)):
-        out = asyncio.run(chan_analyze(symbol="AAPL", timeframe="5m"))
+        # Direct handler call skips FastAPI Query unwrap; pass int limit.
+        out = asyncio.run(chan_analyze(symbol="AAPL", timeframe="5m", limit=400))
     assert out["symbol"] == "AAPL"
     assert out["bar_count"] == 80
     assert out["source"] in ("futu", "yahoo")
