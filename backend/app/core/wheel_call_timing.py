@@ -1,7 +1,7 @@
-"""卖 Call 时机层(持股挂机 + 触线观察)。
+"""持股卖 Call 时机层。
 
-挂机池 = HOLDING(已持股待挂 CC);触线扫描可不持股观察。
-发现(挂机) = 合约 1h K 穿自身 EMA(WHEEL_CALL);1d 触线另档档案/推送。
+挂机(HOLDING)仍用本模块做 CC 升档;触线观察可不持股。
+发现 = 合约 1h/1d K 穿自身 EMA(WHEEL_CALL 触线)。无触线不算时机到。
 立场只影响触线之后的升档,不单独当发现。
 action / hint 仅参考, 不自动下单, 不改 POSITION_QUANT。
 """
@@ -374,11 +374,10 @@ def split_holding_cc(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any
 
 
 def is_holding_call_opp(item: Dict[str, Any]) -> bool:
-    """机会流:Call 触线可观察(不要求 HOLDING)。Put 始终放行。
-
-    今日 P1 primary_opens 仍由 wheel_today 滤掉 CALL(不伪造 CC 登记);
-    持股挂机走 post_assign / holding_cc。
-    """
+    """机会流: CALL 也可不持股观察(触线/时机);挂 CC 仍只在 HOLDING。"""
+    if (item.get("side") or "").upper() != "CALL":
+        return True
+    # 产品:无股票也看卖 Call 时机;不再按 stage 过滤
     return True
 
 
