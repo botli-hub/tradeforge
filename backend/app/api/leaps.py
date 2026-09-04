@@ -158,13 +158,18 @@ def wheel_timing_history(page: int = 1, page_size: int = 20, symbol: Optional[st
 def _run_wheel_scan(symbol: Optional[str] = None):
     from datetime import datetime
     from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal, signal_strength
+    from app.services.notifier import timing_channel_kind, resolve_telegram_channel
     cfg = _load_config()
     monitor = WheelTimingMonitor(cfg)
-    notifier = TelegramNotifier.from_config(cfg)
     timing_cfg = cfg.get("wheel_timing", {}) or {}
     min_iv = float(timing_cfg.get("push_min_iv_rank", 50) or 0)
     strong_only = bool(timing_cfg.get("push_strong_only", True))
-    _timing_prog.reset_for_start(telegram_configured=bool(notifier._enabled))
+    # Put / Call 分频道;任一配置即视为 TG 可用(不再用旧全局 bot 推时机)
+    tg_ready = any(
+        resolve_telegram_channel(k, cfg).get("enabled")
+        for k in ("timing_put", "timing_call")
+    )
+    _timing_prog.reset_for_start(telegram_configured=tg_ready)
     _timing_prog.update(message="触线 · 初始化监控器…", phase="timing")
     report: list = []
     try:
@@ -177,6 +182,10 @@ def _run_wheel_scan(symbol: Optional[str] = None):
             if strong_only and level == "WATCH":
                 continue
             try:
+                ch = timing_channel_kind(getattr(sig, "signal_level", None))
+                if not ch:
+                    continue
+                notifier = TelegramNotifier.from_channel(ch, cfg)
                 if notifier.send(format_wheel_signal(sig, min_iv)):
                     sent += 1
             except Exception as e:

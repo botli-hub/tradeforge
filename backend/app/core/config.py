@@ -27,7 +27,15 @@ _KV_KEY = "backend_config"
 
 # 代码内默认值:仅作为数据库为空时的兜底,不含任何真实密钥/账号信息。
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "telegram": {"bot_token": "", "chat_id": ""},
+    # Telegram:拆分频道(缺键=该频道静默,不回落顶层 bot)。顶层 bot 仅管仓/持仓/周报过渡。
+    "telegram": {
+        "bot_token": "",
+        "chat_id": "",
+        "proxy": "",
+        "chan": {"bot_token": "", "chat_id": ""},
+        "timing_put": {"bot_token": "", "chat_id": ""},
+        "timing_call": {"bot_token": "", "chat_id": ""},
+    },
     "finnhub_api_key": "",
     "finnhub_base_url": "https://finnhub.io/api/v1",
     "yahoo_base_url": "https://query1.finance.yahoo.com/v8/finance/chart",

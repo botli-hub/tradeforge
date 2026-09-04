@@ -1,4 +1,4 @@
-"""Services package. 持仓告警周期薄接线事件日首次入窗推送."""
+"""Services package. 持仓告警周期薄接线事件日首次入窗推送 + Telegram 分频道."""
 
 
 def _install_event_alert_hook() -> None:
@@ -47,4 +47,52 @@ def _install_event_alert_hook() -> None:
         pass
 
 
+def _install_telegram_channel_hook() -> None:
+    """替换 send_and_log:按 channel_kind 走分频道 Bot;缺键静默不回落全局 bot.
+
+    不改 alert_engine 正文。category==chan 默认 telegram.chan;
+    显式 channel_kind=timing_put/timing_call 亦可。持仓等仍走 legacy。
+    """
+    try:
+        import app.services.alert_engine as ae
+        if getattr(ae, "_telegram_channel_hook", False):
+            return
+
+        def send_and_log(
+            text: str,
+            *,
+            category: str,
+            fingerprint: str = "",
+            title: str = "",
+            meta=None,
+            dry_run: bool = False,
+            cfg=None,
+            channel_kind=None,
+        ):
+            if cfg is None:
+                try:
+                    from app.api.leaps import _load_config
+                    cfg = _load_config()
+                except Exception:
+                    cfg = {}
+            from app.services.telegram_channel_send import send_telegram_logged
+            return send_telegram_logged(
+                text,
+                category=category,
+                fingerprint=fingerprint,
+                title=title,
+                meta=meta,
+                dry_run=dry_run,
+                cfg=cfg,
+                channel_kind=channel_kind,
+                log_push_fn=ae.log_push,
+            )
+
+        ae.send_and_log = send_and_log  # type: ignore[assignment]
+        ae._telegram_channel_hook = True
+    except Exception:
+        pass
+
+
 _install_event_alert_hook()
+_install_telegram_channel_hook()
