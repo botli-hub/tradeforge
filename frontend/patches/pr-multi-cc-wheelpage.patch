@@ -1,0 +1,147 @@
+diff --git a/frontend/src/pages/WheelPage.tsx b/frontend/src/pages/WheelPage.tsx
+index 4c0216d..102599b 100644
+--- a/frontend/src/pages/WheelPage.tsx
++++ b/frontend/src/pages/WheelPage.tsx
+@@ -146,7 +146,26 @@ const ALLOWED_TRADES: Record<string, WheelTradeType[]> = {
+   IDLE: ['SELL_PUT', 'BUY_SHARES'],
+   CSP_OPEN: ['EXPIRE', 'BUY_PUT_CLOSE', 'ASSIGNED'],
+   HOLDING: ['SELL_CALL', 'SELL_SHARES'],
+-  CC_OPEN: ['EXPIRE', 'BUY_CALL_CLOSE', 'CALLED_AWAY'],
++  CC_OPEN: ['SELL_CALL', 'EXPIRE', 'BUY_CALL_CLOSE', 'CALLED_AWAY'],
++}
++
++/** openChecks 含 cycle 主腿 + `cycle::leg` 多腿;列表去重只留腿键或无多腿时的 cycle 键 */
++function openCheckItems(map: Record<string, WheelOpenPositionItem>): WheelOpenPositionItem[] {
++  const vals = Object.values(map)
++  const legged = vals.filter(i => Object.keys(map).some(k => k.startsWith(`${i.cycle_id}::`) && map[k] === i))
++  if (legged.length) {
++    const seen = new Set<string>()
++    const out: WheelOpenPositionItem[] = []
++    for (const [k, i] of Object.entries(map)) {
++      if (!k.includes('::')) continue
++      const id = `${i.cycle_id}|${(i as any).cc_leg_key || i.contract_code || i.strike}`
++      if (seen.has(id)) continue
++      seen.add(id)
++      out.push(i)
++    }
++    return out
++  }
++  return vals
+ }
+ 
+ function fmt(v: number | null | undefined, digits = 2) {
+@@ -726,7 +745,7 @@ function buildOppRows(
+     covers_earnings: false,
+   }
+   // 一 cycle 仅一张管理卡:完全由后端 action_code 驱动
+-  for (const item of Object.values(openChecks)) {
++  for (const item of openCheckItems(openChecks)) {
+     const code = (item.action_code || '').toUpperCase()
+     if (!code || code === 'NONE') {
+       // 无主建议时:浮盈两本账仍进必须处理;否则需有文案
+@@ -1099,7 +1118,9 @@ function TradeModal({
+   const [saving, setSaving] = useState(false)
+   const [err, setErr] = useState<string | null>(null)
+ 
+-  const needContract = ['SELL_PUT', 'SELL_CALL'].includes(form.trade_type)
++  // CC_OPEN 多腿时平仓/到期/交货需指定合约;SELL_CALL 亦可在卖Call中再挂
++  const needLegPick = cycleStatus === 'CC_OPEN' && ['BUY_CALL_CLOSE', 'EXPIRE', 'CALLED_AWAY'].includes(form.trade_type)
++  const needContract = ['SELL_PUT', 'SELL_CALL'].includes(form.trade_type) || needLegPick
+   const needPrice = !['EXPIRE', 'ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type)
+   const isShares = ['BUY_SHARES', 'SELL_SHARES'].includes(form.trade_type)
+ 
+@@ -1500,7 +1521,15 @@ export default function WheelPage() {
+     const st = getAppSettings()
+     return checkWheelOpenPositions(st.marketHost, st.marketPort).then(r => {
+       const map: Record<string, WheelOpenPositionItem> = {}
+-      r.items.forEach(i => { map[i.cycle_id] = i })
++      // 多腿:每腿独立键;cycle_id 仍指向最近到期主腿(卡片摘要兼容)
++      const best = new Map<string, WheelOpenPositionItem>()
++      r.items.forEach(i => {
++        const leg = (i as any).cc_leg_key || i.contract_code || `${i.strike}-${i.expiry}`
++        map[`${i.cycle_id}::${leg}`] = i
++        const cur = best.get(i.cycle_id)
++        if (!cur || ((i.dte ?? 9999) < (cur.dte ?? 9999))) best.set(i.cycle_id, i)
++      })
++      best.forEach((v, id) => { map[id] = v })
+       setOpenChecks(map)
+       setPortfolioContext(r.portfolio_context || null)
+       const n = syncPortfolioBudgetFromNav(r.portfolio_context?.equity)
+@@ -1861,7 +1890,7 @@ export default function WheelPage() {
+     }
+   }
+ 
+-  const profitHits = Object.values(openChecks).filter(i => i.profit_hit)
++  const profitHits = openCheckItems(openChecks).filter(i => i.profit_hit)
+ 
+   const putBlocked = !!(
+     serverOpps?.summary?.portfolio_put_blocked
+@@ -2724,7 +2753,7 @@ export default function WheelPage() {
+         <div>
+           {/* 今日行动 */}
+           {(() => {
+-            const checks = Object.values(openChecks)
++            const checks = openCheckItems(openChecks)
+             const closeSyms = new Set(checks.filter(i => {
+               const c = (i.action_code || '').toUpperCase()
+               return c === 'CLOSE' || c === 'REPLACE' || i.profit_hit || (i.action_hint || '').includes('换仓')
+@@ -2735,7 +2764,7 @@ export default function WheelPage() {
+                 || (i.action_hint || '').includes('Roll')
+             }).map(i => i.symbol))
+             const uncovSyms = new Set(targets.filter(t =>
+-              (t.active_cycles || []).some(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3)).map(t => t.symbol))
++              (t.active_cycles || []).some(c => (c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3) || (c.status === 'CC_OPEN' && (c.uncovered_shares ?? 0) >= 100))).map(t => t.symbol))
+             const idleSyms = new Set(targets.filter(t => t.enabled && (t.idle_days ?? 0) >= 5).map(t => t.symbol))
+             const items: [typeof actionFilter, string, number, SemColor][] = [
+               ['close', '💰 该平仓', closeSyms.size, 'green'],
+@@ -2784,7 +2813,7 @@ export default function WheelPage() {
+               enabled = enabled.filter(t => t.symbol.toUpperCase() === q)
+             }
+             if (actionFilter) {
+-              const checks = Object.values(openChecks)
++              const checks = openCheckItems(openChecks)
+               const match = (t: WheelTarget): boolean => {
+                 if (actionFilter === 'close') {
+                   return checks.some(i => {
+@@ -2802,7 +2831,7 @@ export default function WheelPage() {
+                       || (i.action_hint || '').includes('Roll')
+                   })
+                 }
+-                if (actionFilter === 'uncovered') return (t.active_cycles || []).some(c => c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3)
++                if (actionFilter === 'uncovered') return (t.active_cycles || []).some(c => (c.status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3) || (c.status === 'CC_OPEN' && (c.uncovered_shares ?? 0) >= 100))
+                 if (actionFilter === 'idle') return (t.idle_days ?? 0) >= 5
+                 return true
+               }
+@@ -3117,6 +3146,12 @@ export default function WheelPage() {
+                             {status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3 && (
+                               <Badge color="orange" title="持股但未挂 Call,theta 收入在流失">🪑 裸奔 {c.uncovered_days} 天</Badge>
+                             )}
++                            {status === 'CC_OPEN' && (c.open_cc_leg_count ?? (c.open_cc_legs?.length || 0)) > 1 && (
++                              <Badge color="purple" title="本轮多笔在场 Covered Call">{(c.open_cc_leg_count ?? c.open_cc_legs!.length)} 笔 Call</Badge>
++                            )}
++                            {status === 'CC_OPEN' && (c.uncovered_shares ?? 0) >= 100 && (
++                              <Badge color="orange" title="仍有未覆盖股份,可再登记卖出 Call">未覆盖 {Math.floor((c.uncovered_shares || 0) / 100)} 张额度</Badge>
++                            )}
+                             <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                               {c.shares > 0 && <>持股 {c.shares} @ ${fmt(c.share_cost)}{' · '}</>}
+                               {c.cost_basis != null && <>CB <b style={{ color: '#4ade80' }}>${fmt(c.cost_basis)}</b>{' · '}</>}
+@@ -3127,6 +3162,19 @@ export default function WheelPage() {
+                           {hasOpen && (
+                             <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '8px 10px', marginTop: 6 }}
+                               title={c.open_contract_code || undefined}>
++                              {(c.open_cc_legs && c.open_cc_legs.length > 1) && (
++                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
++                                  {c.open_cc_legs.map((leg, li) => (
++                                    <span key={`${leg.contract_code || leg.strike}-${li}`} style={{
++                                      fontSize: 12, padding: '2px 7px', borderRadius: 8,
++                                      border: '1px solid #a78bfa55', color: '#a78bfa',
++                                    }}>
++                                      ${fmt(leg.strike)} · {(String(leg.expiry || '')).slice(5)}
++                                      {(leg.qty || 1) > 1 ? ` ×${leg.qty}` : ''}
++                                    </span>
++                                  ))}
++                                </div>
++                              )}
+                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+                                 <span style={{
+                                   padding: '0 7px', borderRadius: 8, fontSize: 12, fontWeight: 700,
