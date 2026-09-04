@@ -59,9 +59,34 @@
 - 建议 vs 实操跟进率、轻量情景（平 vs 到期）
 
 ### 推送（Telegram）
-- 持仓：状态指纹变化才推；冷却 / 静默 / 紧急破静默
+- 持仓：状态指纹变化才推；冷却 / 静默 / 紧急破静默（仍用顶层 legacy bot）
 - 机会：TopN、点差与可执行过滤、会话（默认收盘后）、组合停 Put 时不推 Put
+- **分频道（推荐）**：缠论 / Put 时机 / Call 时机各自独立 Bot，缺键该频道静默，**不**回落旧全局 bot
 - 设置页 **通知中心**：预览、测试、推送日志
+
+配置形状示例（占位符 only，勿提交真实 Token）：
+
+```json
+{
+  "telegram": {
+    "proxy": "http://127.0.0.1:7890",
+    "chan": { "bot_token": "YOUR_CHAN_BOT_TOKEN", "chat_id": "YOUR_CHAT_ID" },
+    "timing_put": { "bot_token": "YOUR_PUT_TIMING_BOT_TOKEN", "chat_id": "YOUR_CHAT_ID" },
+    "timing_call": { "bot_token": "YOUR_CALL_TIMING_BOT_TOKEN", "chat_id": "YOUR_CHAT_ID" },
+    "bot_token": "YOUR_LEGACY_BOT_TOKEN",
+    "chat_id": "YOUR_LEGACY_CHAT_ID"
+  }
+}
+```
+
+| 键 | 用途 |
+|----|------|
+| `telegram.chan` | 缠论 5m/30m 买卖点 |
+| `telegram.timing_put` | `WHEEL_PUT` 触线时机 |
+| `telegram.timing_call` | `WHEEL_CALL` 触线时机 |
+| 顶层 `bot_token`/`chat_id` | 持仓 / must_manage / 周报等过渡 |
+
+解析入口：`resolve_telegram_channel(kind)`（`backend/app/services/notifier.py`）。
 
 ### 组合与风控
 - 起始现金、单票/组合占用上限；权益随股价和登记自动变
