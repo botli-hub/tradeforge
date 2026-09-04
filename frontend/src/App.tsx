@@ -13,6 +13,7 @@ import StocksPage from './pages/StocksPage'
 import LeapsMonitorPage from './pages/LeapsMonitorPage'
 import Plan2032Page from './pages/Plan2032Page'
 import WheelPage from './pages/WheelPage'
+import SimWheelPage from './pages/SimWheelPage'
 import ChanPage from './pages/ChanPage'
 import { getAppMode, setAppMode, type AppMode } from './services/wheelProduct'
 import {
@@ -24,10 +25,11 @@ import {
   type UiStyle,
 } from './services/uiStyle'
 
-type PageKey = 'wheel' | 'market' | 'chan' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
+type PageKey = 'wheel' | 'sim' | 'market' | 'chan' | 'strategy' | 'backtest' | 'options' | 'orders' | 'positions' | 'history' | 'stocks' | 'leaps' | 'plan2032' | 'settings'
 
 const TRADE_NAV: { key: PageKey; label: string }[] = [
   { key: 'wheel', label: 'Wheel' },
+  { key: 'sim', label: 'SIM纸面' },
   { key: 'settings', label: '设置' },
 ]
 
@@ -48,6 +50,7 @@ const RESEARCH_NAV: { key: PageKey; label: string }[] = [
 
 const MOBILE_TRADE_TABS: { key: PageKey; label: string; ico: string }[] = [
   { key: 'wheel', label: '今日', ico: '⌂' },
+  { key: 'sim', label: 'SIM', ico: '◎' },
   { key: 'settings', label: '设置', ico: '⚙' },
 ]
 
@@ -83,7 +86,7 @@ function App() {
 
   useEffect(() => {
     const valid: PageKey[] = [
-      'wheel', 'market', 'chan', 'strategy', 'backtest', 'options', 'orders',
+      'wheel', 'sim', 'market', 'chan', 'strategy', 'backtest', 'options', 'orders',
       'positions', 'history', 'stocks', 'leaps', 'plan2032', 'settings',
     ]
     const onNav = (e: Event) => {
@@ -91,7 +94,7 @@ function App() {
       const page = d.page as PageKey | undefined
       if (page && valid.includes(page)) {
         // 从 Wheel 跳设置时保持交易壳
-        if (page === 'settings' || page === 'wheel') {
+        if (page === 'settings' || page === 'wheel' || page === 'sim') {
           setAppMode('wheel')
           setMode('wheel')
         }
@@ -120,6 +123,7 @@ function App() {
 
   const pages: Record<PageKey, JSX.Element> = {
     wheel: <WheelPage />,
+    sim: <SimWheelPage />,
     market: <MarketPage />,
     chan: <ChanPage />,
     strategy: <StrategyPage />,

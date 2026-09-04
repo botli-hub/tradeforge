@@ -183,6 +183,11 @@ def _run_wheel_scan(symbol: Optional[str] = None):
             if strong_only and level == "WATCH":
                 continue
             try:
+                from app.core.sim_wheel import alert_from_wheel_signal, sim_on_alert
+                sim_on_alert(alert_from_wheel_signal(sig), cfg=cfg)
+            except Exception as e:
+                logger.info("sim wheel paper skip: %s", e)
+            try:
                 ch = timing_channel_kind(getattr(sig, "signal_level", None))
                 if not ch:
                     continue

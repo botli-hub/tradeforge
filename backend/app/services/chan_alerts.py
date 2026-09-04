@@ -326,6 +326,11 @@ def process_chan_signals(
             sent_fps.append(fp)
             st[fp] = now.isoformat(timespec="seconds")
             would_send.append(row)
+            try:
+                from app.core.sim_wheel import alert_from_chan_item, sim_on_alert
+                sim_on_alert(alert_from_chan_item(row), cfg=cfg, now=now)
+            except Exception:
+                pass
         results.append(r)
 
     if sent_fps and not dry_run:

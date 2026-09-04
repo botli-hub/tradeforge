@@ -2046,3 +2046,60 @@ export async function savePlan2032Holdings(holdings: Plan2032Holding[]) {
     body: JSON.stringify({ holdings }),
   })
 }
+
+// ── Sim Wheel 纸面账(非实盘) ─────────────────────────────────────────────────
+
+export interface SimCycle {
+  id: string
+  symbol: string
+  strategy: string
+  status: string
+  level?: string | null
+  shares?: number
+  share_cost?: number
+  cost_basis?: number | null
+  total_premium?: number
+  realized_pnl?: number | null
+  open_strike?: number | null
+  open_expiry?: string | null
+  open_qty?: number
+  open_price?: number
+  started_at?: string
+  closed_at?: string | null
+}
+
+export interface SimStatsRow {
+  strategy: string
+  symbol: string
+  closed_cycles: number
+  wins: number
+  total_pnl: number
+  expectancy: number
+  win_rate: number
+  avg_days: number
+  assign_rate: number
+  called_away_rate: number
+  familiarity: 'Cold' | 'Warm' | 'Hot' | string
+  label?: string
+}
+
+export async function getSimCycles(status?: string) {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request<{ items: SimCycle[]; count: number; label: string; paper_only: boolean }>(`/api/sim/cycles${q}`)
+}
+
+export async function getSimStats(strategy?: string, symbol?: string) {
+  const params = new URLSearchParams()
+  if (strategy) params.set('strategy', strategy)
+  if (symbol) params.set('symbol', symbol)
+  const q = params.toString() ? `?${params}` : ''
+  return request<{ items: SimStatsRow[]; count: number; open_cycles: number; label: string }>(`/api/sim/stats${q}`)
+}
+
+export async function postSimTick(body: { spots: Record<string, number>; marks?: Record<string, number>; as_of?: string }) {
+  return request<{ ok: boolean; actions: any[]; label: string }>('/api/sim/tick', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
