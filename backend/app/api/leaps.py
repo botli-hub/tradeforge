@@ -158,6 +158,7 @@ def wheel_timing_history(page: int = 1, page_size: int = 20, symbol: Optional[st
 def _run_wheel_scan(symbol: Optional[str] = None):
     from datetime import datetime
     from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal, signal_strength
+    from app.core import wheel_timing_scan_patch  # noqa: F401 — Call 1h+1d / non-HOLDING
     from app.services.notifier import timing_channel_kind, resolve_telegram_channel
     cfg = _load_config()
     monitor = WheelTimingMonitor(cfg)
@@ -223,7 +224,7 @@ def _run_wheel_scan(symbol: Optional[str] = None):
                     repo.set_contract_cooldown(key, cyc["symbol"], 1)
         except Exception as e:
             logger.info("在场合约体检跳过: %s", e)
-        # 缠论 5m/30m 买卖点增量推送(fingerprint 去重; 不自动下单)
+        # 缠论 5m/30m/1d 买卖点增量推送(fingerprint 去重; 不自动下单)
         try:
             from app.services.chan_alerts import run_chan_alert_cycle
             run_chan_alert_cycle(cfg=cfg)
