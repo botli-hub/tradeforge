@@ -116,16 +116,17 @@ def test_config_off_skips():
     assert cycle["sent_count"] == 0
 
 
-def test_1m_1h_not_scanned():
+def test_1m_1h_not_scanned_but_1d_included():
     tfs = allowed_timeframes(_cfg(timeframes=["1m", "5m", "30m", "1h", "1d"]))
-    assert tfs == ["5m", "30m"]
+    assert tfs == ["5m", "30m", "1d"]
     assert "1m" not in tfs
     assert "1h" not in tfs
+    assert "1d" in tfs
 
-    due_none = due_timeframes(
+    due_only_1d = due_timeframes(
         {}, NOW, _cfg(timeframes=["1m", "1h", "1d"]), session_open=True,
     )
-    assert due_none == []
+    assert due_only_1d == ["1d"]
 
     scanned = []
 
@@ -144,16 +145,50 @@ def test_1m_1h_not_scanned():
         dry_run=True,
         persist=False,
         last_runs={"5m": (NOW - timedelta(minutes=10)).isoformat(),
-                   "30m": (NOW - timedelta(minutes=40)).isoformat()},
+                   "30m": (NOW - timedelta(minutes=40)).isoformat(),
+                   "1d": (NOW - timedelta(minutes=400)).isoformat()},
         session_open=True,
         prime_on_empty=False,
         state={},
     )
     got = {tf for _, tf in scanned}
-    assert got == {"5m", "30m"}
+    assert got == {"5m", "30m", "1d"}
     assert ("AAPL", "1m") not in scanned
     assert ("AAPL", "1h") not in scanned
-    assert out["due"] == ["5m", "30m"]
+    assert set(out["due"]) == {"5m", "30m", "1d"}
+
+
+def test_1d_daily_cadence_not_spam():
+    """日线 poll≈390min:刚扫过则 not due;过期后才再扫。"""
+    from app.services.chan_alerts import poll_minutes
+    cfg = _cfg(timeframes=["1d"], poll_minutes_1d=390)
+    assert poll_minutes("1d", cfg) == 390
+    assert poll_minutes("1d", cfg) >= 60  # 绝非几分钟刷屏
+
+    recent = due_timeframes(
+        {"1d": (NOW - timedelta(minutes=30)).isoformat()},
+        NOW, cfg, session_open=True,
+    )
+    assert recent == []
+
+    stale = due_timeframes(
+        {"1d": (NOW - timedelta(minutes=400)).isoformat()},
+        NOW, cfg, session_open=True,
+    )
+    assert stale == ["1d"]
+
+    sent = []
+    def capture(body, row):
+        sent.append(row)
+        return {"ok": True, "reason": "dry_run", "sent": False}
+
+    out = process_chan_signals(
+        [_sig(timeframe="1d", kind="B2", label="二买")],
+        cfg=cfg, dry_run=True, send_fn=capture, now=NOW, state={},
+    )
+    assert out["sent_count"] == 1
+    assert sent[0]["timeframe"] == "1d"
+    assert "日线" in sent[0]["body"] or "二买" in sent[0]["body"]
 
 
 def test_process_drops_disallowed_timeframe():
@@ -163,6 +198,13 @@ def test_process_drops_disallowed_timeframe():
     )
     assert out["sent_count"] == 0
     assert out["skipped"]["tf"] == 2
+    # 1d 允许推送
+    ok = process_chan_signals(
+        [_sig(timeframe="1d", kind="S1", label="一卖")],
+        cfg=_cfg(timeframes=["5m", "30m", "1d"]), dry_run=True, now=NOW, state={},
+    )
+    assert ok["sent_count"] == 1
+    assert ok["skipped"]["tf"] == 0
 
 
 def test_universe_enabled_wheel_targets():
