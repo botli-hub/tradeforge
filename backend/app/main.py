@@ -28,6 +28,7 @@ async def startup():
     init_db()
     from app.core.wheel_stance import ensure_stance_column
     from app.core.wheel_call_timing import ensure_sell_above_column
+    from app.core import wheel_timing_scan_patch  # noqa: F401 — Call 1h+1d
     ensure_stance_column()
     ensure_sell_above_column()
     scheduler = get_history_scheduler()
@@ -45,7 +46,7 @@ async def startup():
     threading.Thread(target=auto_push_loop, daemon=True).start()
     # 在场合约高优先级行动 Telegram 告警
     threading.Thread(target=_position_alert_loop, daemon=True).start()
-    # 缠论 5m/30m 买卖点 Telegram(chan_alerts.enabled; 同指纹只推一次; 不自动下单)
+    # 缠论 5m/30m/1d 买卖点 Telegram(chan_alerts.enabled; 同指纹只推一次; 不自动下单)
     threading.Thread(target=_chan_alert_loop, daemon=True).start()
     # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
     threading.Thread(target=_backfill_codes_once, daemon=True).start()
@@ -211,7 +212,7 @@ def _position_alert_loop():
 
 
 def _chan_alert_loop():
-    """美股盘中短轮询缠论 5m/30m 买卖点,只推增量。0/关闭见 chan_alerts.enabled。"""
+    """美股盘中短轮询缠论 5m/30m/1d 买卖点,只推增量。日线按 poll_minutes_1d。关闭见 chan_alerts.enabled。"""
     import time
     import logging
     log = logging.getLogger("chan_alerts")
