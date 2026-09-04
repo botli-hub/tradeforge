@@ -273,9 +273,29 @@ def format_position_alert(item: Dict[str, Any], style: str = "short") -> str:
     return "\n".join(lines)
 
 
-def format_position_digest(items: List[Dict[str, Any]], title: Optional[str] = None) -> str:
+def format_position_digest(
+    items: List[Dict[str, Any]],
+    title: Optional[str] = None,
+    *,
+    monthly_premium: Optional[float] = None,
+    monthly_premium_line: Optional[str] = None,
+) -> str:
     today = _now().strftime("%Y-%m-%d")
     lines = [title or f"📋 Wheel 今日管仓 · {today}"]
+    # 本月权利金收入(实盘 ledger 净额;与 get_stats.premium_month 同口径)
+    if monthly_premium_line:
+        lines.append(monthly_premium_line)
+    else:
+        try:
+            from app.core.premium_ledger import format_monthly_premium_line
+            lines.append(
+                format_monthly_premium_line(amount=monthly_premium)
+                if monthly_premium is not None
+                else format_monthly_premium_line()
+            )
+        except Exception:
+            if monthly_premium is not None:
+                lines.append(f"本月权利金收入 ${float(monthly_premium):,.2f}")
     for i in items[:15]:
         sym = i.get("symbol") or "?"
         side = _side_label(i.get("side") or "")
@@ -621,10 +641,20 @@ def process_position_alerts(
     messages: List[str] = []
     results: List[Dict[str, Any]] = []
 
+    # 本月权利金收入(legacy 持仓频道;非 timing/chan)
+    prem_line = ""
+    try:
+        from app.core.premium_ledger import format_monthly_premium_line
+        prem_line = format_monthly_premium_line()
+    except Exception:
+        prem_line = ""
+
     # 批量: ≤3 条合并一条消息, 否则分条(防刷 + 可读)
     if to_send:
         if len(to_send) <= 3:
             body = "\n\n".join(format_position_alert(it) for it, _ in to_send)
+            if prem_line:
+                body = prem_line + "\n\n" + body
             fps = [fp for _, fp in to_send]
             r = send_and_log(
                 body, category="position", fingerprint=",".join(fps),
@@ -638,8 +668,10 @@ def process_position_alerts(
             results.append(r)
         else:
             # 紧急优先逐条/分批发前 8 条
-            for it, fp in to_send[:8]:
+            for idx, (it, fp) in enumerate(to_send[:8]):
                 body = format_position_alert(it)
+                if idx == 0 and prem_line:
+                    body = prem_line + "\n\n" + body
                 r = send_and_log(
                     body, category="position", fingerprint=fp,
                     title=f"{it.get('symbol')} {it.get('action_code')}",

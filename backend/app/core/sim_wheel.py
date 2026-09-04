@@ -912,6 +912,12 @@ class SimWheelEngine:
         return {"cycle_id": c["id"], "action": "called_away", "pnl": pnl}
 
 
+def select_best_alerts_for_sim(alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """同 tick/batch 多合约:仅最优进纸面(与 TG 择优同规则)。"""
+    from app.core.touch_best import select_best_touch_signals
+    return list(select_best_touch_signals(alerts or []))
+
+
 def sim_on_alert(alert: Dict[str, Any], *, cfg: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
     """模块级入口:供 TG/扫描同指纹挂钩。失败吞掉,不影响推送。"""
     try:
@@ -947,6 +953,9 @@ def alert_from_wheel_signal(sig: Any) -> Dict[str, Any]:
             "underlying_price": getattr(sig, "underlying_price", None),
             "floor_price": getattr(sig, "floor_price", None),
             "iv_rank": getattr(sig, "iv_rank", None),
+            "annualized": getattr(sig, "annualized", None),
+            "theta": getattr(sig, "theta", None),
+            "timeframe": getattr(sig, "timeframe", None),
         }
     level = (d.get("signal_level") or "").upper()
     d["category"] = "timing_call" if level == "WHEEL_CALL" else "timing_put"
