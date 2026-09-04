@@ -77,6 +77,7 @@ class LeapsSignal:
     bid: Optional[float] = None          # 买价(卖方可成交价)
     annualized: Optional[float] = None   # 年化收益率%(bid/strike×365/DTE)
     dte: Optional[int] = None
+    theta: Optional[float] = None        # 绝对 theta(|option_theta|);缺省 None→择优按 0
     below_floor: bool = False            # 标的现价低于接货底线(软警告)
     ema_partial: bool = False            # K 线不足标准周期,EMA 为近似
     timeframe: str = "1d"                # '1d' Put 日K | '1h' Call 小时K
@@ -627,6 +628,7 @@ class LeapsMonitor:
                     bid=contract.get("bid") or None,
                     annualized=_annualized_yield(sell_price, strike, dte_val) if sell_price else None,
                     dte=dte_val,
+                    theta=contract.get("theta"),
                     below_floor=below_floor,
                     timeframe=tf,
                 )
@@ -877,6 +879,7 @@ class LeapsMonitor:
                 high_price = float(srow.get("high_price", 0) or 0)
                 bid_price = float(srow.get("bid_price", 0) or 0)
                 delta_val = abs(float(srow.get("option_delta", 0) or 0))
+                theta_val = abs(float(srow.get("option_theta", 0) or 0))
                 raw.append({
                     "code": code,
                     "expiry": expiry,
@@ -889,6 +892,7 @@ class LeapsMonitor:
                     "high": high_price,
                     "bid": bid_price,
                     "delta": delta_val or None,
+                    "theta": theta_val or None,
                 })
 
             # 按 OI 降序;max_contracts <= 0 表示不限制

@@ -210,3 +210,113 @@ def backfill_cycle_premium(cycle_id: str, persist: bool = True) -> Dict[str, Any
         "source": "ledger",
         "reason": "已从台账成交回填" if wrote else "台账已有成交,open_price 已可用",
     }
+
+
+def net_premium_from_trades(
+    trades: Optional[List[Dict[str, Any]]],
+    *,
+    month_start: Optional[str] = None,
+    month_end_exclusive: Optional[str] = None,
+) -> float:
+    """实盘台账净权利金(与 wheel_repository.get_stats 同口径)。
+
+    SELL_PUT / SELL_CALL: +(qty*price*contract_size - fee)
+    BUY_PUT_CLOSE / BUY_CALL_CLOSE: -(qty*price*contract_size + fee)
+    其他类型不计。可选按 traded_at 日历月过滤 [month_start, month_end_exclusive)。
+    不含 Sim 纸面账。
+    """
+    total = 0.0
+    for t in trades or []:
+        ta = str(t.get("traded_at") or "")
+        if month_start and ta < month_start:
+            continue
+        if month_end_exclusive and ta >= month_end_exclusive:
+            continue
+        tt = str(t.get("trade_type") or "")
+        try:
+            qty = float(t.get("qty") or 0)
+            price = float(t.get("price") or 0)
+            size = float(t.get("contract_size") or 100)
+            fee = float(t.get("fee") or 0)
+        except (TypeError, ValueError):
+            continue
+        notional = qty * price * size
+        if tt in ("SELL_PUT", "SELL_CALL"):
+            total += notional - fee
+        elif tt in ("BUY_PUT_CLOSE", "BUY_CALL_CLOSE"):
+            total -= notional + fee
+    return round(total, 2)
+
+
+def calendar_month_bounds(as_of: Optional[Any] = None) -> tuple:
+    """返回 (month_start_iso, next_month_start_iso, label YYYY-MM)。"""
+    from datetime import date as _date
+    if as_of is None:
+        d = _date.today()
+    elif isinstance(as_of, str):
+        d = _date.fromisoformat(str(as_of)[:10])
+    else:
+        d = as_of if hasattr(as_of, "year") else _date.today()
+    start = d.replace(day=1)
+    if start.month == 12:
+        nxt = start.replace(year=start.year + 1, month=1)
+    else:
+        nxt = start.replace(month=start.month + 1)
+    return start.isoformat(), nxt.isoformat(), start.strftime("%Y-%m")
+
+
+def calendar_month_premium_income(as_of: Optional[Any] = None) -> Dict[str, Any]:
+    """本月权利金收入(实盘 wheel_trades 净额)。优先走 repository.get_stats.premium_month。"""
+    start, end, label = calendar_month_bounds(as_of)
+    amount: Optional[float] = None
+    source = "none"
+    try:
+        from app.data.wheel_repository import get_stats
+        # get_stats 已按 date.today() 月初累计;若 as_of 非今日则走成交重算
+        from datetime import date as _date
+        today = _date.today()
+        as_day = _date.fromisoformat(start)
+        if as_of is None or as_day.replace(day=1) == today.replace(day=1):
+            amount = float((get_stats() or {}).get("premium_month") or 0)
+            source = "stats.premium_month"
+    except Exception:
+        amount = None
+    if amount is None:
+        try:
+            from app.data.wheel_repository import get_trades
+            trades = get_trades(limit=5000) or []
+            amount = net_premium_from_trades(
+                trades, month_start=start, month_end_exclusive=end,
+            )
+            source = "trades"
+        except Exception:
+            amount = 0.0
+            source = "fallback_zero"
+    return {
+        "amount": round(float(amount or 0), 2),
+        "month": label,
+        "month_start": start,
+        "month_end_exclusive": end,
+        "source": source,
+        "caliber": "SELL_PUT/CALL - BUY_*_CLOSE (fee-inclusive); real ledger only",
+    }
+
+
+def format_monthly_premium_line(
+    amount: Optional[float] = None,
+    *,
+    month: Optional[str] = None,
+    as_of: Optional[Any] = None,
+) -> str:
+    """Telegram 一行:本月权利金收入。"""
+    if amount is None:
+        info = calendar_month_premium_income(as_of=as_of)
+        amount = float(info["amount"])
+        month = month or info["month"]
+    elif month is None:
+        _, _, month = calendar_month_bounds(as_of)
+    try:
+        amt_s = f"${float(amount):,.2f}"
+    except (TypeError, ValueError):
+        amt_s = str(amount)
+    return f"本月权利金收入 {amt_s}" + (f"（{month}）" if month else "")

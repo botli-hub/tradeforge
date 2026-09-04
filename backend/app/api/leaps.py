@@ -176,8 +176,16 @@ def _run_wheel_scan(symbol: Optional[str] = None):
     try:
         signals = monitor.scan_all(symbol=symbol, report=report)
         logger.info("wheel 时机扫描完成,触发 %d 条", len(signals))
+        # 同标的同侧多合约触线:仅年化→theta 最优者进 TG / Sim;全量仍已写入时机历史
+        from app.core.touch_best import select_best_touch_signals
+        push_signals = select_best_touch_signals(signals)
+        if len(push_signals) < len(signals):
+            logger.info(
+                "触线择优: %d → %d (按 symbol+side 年化/theta)",
+                len(signals), len(push_signals),
+            )
         sent = 0
-        for sig in signals:
+        for sig in push_signals:
             level = signal_strength(sig, min_iv)
             # 默认只推可做/强,避免观察级刷屏;push_strong_only=False 时全推
             if strong_only and level == "WATCH":
