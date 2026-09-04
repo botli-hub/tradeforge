@@ -549,6 +549,18 @@ export interface WheelCycle {
   open_qty: number
   open_price: number
   open_contract_size: number
+  /** 在场 Covered Call 腿(台账推导);无则回退 open_contract_* */
+  open_cc_legs?: Array<{
+    contract_code?: string | null
+    strike?: number | null
+    expiry?: string | null
+    qty?: number
+    price?: number
+    contract_size?: number
+    option_type?: string
+  }> | null
+  open_cc_leg_count?: number
+  uncovered_shares?: number | null
   started_at: string
   closed_at: string | null
   cost_basis: number | null
@@ -743,6 +755,10 @@ export interface WheelOpenPositionItem {
   cycle_id: string
   symbol: string
   side: 'PUT' | 'CALL'
+  /** 多腿 CC 行身份;同 cycle 多行时用 */
+  cc_leg_key?: string | null
+  open_cc_leg_count?: number | null
+  uncovered_shares?: number | null
   contract_code: string
   strike: number
   expiry: string | null
