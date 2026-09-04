@@ -1,3 +1,4 @@
+from app.core import wheel_timing_scan_patch  # noqa: F401
 """Call 触线 1h / Put 日K：无 OpenD。"""
 import sys
 from pathlib import Path
