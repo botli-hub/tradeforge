@@ -873,8 +873,13 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     util_pct = portfolio_ctx.get("utilization_pct")
     headroom_by = portfolio_ctx.get("headroom_by_symbol") or {}
 
-    cycles = [c for c in repo.get_cycles(include_closed=False)
-              if c["status"] in ("CSP_OPEN", "CC_OPEN") and c.get("open_contract_code")]
+    # 多腿 CC:每条在场 Call 展开为一行;CSP 仍一行。open_contract_* 为该行摘要。
+    from app.core.wheel_cc_legs import expand_open_option_rows
+    cycles = expand_open_option_rows([
+        c for c in repo.get_cycles(include_closed=False)
+        if c["status"] in ("CSP_OPEN", "CC_OPEN")
+    ])
+    cycles = [c for c in cycles if c.get("open_contract_code") or c.get("open_strike")]
     if not cycles:
         out = {
             "items": [],
@@ -886,7 +891,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         save_positions_cache(out)
         return out
 
-    codes = [c["open_contract_code"] for c in cycles]
+    codes = [c["open_contract_code"] for c in cycles if c.get("open_contract_code")]
     hold_syms = list({
         c["symbol"] for c in repo.get_cycles(include_closed=False)
         if (c.get("shares") or 0) > 0
@@ -960,7 +965,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
 
     items = []
     for c in cycles:
-        q = quotes.get(c["open_contract_code"], {})
+        q = quotes.get(c.get("open_contract_code") or "", {})
         cur = q.get("last") or q.get("ask") or 0
         buyback = q.get("ask") or q.get("last") or 0
         bid = q.get("bid") or 0
@@ -1018,6 +1023,9 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
                 pass
         item = {
             "cycle_id": c["id"], "symbol": c["symbol"], "side": c["open_option_type"],
+            "cc_leg_key": c.get("cc_leg_key"),
+            "open_cc_leg_count": c.get("open_cc_leg_count"),
+            "uncovered_shares": c.get("uncovered_shares"),
             "contract_code": c["open_contract_code"], "strike": strike,
             "expiry": c.get("open_expiry"), "dte": dte,
             "open_price": open_price, "current_price": cur, "buyback_ask": buyback,

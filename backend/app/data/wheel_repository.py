@@ -4,8 +4,9 @@
   IDLE --SELL_PUT--> CSP_OPEN --EXPIRE/BUY_PUT_CLOSE--> IDLE
   IDLE --BUY_SHARES--> HOLDING(已持正股直接进轮,qty=股数,price=每股成本)
                      CSP_OPEN --ASSIGNED--> HOLDING
-  HOLDING --SELL_CALL--> CC_OPEN --EXPIRE/BUY_CALL_CLOSE--> HOLDING
-                         CC_OPEN --CALLED_AWAY--> CLOSED
+  HOLDING --SELL_CALL--> CC_OPEN --EXPIRE/BUY_CALL_CLOSE--> HOLDING(或仍 CC_OPEN 若还有腿)
+  CC_OPEN --SELL_CALL--> CC_OPEN(未覆盖股份足够时可再挂不同 Call)
+                         CC_OPEN --CALLED_AWAY--> HOLDING/CC_OPEN/CLOSED(按腿)
   HOLDING --SELL_SHARES--> CLOSED
 
 周期状态 = 该周期全部交易腿按时间顺序重放的结果。
@@ -18,6 +19,14 @@ from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 
 from app.data.database import get_db, _now_iso
+from app.core.wheel_cc_legs import (
+    CcLegError,
+    apply_cc_close,
+    apply_sell_call,
+    cycle_open_cc_legs,
+    parse_open_cc_legs_json,
+    uncovered_shares_of,
+)
 
 TRADE_TYPES = (
     "SELL_PUT", "BUY_PUT_CLOSE", "SELL_CALL", "BUY_CALL_CLOSE",
@@ -166,6 +175,7 @@ def _new_state() -> Dict[str, Any]:
         "open_contract_code": None, "open_option_type": None,
         "open_strike": None, "open_expiry": None,
         "open_qty": 0.0, "open_price": 0.0, "open_contract_size": 100,
+        "open_cc_legs": [],
         "closed_at": None,
     }
 
@@ -195,6 +205,7 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
     def clear_open():
         s.update(open_contract_code=None, open_option_type=None, open_strike=None,
                  open_expiry=None, open_qty=0.0, open_price=0.0)
+        s["open_cc_legs"] = []
 
     if tt == "BUY_SHARES":
         need("IDLE")
@@ -225,10 +236,16 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
         s["status"] = "IDLE"
 
     elif tt == "EXPIRE":
-        if s["status"] not in ("CSP_OPEN", "CC_OPEN"):
+        if s["status"] == "CSP_OPEN":
+            s["status"] = "IDLE"
+            clear_open()
+        elif s["status"] == "CC_OPEN":
+            try:
+                apply_cc_close(s, t, kind="expire")
+            except CcLegError as e:
+                raise WheelError(str(e)) from e
+        else:
             raise WheelError("「到期作废」需要有在场合约(轮子处于「卖Put中」或「卖Call中」)")
-        s["status"] = "IDLE" if s["status"] == "CSP_OPEN" else "HOLDING"
-        clear_open()
 
     elif tt == "ASSIGNED":
         need("CSP_OPEN")
@@ -244,33 +261,23 @@ def _apply(s: Dict[str, Any], t: Dict[str, Any]):
         s["status"] = "HOLDING"
 
     elif tt == "SELL_CALL":
-        need("HOLDING")
-        if not strike or not expiry:
-            raise WheelError("SELL_CALL 需要 strike 和 expiry")
-        s["total_premium"] += qty * price * size - fee
-        s["total_fees"] += fee
-        s.update(status="CC_OPEN", open_contract_code=t.get("contract_code"),
-                 open_option_type="CALL", open_strike=strike, open_expiry=expiry,
-                 open_qty=qty, open_price=price, open_contract_size=size)
+        # HOLDING 或 CC_OPEN(仍有未覆盖股份)均可再挂不同 Call
+        try:
+            apply_sell_call(s, t)
+        except CcLegError as e:
+            raise WheelError(str(e)) from e
 
     elif tt == "BUY_CALL_CLOSE":
-        need("CC_OPEN")
-        s["total_premium"] -= qty * price * (size or s["open_contract_size"])
-        s["total_fees"] += fee
-        clear_open()
-        s["status"] = "HOLDING"
+        try:
+            apply_cc_close(s, t, kind="close")
+        except CcLegError as e:
+            raise WheelError(str(e)) from e
 
     elif tt == "CALLED_AWAY":
-        need("CC_OPEN")
-        eff_strike = strike or s["open_strike"]
-        if not eff_strike:
-            raise WheelError("CALLED_AWAY 需要 strike(交货价)")
-        s["realized_pnl"] = round(
-            (eff_strike - s["share_cost"]) * s["shares"] + s["total_premium"] - fee, 4)
-        s["total_fees"] += fee
-        clear_open()
-        s["status"] = "CLOSED"
-        s["closed_at"] = t.get("traded_at")
+        try:
+            apply_cc_close(s, t, kind="called_away")
+        except CcLegError as e:
+            raise WheelError(str(e)) from e
 
     elif tt == "SELL_SHARES":
         need("HOLDING")
@@ -313,15 +320,17 @@ def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
                 )
             raise WheelError(f"{e}{hint}") from e
     started_at = trades[0]["traded_at"]
+    import json as _json
+    legs_json = _json.dumps(s.get("open_cc_legs") or [], ensure_ascii=False)
     conn.execute(
         """UPDATE wheel_cycles SET status=?, shares=?, share_cost=?, total_premium=?,
            total_fees=?, realized_pnl=?, open_contract_code=?, open_option_type=?,
            open_strike=?, open_expiry=?, open_qty=?, open_price=?, open_contract_size=?,
-           started_at=?, closed_at=?, updated_at=? WHERE id=?""",
+           open_cc_legs=?, started_at=?, closed_at=?, updated_at=? WHERE id=?""",
         (s["status"], s["shares"], s["share_cost"], round(s["total_premium"], 4),
          round(s["total_fees"], 4), s["realized_pnl"], s["open_contract_code"],
          s["open_option_type"], s["open_strike"], s["open_expiry"], s["open_qty"],
-         s["open_price"], s["open_contract_size"], started_at, s["closed_at"],
+         s["open_price"], s["open_contract_size"], legs_json, started_at, s["closed_at"],
          _now_iso(), cycle_id),
     )
     return s
@@ -330,10 +339,25 @@ def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
 # ── cycles 查询 ───────────────────────────────────────────────────────────────
 
 def _enrich_cycle(c: Dict[str, Any]) -> Dict[str, Any]:
+    raw_legs = c.get("open_cc_legs")
+    if isinstance(raw_legs, str):
+        c["open_cc_legs"] = parse_open_cc_legs_json(raw_legs)
+    elif raw_legs is None:
+        c["open_cc_legs"] = []
+    elif isinstance(raw_legs, list):
+        c["open_cc_legs"] = [dict(x) for x in raw_legs if isinstance(x, dict)]
+    else:
+        c["open_cc_legs"] = []
     shares = c.get("shares") or 0
     share_cost = c.get("share_cost") or 0
     premium = c.get("total_premium") or 0
     c["cost_basis"] = round(share_cost - premium / shares, 4) if shares > 0 else None
+    if c.get("status") == "CC_OPEN":
+        c["open_cc_leg_count"] = len(cycle_open_cc_legs(c))
+        c["uncovered_shares"] = uncovered_shares_of(c)
+    else:
+        c["open_cc_leg_count"] = 0
+        c["uncovered_shares"] = float(shares) if c.get("status") == "HOLDING" else 0.0
     expiry = c.get("open_expiry")
     if expiry and c.get("status") in ("CSP_OPEN", "CC_OPEN"):
         try:

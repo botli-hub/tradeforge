@@ -1,0 +1,35 @@
+name: apply-pr-multi-cc-wheelpage
+on:
+  push:
+    branches: [feat/wheel-multi-cc]
+    paths:
+      - frontend/patches/pr-multi-cc-wheelpage.patch
+      - .github/workflows/apply-pr-multi-cc-wheelpage.yml
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/wheel-multi-cc
+      - name: Apply WheelPage multi-CC patch
+        run: |
+          set -e
+          patch -p1 < frontend/patches/pr-multi-cc-wheelpage.patch
+          grep -q "SELL_CALL" frontend/src/pages/WheelPage.tsx
+          grep -q openCheckItems frontend/src/pages/WheelPage.tsx
+          grep -q open_cc_legs frontend/src/pages/WheelPage.tsx
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/pages/WheelPage.tsx
+          if git diff --staged --quiet; then
+            echo "WheelPage already patched"
+          else
+            git commit -m "feat(wheel): 多腿 CC WheelPage 薄补丁"
+            git push
+          fi

@@ -787,6 +787,7 @@ def init_db():
         "ALTER TABLE wheel_targets ADD COLUMN tags TEXT",
         "ALTER TABLE wheel_cycles ADD COLUMN entry_score REAL",
         "ALTER TABLE wheel_cycles ADD COLUMN entry_meta TEXT",
+        "ALTER TABLE wheel_cycles ADD COLUMN open_cc_legs TEXT",
         "ALTER TABLE wheel_trades ADD COLUMN is_roll INTEGER DEFAULT 0",
     ]:
         try:
