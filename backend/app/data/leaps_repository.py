@@ -339,8 +339,10 @@ def get_timing_history(page: int = 1, page_size: int = 20,
         conn.close()
 
 
-def get_latest_call_touch(symbol: str, max_age_hours: float = 72) -> Optional[Dict[str, Any]]:
-    """该标的最近一次 CALL 触线(1h)。过期返回 None。"""
+def get_latest_call_touch(symbol: str, max_age_hours: float = 72,
+                          timeframe: Optional[str] = "1h") -> Optional[Dict[str, Any]]:
+    """该标的最近一次 CALL 触线。默认只要 1h(CC 挂机发现不变);可传 1d。
+    timeframe=None 时不按周期过滤。过期返回 None。"""
     if not symbol:
         return None
     from datetime import datetime, timedelta
@@ -349,22 +351,44 @@ def get_latest_call_touch(symbol: str, max_age_hours: float = 72) -> Optional[Di
     except (TypeError, ValueError):
         hours = 72.0
     cutoff = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+    tf = None if timeframe is None else _tf(timeframe)
+    sym = str(symbol).strip().upper()
     conn = get_db()
     try:
-        row = conn.execute(
-            """SELECT * FROM wheel_timing_history
-               WHERE symbol = ? AND UPPER(side) = 'CALL' AND last_seen >= ?
-               ORDER BY last_seen DESC LIMIT 1""",
-            (str(symbol).strip().upper(), cutoff),
-        ).fetchone()
+        if tf:
+            row = conn.execute(
+                """SELECT * FROM wheel_timing_history
+                   WHERE symbol = ? AND UPPER(side) = 'CALL'
+                     AND COALESCE(timeframe, '1h') = ?
+                     AND last_seen >= ?
+                   ORDER BY last_seen DESC LIMIT 1""",
+                (sym, tf, cutoff),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT * FROM wheel_timing_history
+                   WHERE symbol = ? AND UPPER(side) = 'CALL' AND last_seen >= ?
+                   ORDER BY last_seen DESC LIMIT 1""",
+                (sym, cutoff),
+            ).fetchone()
         if row:
             return dict(row)
-        row = conn.execute(
-            """SELECT * FROM leaps_signals
-               WHERE symbol = ? AND signal_level = 'WHEEL_CALL' AND created_at >= ?
-               ORDER BY created_at DESC LIMIT 1""",
-            (str(symbol).strip().upper(), cutoff),
-        ).fetchone()
+        if tf:
+            row = conn.execute(
+                """SELECT * FROM leaps_signals
+                   WHERE symbol = ? AND signal_level = 'WHEEL_CALL'
+                     AND COALESCE(timeframe, '1h') = ?
+                     AND created_at >= ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (sym, tf, cutoff),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT * FROM leaps_signals
+                   WHERE symbol = ? AND signal_level = 'WHEEL_CALL' AND created_at >= ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (sym, cutoff),
+            ).fetchone()
         return dict(row) if row else None
     except Exception:
         return None

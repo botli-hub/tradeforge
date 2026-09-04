@@ -1,4 +1,4 @@
-"""卖 Call 时机:持股池 + 1h 触线发现。不含交易建议断言。"""
+"""卖 Call 时机:挂机(HOLDING)+触线观察(可不持股)。不含交易建议断言。"""
 from app.core.wheel_call_timing import (
     GRADE_PRIORITY, GRADE_READY, GRADE_SKIP, GRADE_WATCH,
     attach_cc_timing, evaluate_cc_timing, is_holding_call_opp,
@@ -84,11 +84,12 @@ def test_cfg_overrides_cushion_only_lifts_priority():
     assert r2["grade"] == GRADE_PRIORITY
 
 
-def test_call_opp_only_when_holding():
+def test_call_opp_allows_non_holding():
+    # Call 可不持股观察; Put 仍放行; HOLDING 仍放行
     assert is_holding_call_opp({"side": "PUT", "context": {"stage": "IDLE"}}) is True
     assert is_holding_call_opp({"side": "CALL", "context": {"stage": "HOLDING"}}) is True
-    assert is_holding_call_opp({"side": "CALL", "context": {"stage": "IDLE"}}) is False
-    assert is_holding_call_opp({"side": "CALL", "context": {"stage": "CSP_OPEN"}}) is False
+    assert is_holding_call_opp({"side": "CALL", "context": {"stage": "IDLE"}}) is True
+    assert is_holding_call_opp({"side": "CALL", "context": {"stage": "CSP_OPEN"}}) is True
 
 
 def test_attach_wait_without_touch():

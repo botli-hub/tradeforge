@@ -1,7 +1,7 @@
 """持股卖 Call 时机层。
 
-池 = HOLDING(已持股待挂 CC), 不是全市场。
-发现 = 合约 1h K 穿自身 EMA(WHEEL_CALL 触线)。无触线不算时机到。
+挂机(HOLDING)仍用本模块做 CC 升档;触线观察可不持股。
+发现 = 合约 1h/1d K 穿自身 EMA(WHEEL_CALL 触线)。无触线不算时机到。
 立场只影响触线之后的升档,不单独当发现。
 action / hint 仅参考, 不自动下单, 不改 POSITION_QUANT。
 """
@@ -374,12 +374,11 @@ def split_holding_cc(rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any
 
 
 def is_holding_call_opp(item: Dict[str, Any]) -> bool:
-    """机会流里 CALL 只保留持股待挂。"""
+    """机会流: CALL 也可不持股观察(触线/时机);挂 CC 仍只在 HOLDING。"""
     if (item.get("side") or "").upper() != "CALL":
         return True
-    ctx = item.get("context") or {}
-    stage = str(ctx.get("stage") or item.get("stage") or "").upper()
-    return stage == "HOLDING"
+    # 产品:无股票也看卖 Call 时机;不再按 stage 过滤
+    return True
 
 
 def grade_rank(grade: Optional[str]) -> int:

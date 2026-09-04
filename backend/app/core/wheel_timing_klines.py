@@ -1,4 +1,4 @@
-"""Wheel 触线 K 线：CALL=1h / PUT=1d，按 timeframe 缓存与 EMA。
+"""Wheel 触线 K 线：CALL=1h+1d / PUT=1d，按 timeframe 缓存与 EMA。
 
 期权合约 K 线不走 FutuAdapter；由 leaps_monitor 价格缓存拉取。
 本模块只含纯函数，便于无 OpenD 单测。
@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 TIMEFRAME_DAY = "1d"
 TIMEFRAME_HOUR = "1h"
+# Call 触线双周期:1h(盘中) + 1d(日线);档案按 timeframe 分桶不碰撞
+CALL_SCAN_TIMEFRAMES = (TIMEFRAME_HOUR, TIMEFRAME_DAY)
 
 # Futu KLType / SubType 名。adapter._ktype_map 已有 1h→K_60M，但期权 bar 不走 adapter。
 _KL_DAY = ("K_DAY", "K_DAY")
@@ -26,7 +28,7 @@ def normalize_timeframe(timeframe: Optional[str]) -> str:
 
 
 def default_timeframe(option_type: Optional[str]) -> str:
-    """CALL 触线用 1h；PUT / LEAPS 默认日 K。"""
+    """CALL 默认 1h(另可显式扫 1d)；PUT / LEAPS 默认日 K。"""
     if str(option_type or "").strip().upper() == "CALL":
         return TIMEFRAME_HOUR
     return TIMEFRAME_DAY
@@ -53,12 +55,27 @@ def history_key(contract_code: str, timeframe: Optional[str] = None) -> Tuple[st
 
 
 def call_holding_cycles(cycles: Optional[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-    """CALL 触线池 = HOLDING only。IDLE / CSP_OPEN / CC_OPEN 不扫。"""
+    """持股轮(HOLDING)列表。CC 挂机/成本基础仍用此池。
+    Call 触线扫描本身不再要求 HOLDING(见 WheelTimingMonitor.scan_all)。"""
     out: List[Dict[str, Any]] = []
     for c in cycles or []:
         if str((c or {}).get("status") or "").upper() == "HOLDING":
             out.append(c)  # type: ignore[arg-type]
     return out
+
+
+def call_cost_basis_for_scan(cycles: Optional[Sequence[Dict[str, Any]]]) -> Optional[float]:
+    """有 HOLDING 时取最大成本基础作 Call strike 下限锚;无持股返回 None。"""
+    holding = call_holding_cycles(cycles)
+    vals: List[float] = []
+    for c in holding:
+        try:
+            v = float((c or {}).get("cost_basis") or 0)
+            if v > 0:
+                vals.append(v)
+        except (TypeError, ValueError):
+            pass
+    return max(vals) if vals else None
 
 
 def call_strike_min(

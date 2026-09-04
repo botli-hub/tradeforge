@@ -1,6 +1,7 @@
-"""缠论 5m/30m 买卖点 Telegram 增量推送.
+"""缠论 5m/30m/1d 买卖点 Telegram 增量推送.
 
-只扫 5m / 30m(忽略 1m/1h/日线);标的默认启用 Wheel 池。
+扫 5m / 30m / 日线(1d);忽略 1m/1h。标的默认启用 Wheel 池。
+日线默认 ~每美股会话扫一次(poll_minutes_1d≈390),不几分钟刷屏。
 走现有 alerts 管道:fingerprint 去重、quiet_hours、wheel_push_log。
 不自动下单,不碰 POSITION_QUANT / wheel_reconcile。
 """
@@ -23,18 +24,21 @@ from app.services.alert_engine import (
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_TIMEFRAMES = ("5m", "30m")
+ALLOWED_TIMEFRAMES = ("5m", "30m", "1d")
 _ALLOWED = frozenset(ALLOWED_TIMEFRAMES)
 _FALLBACK_SYMBOLS = ["AAPL", "ARM", "SPCX", "TSLA"]
 _LAST_RUN_KEY = "chan_alert_last_runs"
-_LIMIT_DAYS = {"5m": 30, "30m": 120}
+_LIMIT_DAYS = {"5m": 30, "30m": 120, "1d": 800}
+# 日线默认约一个美股 RTH(~6.5h),配合 session_only ≈ 每日一次
+_DEFAULT_POLL = {"5m": 5, "30m": 30, "1d": 390}
 
 DEFAULT_CHAN_ALERTS: Dict[str, Any] = {
     "enabled": True,
-    "timeframes": ["5m", "30m"],
+    "timeframes": ["5m", "30m", "1d"],
     "symbols": [],  # 空 = 启用 Wheel 标的
     "poll_minutes_5m": 5,
     "poll_minutes_30m": 30,
+    "poll_minutes_1d": 390,  # ~美股 RTH 一次; 非几分钟刷屏
     "session_only": True,  # 仅美股 RTH
     "bar_limit": 400,
     "recent_bars": 3,  # 只推近 N 根对应时长内的增量
@@ -51,7 +55,7 @@ def get_chan_alert_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
 
 def allowed_timeframes(cfg: Optional[Dict[str, Any]] = None) -> List[str]:
-    """配置里出现的级别 ∩ {5m, 30m}。1m/1h/日线永远不扫。"""
+    """配置里出现的级别 ∩ {5m, 30m, 1d}。1m/1h 永远不扫。"""
     requested = get_chan_alert_cfg(cfg).get("timeframes") or list(ALLOWED_TIMEFRAMES)
     if isinstance(requested, str):
         requested = [x.strip() for x in requested.split(",")]
@@ -68,10 +72,11 @@ def allowed_timeframes(cfg: Optional[Dict[str, Any]] = None) -> List[str]:
 def poll_minutes(timeframe: str, cfg: Optional[Dict[str, Any]] = None) -> int:
     ca = get_chan_alert_cfg(cfg)
     key = f"poll_minutes_{timeframe}"
+    default = int(_DEFAULT_POLL.get(timeframe, 30))
     try:
-        n = int(ca.get(key) or (5 if timeframe == "5m" else 30))
+        n = int(ca.get(key) if ca.get(key) is not None else default)
     except (TypeError, ValueError):
-        n = 5 if timeframe == "5m" else 30
+        n = default
     return max(1, n)
 
 

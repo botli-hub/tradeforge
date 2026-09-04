@@ -1,3 +1,4 @@
+from app.core import wheel_timing_scan_patch  # noqa: F401
 """Call 触线 1h / Put 日K：无 OpenD。"""
 import sys
 from pathlib import Path
@@ -8,9 +9,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.wheel_timing_klines import (  # noqa: E402
+    CALL_SCAN_TIMEFRAMES,
     TIMEFRAME_DAY,
     TIMEFRAME_HOUR,
     bars_on_day,
+    call_cost_basis_for_scan,
     call_holding_cycles,
     call_strike_min,
     default_timeframe,
@@ -22,18 +25,23 @@ from app.core.wheel_timing_klines import (  # noqa: E402
 )
 
 
-def test_non_holding_not_scanned_for_call():
+def test_call_holding_cycles_helper_and_cost_basis():
+    """HOLDING 辅助仍只取持股轮;扫描本身不再用它做硬门。"""
     cycles = [
         {"id": "idle", "status": "IDLE"},
         {"id": "csp", "status": "CSP_OPEN"},
-        {"id": "hold", "status": "HOLDING"},
+        {"id": "hold", "status": "HOLDING", "cost_basis": 100},
+        {"id": "hold2", "status": "HOLDING", "cost_basis": 120},
         {"id": "cc", "status": "CC_OPEN"},
         {"id": "closed", "status": "CLOSED"},
     ]
     pool = call_holding_cycles(cycles)
-    assert [c["id"] for c in pool] == ["hold"]
+    assert [c["id"] for c in pool] == ["hold", "hold2"]
     assert call_holding_cycles([]) == []
     assert call_holding_cycles(None) == []
+    assert call_cost_basis_for_scan(cycles) == 120
+    assert call_cost_basis_for_scan([{"status": "IDLE"}]) is None
+    assert CALL_SCAN_TIMEFRAMES == (TIMEFRAME_HOUR, TIMEFRAME_DAY)
 
 
 def test_ema_touch_1h_hit_ema50():
@@ -117,8 +125,8 @@ def test_bars_on_day_matches_1h_prefix():
     assert [b["close"] for b in day] == [1, 2]
 
 
-def test_scan_all_call_only_holding_put_requests_day():
-    """scan_all 循环：非 HOLDING 不扫 CALL；PUT 仍传 timeframe=1d / CALL=1h。"""
+def test_scan_all_call_1h_and_1d_holding_put_day():
+    """scan_all: PUT=1d; CALL 扫 1h+1d; HOLDING 时 strike 用成本/愿卖价。"""
     from app.core.leaps_monitor import WheelTimingMonitor
 
     captured = []
@@ -152,11 +160,52 @@ def test_scan_all_call_only_holding_put_requests_day():
     assert len(put) == 1, sides
     assert put[0].get("timeframe") == "1d"
     assert futu_kl_names(put[0]["timeframe"])[0] == "K_DAY"
-    assert len(call) == 1, "non-HOLDING must not be scanned for CALL"
-    assert call[0].get("timeframe") == "1h"
-    assert futu_kl_names(call[0]["timeframe"])[0] == "K_60M"
-    # sell_above 110 > cost 100
-    assert call[0].get("strike_min") == 110
+    assert len(call) == 2, f"CALL must scan 1h+1d, got {sides}"
+    call_tfs = sorted(c.get("timeframe") for c in call)
+    assert call_tfs == ["1d", "1h"]
+    assert futu_kl_names("1h")[0] == "K_60M"
+    assert futu_kl_names("1d")[0] == "K_DAY"
+    # sell_above 110 > cost 100; 两档 timeframe 同 strike 下限
+    assert all(c.get("strike_min") == 110 for c in call)
+    # 档案键分桶:1h 与 1d 不碰撞
+    assert history_key("US.X", "1h") != history_key("US.X", "1d")
+
+
+def test_scan_all_non_holding_call_still_scanned():
+    """非 HOLDING 也扫 Call(1h+1d);Put 路径不变。不伪造 CC。"""
+    from app.core.leaps_monitor import WheelTimingMonitor
+
+    captured = []
+    wt = WheelTimingMonitor({"wheel_timing": {}})
+
+    def fake_scan(*_a, **kw):
+        captured.append(kw)
+        return []
+
+    wt.monitor.scan_symbol = fake_scan
+    targets = [{
+        "symbol": "BBB", "enabled": True, "floor_price": 10,
+        "dte_min": 21, "dte_max": 45, "sell_above": 95,
+    }]
+    cycles = [
+        {"status": "IDLE", "cost_basis": 0},
+        {"status": "CSP_OPEN", "cost_basis": 0},
+    ]
+    with patch("app.data.wheel_repository.get_targets", return_value=targets), \
+         patch("app.data.wheel_repository.get_active_cycles", return_value=cycles), \
+         patch("app.data.leaps_repository.upsert_timing_history"), \
+         patch("app.core.wheel_timing_progress.update"), \
+         patch("app.core.wheel_call_timing.get_target_sell_above", return_value=95):
+        wt.scan_all()
+
+    put = [c for c in captured if c.get("option_type") == "PUT"]
+    call = [c for c in captured if c.get("option_type") == "CALL"]
+    assert len(put) == 1
+    assert put[0].get("timeframe") == "1d"
+    assert len(call) == 2, "non-HOLDING Call must still be scanned"
+    assert sorted(c.get("timeframe") for c in call) == ["1d", "1h"]
+    # 无成本基础时用愿卖价
+    assert all(c.get("strike_min") == 95 for c in call)
 
 
 def test_normalize_aliases():

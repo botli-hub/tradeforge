@@ -21,8 +21,6 @@ from app.core.wheel_timing_klines import (
     TIMEFRAME_DAY,
     TIMEFRAME_HOUR,
     bars_on_day,
-    call_holding_cycles,
-    call_strike_min,
     ema_touch,
     futu_kl_names,
     normalize_timeframe,
@@ -99,14 +97,14 @@ def _iv_percentile(iv_history: List[float], current_iv: float) -> float:
 class WheelTimingMonitor:
     """Wheel 开仓时机扫描 —— 核心原则:期权合约价格受长期均线压制,
     合约价触及自身均线 EMA50(一级)或 EMA200(强)即为卖出时机。
-    PUT 用日K(K_DAY / timeframe 1d)；CALL 用 1 小时 K(K_60M / 1h)。
+    PUT 用日K(K_DAY / timeframe 1d)；CALL 扫 1h+1d(K_60M / K_DAY)。
 
     卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
       - 标的现价 > 接货底线价
       - PUT 合约(DTE/strike 按 wheel_timing 配置)价格触及 EMA50/EMA200
-    持股卖 Call 时机(轮子处于 HOLDING):
-      - CALL 合约 strike ≥ max(cost basis, sell_above)
-      - 合约 1h 价格触及自身 EMA50/EMA200
+    卖 Call 触线(启用标的一律扫,可不持股;有 HOLDING 时 strike 锚成本/愿卖价):
+      - CALL 合约 strike ≥ max(cost basis, sell_above)(无持股则愿卖价或无下限)
+      - 合约 1h 与 1d 价格触及自身 EMA50/EMA200(档案按 timeframe 分桶)
     IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
     信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
     合约冷却复用 LEAPS 的 leaps_cooldowns。
@@ -183,7 +181,6 @@ class WheelTimingMonitor:
             sym = t["symbol"]
             try:
                 cycles = wrepo.get_active_cycles(sym)
-                holding = call_holding_cycles(cycles)
                 dte_lo, dte_hi = self._dte_window(t)
                 core_lo, core_hi = self._core_dte_window(t)
 
@@ -219,46 +216,28 @@ class WheelTimingMonitor:
                 if report is not None:
                     report.append(rep)
 
-                for cyc in holding:
-                    cost_basis = cyc.get("cost_basis") or 0
-                    sell_above = t.get("sell_above")
-                    try:
-                        from app.core.wheel_call_timing import get_target_sell_above
-                        sa = get_target_sell_above(sym)
-                        if sa is not None:
-                            sell_above = sa
-                    except Exception:
-                        pass
-                    strike_floor = call_strike_min(cost_basis, sell_above)
-                    _prog(
-                        target_i=ti, target_n=n_targets, symbol=sym, side="CALL",
-                        expiry=None, contract_i=0, contract_n=0,
-                        message=f"触线 · {sym} CALL · 标的 {ti}/{n_targets}",
-                    )
-                    rep = {
-                        "symbol": sym, "side": "CALL",
-                        "dte": f"{dte_lo}-{dte_hi}",
-                        "core_dte": f"{core_lo}-{core_hi}",
-                    }
-                    signals.extend(self.monitor.scan_symbol(
-                        sym, 0, is_intraday=is_intraday,
-                        option_type="CALL",
-                        dte_min=dte_lo, dte_max=dte_hi,
-                        strike_min=strike_floor,
-                        level_map={"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"},
-                        iv_threshold=self.iv_threshold,
-                        respect_30d_cap=False, with_suggestions=False,
-                        report=rep,
-                        strike_range_down=self.strike_range_down,
-                        strike_range_up=self.strike_range_up,
-                        progress_cb=_prog,
-                        max_expiries=self.max_expiries,
-                        core_dte_min=core_lo, core_dte_max=core_hi,
-                        prefer_core_dte=self.prefer_core_dte,
-                        timeframe=TIMEFRAME_HOUR,
-                    ))
-                    if report is not None:
-                        report.append(rep)
+                # 卖 Call:启用标的一律扫 1h+1d(可不持股);有 HOLDING 时 strike 锚成本/愿卖价
+                from app.core.wheel_call_scan import scan_call_touches
+                signals.extend(scan_call_touches(
+                    monitor=self.monitor,
+                    symbol=sym,
+                    target=t,
+                    cycles=cycles,
+                    is_intraday=is_intraday,
+                    dte_lo=dte_lo,
+                    dte_hi=dte_hi,
+                    core_lo=core_lo,
+                    core_hi=core_hi,
+                    iv_threshold=self.iv_threshold,
+                    strike_range_down=self.strike_range_down,
+                    strike_range_up=self.strike_range_up,
+                    max_expiries=self.max_expiries,
+                    prefer_core_dte=self.prefer_core_dte,
+                    progress_cb=_prog,
+                    report=report,
+                    target_i=ti,
+                    target_n=n_targets,
+                ))
             except Exception as e:
                 logger.error("wheel timing scan(%s) failed: %s", sym, e)
                 if report is not None:
@@ -284,7 +263,7 @@ def signal_strength(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
 
 def format_wheel_signal(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
     """Telegram 推送文案(合约触线)"""
-    kind = "卖Put时机" if sig.signal_level == "WHEEL_PUT" else "卖Call时机(持股)"
+    kind = "卖Put时机" if sig.signal_level == "WHEEL_PUT" else "卖Call时机"
     level = signal_strength(sig, min_iv_rank)
     badge = {"STRONG": "🔥强信号", "READY": "✅可做", "WATCH": "👀观察"}.get(level, "")
     lines = [
