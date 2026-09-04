@@ -1,0 +1,36 @@
+name: apply-pr-multi-cc-wiring
+on:
+  push:
+    branches: [feat/wheel-multi-cc]
+    paths:
+      - backend/patches/pr-multi-cc-wiring.patch
+      - .github/workflows/apply-pr-multi-cc-wiring.yml
+  workflow_dispatch:
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/wheel-multi-cc
+      - name: Apply multi-CC wiring patch
+        run: |
+          set -e
+          patch -p1 < backend/patches/pr-multi-cc-wiring.patch
+          grep -q apply_sell_call backend/app/data/wheel_repository.py
+          grep -q expand_open_option_rows backend/app/api/wheel.py
+          grep -q open_cc_legs backend/app/data/database.py
+          grep -q open_cc_legs frontend/src/services/api.ts
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/data/database.py backend/app/data/wheel_repository.py backend/app/api/wheel.py frontend/src/services/api.ts
+          if git diff --staged --quiet; then
+            echo "already wired"
+          else
+            git commit -m "feat(wheel): 接线多腿 CC repository/API/DB/api.ts"
+            git push
+          fi
