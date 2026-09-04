@@ -32,8 +32,12 @@ def _load_cfg() -> Dict[str, Any]:
         return {}
 
 
-def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
-    """接货后下一步。时机层按立场分流,不再一律优先挂 CC。"""
+def post_assign_hint(
+    cycle: Dict[str, Any],
+    *,
+    uncovered_shares: Optional[float] = None,
+) -> Dict[str, Any]:
+    """接货后 / 部分覆盖后下一步。时机层按立场分流,不再一律优先挂 CC。"""
     from app.core.wheel_call_timing import (
         attach_cc_timing, evaluate_cc_timing,
         ensure_sell_above_column, get_target_sell_above,
@@ -41,17 +45,20 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
 
     symbol = cycle.get("symbol")
     shares = float(cycle.get("shares") or 0)
+    free = float(uncovered_shares) if uncovered_shares is not None else shares
     cb = cost_basis_of(cycle)
-    contracts = int(shares // 100) if shares >= 100 else 0
-    notes: List[str] = [
-        f"{symbol} 已接货 {shares:g} 股",
-    ]
+    contracts = int(free // 100) if free >= 100 else 0
+    notes: List[str] = []
+    if cycle.get("status") == "CC_OPEN" and uncovered_shares is not None:
+        notes.append(f"{symbol} 卖Call中,尚有未覆盖 {free:g}/{shares:g} 股")
+    else:
+        notes.append(f"{symbol} 已接货 {shares:g} 股")
     if cb is not None:
         notes.append(f"有效成本基础 ≈ ${cb:.2f}/股(含权利金摊薄)")
     if contracts >= 1:
-        notes.append(f"可挂约 {contracts} 张 Covered Call(参考,非下单)")
+        notes.append(f"可再挂约 {contracts} 张 Covered Call(参考,非下单)")
     else:
-        notes.append("持股不足 100 股,暂不能标准 CC")
+        notes.append("未覆盖股份不足 100 股,暂不能再挂标准 CC")
 
     ensure_sell_above_column()
     target = _target_for(symbol)
@@ -98,7 +105,7 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
         spot=spot,
         cost_basis=cb,
         sell_above=sell_above,
-        shares=shares,
+        shares=free,
         uncovered_days=cycle.get("uncovered_days"),
         iv_rank=iv_rank if iv_rank is not None else (touch or {}).get("iv_rank"),
         min_annualized=target.get("min_annualized"),
@@ -135,16 +142,25 @@ def post_assign_hint(cycle: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def post_assign_queue() -> List[Dict[str, Any]]:
-    """所有 HOLDING 且未挂 CC 的周期 → 待办(按 Call 时机分档)。"""
+    """HOLDING,或 CC_OPEN 仍有≥100 未覆盖股 → 待办(按 Call 时机分档)。"""
     from app.data import wheel_repository as repo
+    from app.core.wheel_cc_legs import uncovered_shares_of
 
     out: List[Dict[str, Any]] = []
     for c in repo.get_cycles(include_closed=False):
-        if c.get("status") != "HOLDING":
+        status = c.get("status")
+        shares = float(c.get("shares") or 0)
+        if shares <= 0:
             continue
-        if (c.get("shares") or 0) <= 0:
+        if status == "HOLDING":
+            hint = post_assign_hint(c)
+        elif status == "CC_OPEN":
+            free = uncovered_shares_of(c)
+            if free < 100:
+                continue
+            hint = post_assign_hint(c, uncovered_shares=free)
+        else:
             continue
-        hint = post_assign_hint(c)
         uncovered = c.get("uncovered_days")
         if uncovered is not None:
             hint["uncovered_days"] = uncovered
