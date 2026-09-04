@@ -201,6 +201,25 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "bar_limit": 400,
         "recent_bars": 3,
     },
+    # 完整轮子纸面账(Sim Wheel);不改 POSITION_QUANT / 实盘止盈线
+    "sim_wheel": {
+        "enabled": True,
+        "chan_buy_mode": "sell_put",
+        "call_without_shares": "skip",
+        "levels": {"L1": 0.02, "L2": 0.04, "L3": 0.06},
+        "cc_force_days": 5,
+        "put_breach_floor": "hold_to_assign",
+        "roll": "tag_only",
+        "max_symbol_pct": 0.25,
+        "max_portfolio_pct": 0.80,
+        "equity": 100000,
+        "hard_profit_pct": 42.0,
+        "soft_profit_pct": 28.0,
+        "min_remaining_ann": 12.0,
+        "hard_roll_dte": 21,
+        "threat_otm_buffer_pct": 5.0,
+        "tg_summary": True,
+    },
 }
 
 

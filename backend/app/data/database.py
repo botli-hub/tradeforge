@@ -795,6 +795,13 @@ def init_db():
         except Exception:
             pass
 
+    # Sim Wheel 纸面账(独立表;不碰 wheel_cycles)
+    try:
+        from app.data.sim_repository import ensure_sim_tables
+        ensure_sim_tables(conn)
+    except Exception:
+        pass
+
     seed_demo_strategies(conn)
     conn.commit()
     conn.close()
