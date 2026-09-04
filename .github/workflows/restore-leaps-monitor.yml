@@ -1,1 +1,46 @@
-LOAD_FROM_FILE_3
+name: restore-leaps-monitor
+on:
+  push:
+    paths:
+      - '.ci/restore-leaps/**'
+      - '.github/workflows/restore-leaps-monitor.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/chan-call-daily
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Decode and write leaps_monitor.py
+        run: |
+          set -euo pipefail
+          python3 << 'PY'
+          import base64, zlib, pathlib, hashlib
+          parts=[]
+          for i in range(3):
+              parts.append(pathlib.Path(f'.ci/restore-leaps/{i}.b64').read_text().strip())
+          raw=zlib.decompress(base64.b64decode(''.join(parts)))
+          text=raw.decode('utf-8')
+          assert 'scan_call_touches' in text
+          assert 'for cyc in holding' not in text
+          assert 'PLACEHOLDER' not in text
+          out=pathlib.Path('backend/app/core/leaps_monitor.py')
+          out.write_bytes(raw)
+          print('wrote', out, 'sha256', hashlib.sha256(raw).hexdigest())
+          PY
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/core/leaps_monitor.py
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+          git commit -m "feat(wheel): wire scan_all Call to 1h+1d via scan_call_touches (non-HOLDING ok)"
+          git push origin HEAD:feat/chan-call-daily
