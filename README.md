@@ -115,7 +115,7 @@
 
 - **前端**：React 18 · TypeScript · Vite · lightweight-charts（端口 **1420**）
 - **后端**：FastAPI · SQLite · futu-api · httpx · pandas（端口 **8000**）
-- **行情 / 期权**：富途 OpenD；美股 quote 可走 Finnhub；历史 K 线 local-first（Yahoo/Futu 补数）
+- **行情 / 期权**：富途 OpenD；美股 quote 可走 Finnhub；历史 K 线 local-first（Yahoo/Futu 补数）；美股期权链默认 OpenD，不通则 **CBOE 延时报价**（无需 Key）
 
 ---
 
@@ -260,7 +260,7 @@ python3 scripts/health_guard.py ensure   # 异常时重启前后端
 
 ## 注意
 
-- 期权与在场体检强依赖 **OpenD 已登录运行**  
+- 美股期权链：**不再强依赖 OpenD**。默认 auto：OpenD 通则用富途；不通则用 CBOE 延时（设置里可强制 CBOE）。港/A 期权与触线 EMA（合约 K 线）仍需要 OpenD  
 - 中国大陆访问 Telegram 需在设置中填本地代理  
 - 本项目是**决策与台账工具**，默认不自动向券商下单；实盘下单需自行连接交易并确认  
 - 产品说明以本 README 与代码为准（旧 PRD/TECH 已移除）。

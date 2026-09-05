@@ -1,4 +1,4 @@
-"""期权API（固定走 Futu）"""
+"""期权API：美股 OpenD 优先，不通则 CBOE 延时；港/A 仍走富途。"""
 from datetime import date
 from typing import Any, Dict, List, Optional
 
@@ -89,7 +89,7 @@ def _get_underlying_spot(symbol: str, host: str, port: int):
     )
 
 
-def _load_option_expirations(symbol: str, host: str, port: int) -> List[str]:
+def _futu_load_option_expirations(symbol: str, host: str, port: int) -> List[str]:
     try:
         from futu import RET_OK
         from app.core.opend import open_quote_context
@@ -110,7 +110,7 @@ def _load_option_expirations(symbol: str, host: str, port: int) -> List[str]:
         raise HTTPException(status_code=502, detail=f'获取 Futu 期权到期日失败: {e}')
 
 
-def _load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[str, Any]:
+def _futu_load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[str, Any]:
     normalized = _normalize_futu_symbol(symbol)
     display = _display_symbol(normalized)
     spot_price, name, pricing_source, detail = _get_underlying_spot(normalized, host, port)
@@ -203,17 +203,69 @@ def _load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[s
         raise HTTPException(status_code=502, detail=f'Futu 期权链异常: {e}')
 
 
+def _option_sources(symbol: str, host: str, port: int) -> List[str]:
+    from app.data.source_router import option_candidate_sources, resolve_option_source
+    src = resolve_option_source(symbol, host=host, port=port)
+    return option_candidate_sources(symbol, src)
+
+
+def _load_expirations_from(src: str, symbol: str, host: str, port: int) -> List[str]:
+    if src == "cboe":
+        from app.data.cboe_options import load_expirations
+        return load_expirations(symbol)
+    return _futu_load_option_expirations(symbol, host, port)
+
+
+def _load_chain_from(src: str, symbol: str, expiry: str, host: str, port: int) -> Dict[str, Any]:
+    if src == "cboe":
+        from app.data.cboe_options import load_chain
+        return load_chain(symbol, expiry)
+    return _futu_load_option_chain(symbol, expiry, host, port)
+
+
+def _load_option_expirations_src(symbol: str, host: str, port: int):
+    last: Optional[BaseException] = None
+    for src in _option_sources(symbol, host, port):
+        try:
+            return _load_expirations_from(src, symbol, host, port), src
+        except HTTPException as e:
+            last = e
+        except Exception as e:
+            last = e
+    if isinstance(last, HTTPException):
+        raise last
+    raise HTTPException(status_code=502, detail=f"获取期权到期日失败: {last}")
+
+
+def _load_option_expirations(symbol: str, host: str, port: int) -> List[str]:
+    return _load_option_expirations_src(symbol, host, port)[0]
+
+
+def _load_option_chain(symbol: str, expiry: str, host: str, port: int) -> Dict[str, Any]:
+    last: Optional[BaseException] = None
+    for src in _option_sources(symbol, host, port):
+        try:
+            return _load_chain_from(src, symbol, expiry, host, port)
+        except HTTPException as e:
+            last = e
+        except Exception as e:
+            last = e
+    if isinstance(last, HTTPException):
+        raise last
+    raise HTTPException(status_code=502, detail=f"获取期权链失败: {last}")
+
+
 @router.get('/expirations')
 async def get_option_expirations(
     symbol: str = Query(..., description='标的代码'),
     host: str = Query('127.0.0.1', description='OpenD 地址'),
     port: int = Query(11111, description='OpenD 端口'),
 ):
-    expirations = _load_option_expirations(symbol, host, port)
+    expirations, adapter = _load_option_expirations_src(symbol, host, port)
     return {
         'symbol': _display_symbol(_normalize_futu_symbol(symbol)),
         'expirations': expirations,
-        'adapter': 'futu',
+        'adapter': adapter,
     }
 
 

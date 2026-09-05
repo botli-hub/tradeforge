@@ -1062,6 +1062,7 @@ export interface BackendConfig {
   finnhub_base_url: string
   yahoo_base_url: string
   futu: { host: string; port: number }
+  options?: { source: 'auto' | 'cboe' | 'futu' }
   wheel_timing: {
     dte_min: number
     dte_max: number

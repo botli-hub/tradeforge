@@ -180,7 +180,7 @@ export default function OptionsPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, gap: 12, flexWrap: 'wrap' }}>
         <h2>期权</h2>
         <span className="tag ready">
-          期权数据源：Futu
+          期权数据源：{chain?.adapter === 'cboe' ? 'CBOE 延时' : chain?.adapter === 'futu' ? 'Futu' : (chain?.adapter || '自动')}
         </span>
       </div>
 
