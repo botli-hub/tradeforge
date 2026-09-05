@@ -245,6 +245,15 @@ def otm_buffer_pct(spot: float, strike: float, side: str = "PUT") -> Optional[fl
     return (float(strike) - float(spot)) / float(spot) * 100.0
 
 
+def is_timing_scan_alert(alert: Dict[str, Any]) -> bool:
+    """同源触线信号(非缠论/force)。Sim 与 live 扫描共用 OTM 口径。"""
+    level = str(alert.get("signal_level") or "").upper()
+    cat = str(alert.get("category") or "").lower()
+    if level in ("WHEEL_PUT", "WHEEL_CALL", "PUT_TOUCH", "CALL_TOUCH"):
+        return True
+    return cat in ("put_touch", "timing_put", "call_touch", "timing_call")
+
+
 # ── 引擎 ─────────────────────────────────────────────────────────────────────
 
 class SimWheelEngine:
@@ -335,6 +344,17 @@ class SimWheelEngine:
             spot = strike
         if strike <= 0:
             return {"ok": False, "reason": "no_strike", "fingerprint": fp}
+
+        # 同源触线:严格 OTM(strike < spot);ATM/ITM 不进纸面
+        if is_timing_scan_alert(alert) and spot > 0:
+            from app.core.wheel_timing_klines import is_otm_put
+            if not is_otm_put(strike, spot):
+                self.repo.add_event(
+                    cycle_id=None, symbol=symbol, event_type="skipped_not_otm",
+                    fingerprint=fp, detail={"side": "PUT", "strike": strike, "spot": spot},
+                    created_at=_now_iso(now),
+                )
+                return {"ok": False, "reason": "not_otm", "fingerprint": fp}
 
         # 愿接过滤:strike ≤ 愿接(有 floor 时)
         if floor > 0 and strike > floor:
@@ -470,6 +490,19 @@ class SimWheelEngine:
         # strike ≥ 成本基础
         if cost_basis > 0 and strike < cost_basis and not force:
             strike = cost_basis
+
+        # 同源触线:严格 OTM(strike > spot);ATM/ITM 不进纸面。force_cc 例外。
+        # Call 成本/愿卖价下限仍由上方 cost_basis 抬升与 live strike_min 对齐。
+        if (not force) and is_timing_scan_alert(alert) and spot > 0:
+            from app.core.wheel_timing_klines import is_otm_call
+            if not is_otm_call(strike, spot):
+                self.repo.add_event(
+                    cycle_id=cycle.get("id"), symbol=symbol, event_type="skipped_not_otm",
+                    fingerprint=fp,
+                    detail={"side": "CALL", "strike": strike, "spot": spot, "cost_basis": cost_basis},
+                    created_at=_now_iso(now),
+                )
+                return {"ok": False, "reason": "not_otm", "fingerprint": fp}
 
         level = cycle.get("level") or map_level(
             signal_kind=str(alert.get("signal_level") or alert.get("kind") or ""),
