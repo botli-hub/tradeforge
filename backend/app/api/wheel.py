@@ -2198,6 +2198,38 @@ def test_alert_push(kind: str = Query("position", description="position|scan|pin
     return {"sent": r.get("sent"), "ok": r.get("ok"), "reason": r.get("reason"), "preview": body}
 
 
+@router.post("/alerts/status-digest")
+def push_status_digest(
+    force: bool = Query(True, description="true=忽略 enabled/日去重(手动推送默认)"),
+    dry_run: bool = Query(False, description="true=只预览不发 TG"),
+):
+    """推送状态摘要(在场持仓/最近触线/Sim纸面)到 legacy TG 频道。
+
+    与管仓 digest(notify_mode=digest)无关;数据口径同 Notion/Sheets map_*。
+    手动默认 force=true,不受 status_digest.enabled 限制。
+    """
+    from app.services.status_digest import run_status_digest
+
+    try:
+        out = run_status_digest(_wheel_cfg(), force=force, dry_run=dry_run)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"状态摘要推送失败: {e}")
+    return {
+        "sent": (out.get("sent_count") or 0) > 0,
+        "count": out.get("sent_count") or 0,
+        "chunks": out.get("chunks") or 0,
+        "skipped": out.get("skipped"),
+        "reason": out.get("reason"),
+        "counts": out.get("counts"),
+        "preview": out.get("preview"),
+        "ok": out.get("ok"),
+        "message": (
+            "ok" if (out.get("sent_count") or 0) > 0
+            else ("dry_run" if dry_run else (out.get("reason") or "未发送"))
+        ),
+    }
+
+
 class EventBlockIn(BaseModel):
     symbol: Optional[str] = None  # 空=全局
     event_date: str

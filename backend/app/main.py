@@ -54,6 +54,9 @@ async def startup():
     # Google Sheets 镜像同步(google_sheets.enabled + credentials + spreadsheet_id; 失败只记日志)
     from app.services.google_sheets_sync import google_sheets_sync_loop
     threading.Thread(target=google_sheets_sync_loop, daemon=True).start()
+    # Telegram 状态摘要(status_digest.enabled; 日推上海 hour 或 minutes 间隔; 失败只记日志)
+    from app.services.status_digest import status_digest_loop
+    threading.Thread(target=status_digest_loop, daemon=True).start()
     # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
     threading.Thread(target=_backfill_codes_once, daemon=True).start()
 
