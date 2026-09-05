@@ -246,6 +246,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "sheet_touches": "touches",
         "sheet_sim": "sim",
     },
+    # Telegram 状态摘要(看板快照:在场/触线/Sim);与 notify_mode=digest 管仓待办无关
+    # 默认关;手动 POST /api/wheel/alerts/status-digest 始终可推。enabled 后按 hour(上海)日推或 minutes 间隔。
+    "status_digest": {
+        "enabled": False,
+        "status_digest_hour": 8,  # Asia/Shanghai 本地钟点;每天最多一次
+        "status_digest_minutes": 0,  # >0 改用间隔推送(分钟),忽略 hour
+        "touch_limit": 10,
+    },
 }
 
 
