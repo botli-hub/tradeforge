@@ -206,37 +206,7 @@ def _run_wheel_scan(symbol: Optional[str] = None):
                 logger.warning("wheel 信号推送失败: %s", e)
         _timing_prog.mark_done(signals_found=len(signals), telegram_sent=sent, report=report)
 
-        # 在场合约体检推送 → 统一走 alert_engine(事件去重/静默/短模板)
-        try:
-            from app.api.wheel import check_open_positions_core
-            from app.data import wheel_repository as wrepo
-            from app.services.alert_engine import process_position_alerts, send_and_log
-
-            futu_cfg = cfg.get("futu", {}) or {}
-            check = check_open_positions_core(
-                futu_cfg.get("host", "127.0.0.1"), futu_cfg.get("port", 11111),
-            )
-            process_position_alerts(check.get("items") or [], cfg=cfg, force=False)
-
-            # 持股裸奔:HOLDING 且无在场 CC ≥3 天(独立指纹冷却)
-            for cyc in wrepo.get_cycles(include_closed=False):
-                if cyc["status"] != "HOLDING" or (cyc.get("uncovered_days") or 0) < 3:
-                    continue
-                key = f"UNCOV.{cyc['id']}"
-                if repo.is_contract_in_cooldown(key):
-                    continue
-                cb = cyc.get("cost_basis")
-                line = (
-                    f"🪑 管仓|裸奔 {cyc['symbol']} 持股 {cyc['shares']:g} 股 "
-                    f"已 {cyc['uncovered_days']} 天未挂 Call"
-                    + (f"(CB ${cb:.2f})" if cb is not None else "")
-                    + "\n→ Wheel · 找 Call"
-                )
-                if send_and_log(line, category="uncovered", fingerprint=key,
-                                title=f"uncovered {cyc['symbol']}", cfg=cfg).get("sent"):
-                    repo.set_contract_cooldown(key, cyc["symbol"], 1)
-        except Exception as e:
-            logger.info("在场合约体检跳过: %s", e)
+        # 管仓(在场合约/裸奔)不在此推送 — 仅走 _position_alert_loop / push_position_alerts
         # 缠论 5m/30m/1d 买卖点增量推送(fingerprint 去重; 不自动下单)
         try:
             from app.services.chan_alerts import run_chan_alert_cycle

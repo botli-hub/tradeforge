@@ -971,7 +971,10 @@ def run_position_alert_cycle(
     force: bool = False,
     dry_run: bool = False,
 ) -> Dict[str, Any]:
-    """拉体检 → 处理推送。供 loop 与 API 共用。"""
+    """拉体检 → 处理推送。供 loop 与 API 共用。
+
+    时机扫描(_run_wheel_scan)不再附带管仓推送。
+    """
     from app.api.wheel import check_open_positions_core
     from app.api.leaps import _load_config
 
