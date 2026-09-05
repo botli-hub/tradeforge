@@ -5,11 +5,12 @@
 - 美股 history/kline -> futu（OpenD request_history_kline）；适配器不可用时 Yahoo
 - A股 / 港股 quote -> futu
 - A股 / 港股 history/kline -> futu
-- options -> futu
+- options -> futu（港/A）; 美股 auto: OpenD 可达→futu，否则 cboe
 
 说明：
 - 这里的 preferred_adapter 只作为兜底/兼容入参，真正的市场路由优先按 symbol + purpose 自动决定。
 - 这样可以避免前端 localStorage 里的默认值（如 mock）误导真实行情链路。
+- 美股期权：默认 auto = OpenD 可达走富途，否则 CBOE 延时链（不依赖 OpenD）。
 """
 from __future__ import annotations
 
@@ -111,9 +112,65 @@ def resolve_runtime_source(symbol: str, preferred_adapter: Optional[str] = None)
     return resolve_quote_source(symbol, preferred_adapter)
 
 
-def resolve_option_source(symbol: str, preferred_adapter: Optional[str] = None) -> str:
-    """期权固定走 Futu。"""
-    return 'futu'
+def is_opend_reachable(host: Optional[str] = None, port: Optional[int] = None) -> bool:
+    """TCP 探测 OpenD；不通则立刻 False，不 import 阻塞。"""
+    try:
+        from app.core.opend import ensure_opend_reachable
+        from app.core.config import get_effective_config
+        futu = (get_effective_config().get("futu") or {}) if host is None or port is None else {}
+        h = host or futu.get("host") or "127.0.0.1"
+        p = int(port if port is not None else (futu.get("port") or 11111))
+        ensure_opend_reachable(h, p, timeout=0.6)
+        return True
+    except Exception:
+        return False
+
+
+def _options_mode(preferred_adapter: Optional[str] = None, options_source: Optional[str] = None) -> str:
+    raw = (options_source or preferred_adapter or "").strip().lower()
+    if raw in ("cboe", "futu", "auto"):
+        return raw
+    try:
+        from app.core.config import get_effective_config
+        cfg = (get_effective_config().get("options") or {})
+        mode = str(cfg.get("source") or "auto").strip().lower()
+        if mode in ("cboe", "futu", "auto"):
+            return mode
+    except Exception:
+        pass
+    return "auto"
+
+
+def resolve_option_source(
+    symbol: str,
+    preferred_adapter: Optional[str] = None,
+    *,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    options_source: Optional[str] = None,
+) -> str:
+    """美股期权：auto=OpenD 通走富途否则 CBOE；港/A 仍走富途。"""
+    mode = _options_mode(preferred_adapter, options_source)
+    if not is_us_symbol(symbol):
+        return "futu"
+    if mode == "cboe":
+        return "cboe"
+    if mode == "futu":
+        return "futu"
+    if is_opend_reachable(host, port):
+        return "futu"
+    return "cboe"
+
+
+def option_candidate_sources(symbol: str, source: Optional[str] = None) -> list:
+    """美股富途失败时回落 CBOE；港/A 没有公开备援。"""
+    src = (source or "futu").strip().lower()
+    if is_us_symbol(symbol):
+        if src == "futu":
+            return ["futu", "cboe"]
+        if src == "cboe":
+            return ["cboe"]
+    return [src or "futu"]
 
 
 def resolve_display_market(symbol: str) -> str:

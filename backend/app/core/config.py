@@ -221,6 +221,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "threat_otm_buffer_pct": 5.0,
         "tg_summary": True,
     },
+    # 美股期权报价：auto=OpenD 通走富途，不通走 CBOE 延时（无需 Key）
+    "options": {
+        "source": "auto",  # auto | cboe | futu
+    },
 }
 
 

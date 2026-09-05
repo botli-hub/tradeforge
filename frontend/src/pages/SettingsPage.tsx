@@ -471,6 +471,28 @@ function BackendConfigCard({
                 onChange={e => up('futu', 'port', Number(e.target.value))} />
             </div>
           </div>
+
+          <div className="editor-section">
+            <h4>美股期权报价（可不依赖 OpenD）</h4>
+            <p style={{ fontSize: 13, color: 'var(--text-secondary)', margin: '0 0 12px' }}>
+              自动：OpenD 通了用富途实时；不通则用 CBOE 延时链（约 15 分钟，含希腊值，无需 Key）。
+              港/A 股期权仍只走 OpenD。触线 EMA（合约 K 线）仍需要 OpenD。
+            </p>
+            <div className="settings-row">
+              <label>期权源</label>
+              <select
+                value={(cfg.options?.source as string) || 'auto'}
+                onChange={e => setCfg(p => p ? {
+                  ...p,
+                  options: { ...(p.options || { source: 'auto' }), source: e.target.value as 'auto' | 'cboe' | 'futu' },
+                } : p)}
+              >
+                <option value="auto">自动（OpenD → CBOE）</option>
+                <option value="cboe">仅 CBOE 延时（不依赖 OpenD）</option>
+                <option value="futu">仅富途 OpenD</option>
+              </select>
+            </div>
+          </div>
         </>
       )}
 
