@@ -221,6 +221,18 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "threat_otm_buffer_pct": 5.0,
         "tg_summary": True,
     },
+    # Notion 私有草稿板同步(SQLite → 持仓/触线/Sim);token 勿提交 git
+    # smile 板: page 3d271fa5-… / 持仓 c99ca82a-… / 触线 a3704582-… / Sim 5539f0fe-…
+    "notion": {
+        "enabled": False,
+        "token": "",  # 或环境变量 NOTION_TOKEN
+        "page_id": "3d271fa5-7f68-8182-8f5a-d86eff5ca643",
+        "database_positions": "c99ca82a-77c2-4514-b032-0c9869a5cae8",
+        "database_touches": "a3704582-5dcb-4efc-83b7-11a1bd7b0bc9",
+        "database_sim": "5539f0fe-bc10-4d91-89c3-7ef07814b8ea",
+        "sync_minutes": 15,
+        "touch_limit": 50,
+    },
 }
 
 

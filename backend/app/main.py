@@ -48,6 +48,9 @@ async def startup():
     threading.Thread(target=_position_alert_loop, daemon=True).start()
     # 缠论 5m/30m/1d 买卖点 Telegram(chan_alerts.enabled; 同指纹只推一次; 不自动下单)
     threading.Thread(target=_chan_alert_loop, daemon=True).start()
+    # Notion 私有看板同步(notion.enabled + token; 失败只记日志; 不改 TG)
+    from app.services.notion_sync import notion_sync_loop
+    threading.Thread(target=notion_sync_loop, daemon=True).start()
     # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
     threading.Thread(target=_backfill_codes_once, daemon=True).start()
 
