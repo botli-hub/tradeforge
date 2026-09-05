@@ -233,6 +233,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "sync_minutes": 15,
         "touch_limit": 50,
     },
+    # Google Sheets 镜像同步(手机查看;SQLite → positions/touches/sim);凭证勿提交 git
+    # spreadsheet_id 可由 smile 稍后提供;默认空
+    "google_sheets": {
+        "enabled": False,
+        "spreadsheet_id": "",
+        "credentials_json": "",  # SA JSON 字符串;或环境变量 GOOGLE_SHEETS_CREDENTIALS_JSON
+        "service_account_file": "",  # 或本机路径;或环境变量 GOOGLE_APPLICATION_CREDENTIALS
+        "sync_minutes": 15,
+        "touch_limit": 50,
+        "sheet_positions": "positions",
+        "sheet_touches": "touches",
+        "sheet_sim": "sim",
+    },
 }
 
 

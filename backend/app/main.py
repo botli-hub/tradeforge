@@ -51,6 +51,9 @@ async def startup():
     # Notion 私有看板同步(notion.enabled + token; 失败只记日志; 不改 TG)
     from app.services.notion_sync import notion_sync_loop
     threading.Thread(target=notion_sync_loop, daemon=True).start()
+    # Google Sheets 镜像同步(google_sheets.enabled + credentials + spreadsheet_id; 失败只记日志)
+    from app.services.google_sheets_sync import google_sheets_sync_loop
+    threading.Thread(target=google_sheets_sync_loop, daemon=True).start()
     # 存量卖出交易的合约代码补全(幂等,美股无需 OpenD)
     threading.Thread(target=_backfill_codes_once, daemon=True).start()
 
