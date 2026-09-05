@@ -421,7 +421,10 @@ class SimWheelEngine:
         self.repo.add_event(
             cycle_id=cycle_id, symbol=symbol, event_type="open_csp",
             fingerprint=fp,
-            detail={"level": level, "qty": qty, "strike": strike, "premium": premium},
+            detail={
+                "level": level, "qty": qty, "strike": strike, "premium": premium,
+                "timeframe": alert.get("timeframe"),
+            },
             created_at=_now_iso(now),
         )
         return {"ok": True, "action": "open_csp", "cycle_id": cycle_id, "fingerprint": fp, "level": level}
@@ -521,7 +524,10 @@ class SimWheelEngine:
         self.repo.add_event(
             cycle_id=cycle_id, symbol=symbol, event_type=ev,
             fingerprint=fp,
-            detail={"qty": qty, "strike": strike, "premium": premium, "force": force},
+            detail={
+                "qty": qty, "strike": strike, "premium": premium, "force": force,
+                "timeframe": alert.get("timeframe"),
+            },
             created_at=_now_iso(now),
         )
         return {"ok": True, "action": ev, "cycle_id": cycle_id, "fingerprint": fp}
