@@ -262,16 +262,41 @@ def signal_strength(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
     return "WATCH"
 
 
+def _signal_timeframe_label(sig: Any) -> str:
+    """触线 TG 文案用的 K 线周期;缺/空 → '?'(不崩)。格式统一为 1h/1d 等。"""
+    raw = None
+    if isinstance(sig, dict):
+        raw = sig.get("timeframe")
+    else:
+        raw = getattr(sig, "timeframe", None)
+    if raw is None:
+        return "?"
+    s = str(raw).strip()
+    if not s:
+        return "?"
+    low = s.lower()
+    if low in ("1h", "60m", "k_60m", "hour", "hourly"):
+        return "1h"
+    if low in ("1d", "day", "daily", "k_day", "d"):
+        return "1d"
+    return s
+
+
 def format_wheel_signal(sig: "LeapsSignal", min_iv_rank: float = 50) -> str:
-    """Telegram 推送文案(合约触线)"""
+    """Telegram 推送文案(合约触线)。
+
+    触线行附带 K 线周期标签「周期 1h」/「周期 1d」(Put/Call 频道共用本函数)。
+    timeframe 缺失时写「周期 ?」,避免推送崩溃。
+    """
     kind = "卖Put时机" if sig.signal_level == "WHEEL_PUT" else "卖Call时机"
     level = signal_strength(sig, min_iv_rank)
     badge = {"STRONG": "🔥强信号", "READY": "✅可做", "WATCH": "👀观察"}.get(level, "")
+    tf = _signal_timeframe_label(sig)
     lines = [
         f"🛞 [Wheel {kind}] {badge} {sig.symbol}",
         f"合约 {sig.contract_code}  strike {sig.strike}  到期 {sig.expiry}"
         + (f"({sig.dte}天)" if sig.dte else ""),
-        f"合约价 {round(sig.trigger_price, 2)} 触及 {sig.ema_type}({round(sig.ema_value, 2)})",
+        f"合约价 {round(sig.trigger_price, 2)} 触及 {sig.ema_type}({round(sig.ema_value, 2)}) · 周期 {tf}",
     ]
     detail = []
     if sig.bid:
