@@ -36,3 +36,8 @@ tmp/
 
 # Logs
 *.log
+
+# Google service account credentials (never commit)
+**/google-credentials*.json
+**/service-account*.json
+**/gcp-sa*.json

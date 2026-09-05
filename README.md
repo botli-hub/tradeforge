@@ -192,6 +192,41 @@ npm run dev -- --host 127.0.0.1
 
 ---
 
+
+## Google Sheets 镜像同步（手机查看）
+
+本地 SQLite → Google Spreadsheet 三个 worksheet（`positions` / `touches` / `sim`）幂等 upsert。  
+默认关闭；与 Notion 同步（`notion.enabled=false`）并行存在，互不删除。不改 TG、不下单。
+
+### 配置键 `backend_config.google_sheets`
+
+| key | 默认 | 说明 |
+|-----|------|------|
+| `enabled` | `false` | 总开关 |
+| `spreadsheet_id` | `""` | 表格 ID（smile 稍后提供亦可） |
+| `credentials_json` | `""` | Service Account JSON 字符串；**勿提交**；亦可 `GOOGLE_SHEETS_CREDENTIALS_JSON` |
+| `service_account_file` | `""` | 本机 SA 文件路径；亦可 `GOOGLE_APPLICATION_CREDENTIALS` |
+| `sync_minutes` | `15` | 后台间隔 |
+| `touch_limit` | `50` | 触线同步条数 |
+| `sheet_positions` / `sheet_touches` / `sheet_sim` | `positions` / `touches` / `sim` | worksheet 名 |
+
+### Sync Key（与 Notion 同口径）
+
+- 持仓：`cycle:{id}`（活跃轮次）；Name ≈ `{symbol} {status}`
+- 触线：`touch:{contract_code}:{timeframe}`（无 code 时 sha1）；最近 N 条
+- Sim：`sim:{id}`（非 CLOSED）
+
+### 本地开通步骤
+
+1. GCP 建 Service Account → 启用 **Google Sheets API**
+2. 新建（或使用）Spreadsheet，用 **编辑者** 权限分享给 SA 邮箱（`client_email`）
+3. 下载 SA JSON 到本机（勿提交 git）；设置页填 `enabled=true` + `spreadsheet_id` + 凭证，或写 `backend/.env`
+4. 重启后端；日志见 `google_sheets sync upserted=…`
+
+详见 `backend/.env.example`。
+
+---
+
 ## 数据存储
 
 | 内容 | 位置 | 是否进 git |
@@ -209,7 +244,7 @@ npm run dev -- --host 127.0.0.1
 
 ## 配置原则
 
-1. **密钥不进仓库**：Telegram Token、Finnhub Key 等只存在本机库或 `.env`  
+1. **密钥不进仓库**：Telegram Token、Finnhub Key、Notion Token、Google SA JSON 等只存在本机库或 `.env`  
 2. **业务参数**：设置页 `wheel_position` / `wheel_scan` / `wheel_alerts` / `wheel_portfolio`  
 3. **标的级**：愿接价 floor、min_annualized、max_capital、delta/DTE 区间  
 
@@ -243,7 +278,7 @@ source .venv/bin/activate
 python -c "import tests.test_wheel_decision as t; [getattr(t,n)() for n in dir(t) if n.startswith('test_')]"
 ```
 
-主要单测：`tests/test_wheel_decision.py` · `test_alert_engine.py` · `test_wheel_trader_flow.py` · `test_wheel_score.py`。
+主要单测：`tests/test_wheel_decision.py` · `test_alert_engine.py` · `test_wheel_trader_flow.py` · `test_wheel_score.py` · `test_notion_sync.py` · `test_google_sheets_sync.py`。
 
 ---
 

@@ -42,6 +42,7 @@ class BackendConfigIn(BaseModel):
     chan_alerts: Optional[Dict[str, Any]] = None
     sim_wheel: Optional[Dict[str, Any]] = None
     notion: Optional[Dict[str, Any]] = None
+    google_sheets: Optional[Dict[str, Any]] = None
 
 
 @router.get("/backend")

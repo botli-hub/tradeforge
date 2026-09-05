@@ -146,3 +146,11 @@ python run.py
 
 更多整体说明请看根目录：
 - `../README.md`
+
+---
+
+## Google Sheets / Notion 同步
+
+可选后台镜像：`app/services/google_sheets_sync.py`、`notion_sync.py`。  
+默认 `enabled=false`；凭证见 `.env.example`（勿提交真实密钥）。
+
