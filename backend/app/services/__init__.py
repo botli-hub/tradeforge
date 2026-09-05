@@ -2,10 +2,13 @@
 
 
 def _install_event_alert_hook() -> None:
-    """替换 run_position_alert_cycle:同一轮体检后追加事件日 Telegram(首次入窗指纹).
+    """替换 run_position_alert_cycle:同一轮体检后追加裸奔 + 事件日 Telegram.
 
     不改 alert_engine 正文,避免整文件重写. from app.services.alert_engine import ...
     会先加载本包,因此拿到的是挂钩后的函数. 失败静默,不影响原推送.
+
+    持股裸奔(HOLDING≥3天未挂 Call)原挂在时机扫描(_run_wheel_scan)副作用;
+    现并入本管仓周期,仅经 _position_alert_loop / push_position_alerts 推送.
     """
     try:
         import app.services.alert_engine as ae
@@ -21,6 +24,8 @@ def _install_event_alert_hook() -> None:
         ):
             from app.api.wheel import check_open_positions_core
             from app.api.leaps import _load_config
+            from app.data import leaps_repository as leaps_repo
+            from app.data import wheel_repository as wrepo
 
             cfg = _load_config()
             data = check_open_positions_core(host, port)
@@ -28,6 +33,39 @@ def _install_event_alert_hook() -> None:
             out = ae.process_position_alerts(items, cfg=cfg, force=force, dry_run=dry_run)
             out["checked"] = len(items)
             out["profit_target_pct"] = data.get("profit_target_pct")
+
+            # 持股裸奔(原时机扫描副作用)
+            uncovered_sent = 0
+            try:
+                for cyc in wrepo.get_cycles(include_closed=False):
+                    if cyc["status"] != "HOLDING" or (cyc.get("uncovered_days") or 0) < 3:
+                        continue
+                    key = f"UNCOV.{cyc['id']}"
+                    if (not force) and leaps_repo.is_contract_in_cooldown(key):
+                        continue
+                    cb = cyc.get("cost_basis")
+                    line = (
+                        f"🪑 管仓|裸奔 {cyc['symbol']} 持股 {cyc['shares']:g} 股 "
+                        f"已 {cyc['uncovered_days']} 天未挂 Call"
+                        + (f"(CB ${cb:.2f})" if cb is not None else "")
+                        + "\n→ Wheel · 找 Call"
+                    )
+                    r = ae.send_and_log(
+                        line,
+                        category="uncovered",
+                        fingerprint=key,
+                        title=f"uncovered {cyc['symbol']}",
+                        cfg=cfg,
+                        dry_run=dry_run,
+                    )
+                    if r.get("sent") or dry_run:
+                        uncovered_sent += 1
+                        if r.get("sent"):
+                            leaps_repo.set_contract_cooldown(key, cyc["symbol"], 1)
+            except Exception:
+                pass
+            out["uncovered_sent"] = uncovered_sent
+
             try:
                 from app.core.wheel_event_dispose import process_event_window_alerts
                 ev = process_event_window_alerts(
