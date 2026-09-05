@@ -92,6 +92,39 @@ def call_strike_min(
     return max(vals) if vals else None
 
 
+def _positive_float(v: Any) -> Optional[float]:
+    """正数 float; 0/None/非法 → None。"""
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def is_otm_put(strike: Any, spot: Any) -> bool:
+    """Put 严格 OTM: strike < spot。ATM/ITM/无效 → False。无 epsilon。"""
+    k = _positive_float(strike)
+    s = _positive_float(spot)
+    if k is None or s is None:
+        return False
+    return k < s
+
+
+def is_otm_call(strike: Any, spot_or_anchor: Any) -> bool:
+    """Call 严格 OTM: strike > spot_or_anchor。
+
+    spot_or_anchor 一般为标的现价。CC 另有 strike≥max(cost_basis, sell_above)
+    下限(见 call_strike_min),与本函数独立叠加。ATM/ITM/无效 → False。无 epsilon。
+    """
+    k = _positive_float(strike)
+    a = _positive_float(spot_or_anchor)
+    if k is None or a is None:
+        return False
+    return k > a
+
+
 def bar_timestamp(time_key: Any, timeframe: Optional[str] = None) -> str:
     """日K 存 YYYY-MM-DD；1h 存到分钟，避免同日多根互相覆盖。"""
     raw = str(time_key or "").replace("T", " ").strip()

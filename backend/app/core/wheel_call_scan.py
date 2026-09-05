@@ -1,5 +1,6 @@
 """Call 触线扫描辅助:1h+1d,启用标的一律扫(可不持股)。
 
+严格 OTM(strike > spot) + strike≥max(cost_basis, sell_above);
 供 WheelTimingMonitor.scan_all 薄调用;不自动下单。
 """
 from __future__ import annotations
@@ -78,6 +79,7 @@ def scan_call_touches(
             core_dte_min=core_lo, core_dte_max=core_hi,
             prefer_core_dte=prefer_core_dte,
             timeframe=call_tf,
+            otm_only=True,
         ))
         if report is not None:
             report.append(rep)

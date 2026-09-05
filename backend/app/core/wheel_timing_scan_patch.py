@@ -77,6 +77,7 @@ def install() -> None:
                     core_dte_min=core_lo, core_dte_max=core_hi,
                     prefer_core_dte=self.prefer_core_dte,
                     timeframe=TIMEFRAME_DAY,
+                    otm_only=True,
                 ))
                 if report is not None:
                     report.append(rep)

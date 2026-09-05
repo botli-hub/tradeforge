@@ -102,9 +102,11 @@ class WheelTimingMonitor:
 
     卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
       - 标的现价 > 接货底线价
+      - PUT 仅扫严格 OTM: strike < spot(排除 ATM/ITM;无 epsilon)
       - PUT 合约(DTE/strike 按 wheel_timing 配置)价格触及 EMA50/EMA200
     卖 Call 触线(启用标的一律扫,可不持股;有 HOLDING 时 strike 锚成本/愿卖价):
-      - CALL 合约 strike ≥ max(cost basis, sell_above)(无持股则愿卖价或无下限)
+      - CALL 仅扫严格 OTM: strike > spot(排除 ATM/ITM;无 epsilon)
+      - CALL 另加 strike ≥ max(cost basis, sell_above)(无持股则愿卖价或无下限)
       - 合约 1h 与 1d 价格触及自身 EMA50/EMA200(档案按 timeframe 分桶)
     IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
     信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
@@ -213,6 +215,7 @@ class WheelTimingMonitor:
                     core_dte_min=core_lo, core_dte_max=core_hi,
                     prefer_core_dte=self.prefer_core_dte,
                     timeframe=TIMEFRAME_DAY,
+                    otm_only=True,
                 ))
                 if report is not None:
                     report.append(rep)
@@ -413,6 +416,7 @@ class LeapsMonitor:
         core_dte_max: Optional[int] = None,
         prefer_core_dte: bool = True,
         timeframe: Optional[str] = None,
+        otm_only: bool = False,
     ) -> List[LeapsSignal]:
         """通用合约 EMA 触线扫描。默认参数 = 原 LEAPS Put 行为;
         Wheel 时机复用:option_type/dte/strike 可定制,level_map 定制信号级别名,
@@ -441,6 +445,7 @@ class LeapsMonitor:
             expiries_scanned=[], expiries_skipped=[],
             strike_lo=None, strike_hi=None,
             timeframe=tf,
+            otm_only=bool(otm_only),
         )
         _p(
             symbol=symbol, side=option_type, expiry=None,
@@ -487,6 +492,7 @@ class LeapsMonitor:
             core_dte_max=core_dte_max,
             prefer_core_dte=prefer_core_dte,
             meta=fetch_meta,
+            otm_only=otm_only,
         )
         rep["contracts"] = len(contracts)
         rep["expiries_scanned"] = fetch_meta.get("expiries_scanned") or []
@@ -539,10 +545,17 @@ class LeapsMonitor:
         for exp_label in exp_order:
             exp_contracts = by_exp[exp_label]
             exp_n = len(exp_contracts)
+            from app.core.wheel_timing_klines import is_otm_call, is_otm_put
             for ci, contract in enumerate(exp_contracts, start=1):
                 code = contract["code"]
                 strike = contract["strike"]
                 current_iv = contract.get("iv")
+                # 触线检测前再拦一层 ITM/ATM(与链过滤同口径)
+                if otm_only:
+                    if option_type == "PUT" and not is_otm_put(strike, underlying_price):
+                        continue
+                    if option_type == "CALL" and not is_otm_call(strike, underlying_price):
+                        continue
                 # 每张都更新:触线单张耗时长,便于前端实时看到 n/m 与到期日
                 _p(
                     symbol=symbol, side=option_type, expiry=exp_label,
@@ -730,6 +743,7 @@ class LeapsMonitor:
         core_dte_max: Optional[int] = None,
         prefer_core_dte: bool = True,
         meta: Optional[Dict[str, Any]] = None,
+        otm_only: bool = False,
     ) -> List[Dict[str, Any]]:
         import futu
         futu_symbol = _to_futu_symbol(symbol)
@@ -785,8 +799,15 @@ class LeapsMonitor:
                 strike_lo = max(strike_lo, strike_min)
             if strike_max is not None:
                 strike_hi = min(strike_hi, strike_max)
+            # Wheel 触线:严格 OTM 收窄区间(ATM 仍靠下方 is_otm_* 剔除)
+            if otm_only:
+                if option_type == "PUT":
+                    strike_hi = min(strike_hi, float(underlying_price))
+                elif option_type == "CALL":
+                    strike_lo = max(strike_lo, float(underlying_price))
             meta["strike_lo"] = round(strike_lo, 2)
             meta["strike_hi"] = round(strike_hi, 2)
+            meta["otm_only"] = bool(otm_only)
 
             # 优先核心 DTE 带,最多 max_exp 个(默认 6;旧写死 3 会漏周度期权舒适区)
             exp_slice, exp_skipped = select_expiries(
@@ -831,11 +852,18 @@ class LeapsMonitor:
                         logger.warning("get_option_chain(%s %s) 失败: %s", futu_symbol, exp_str, chain)
                     continue
                 n_in_exp = 0
+                from app.core.wheel_timing_klines import is_otm_call, is_otm_put
                 for _, row in chain.iterrows():
                     code = str(row.get("code", ""))
                     strike = float(row.get("strike_price", 0))
                     if not code or strike < strike_lo or strike > strike_hi:
                         continue
+                    # 触线前剔除 ITM/ATM,避免进入 TG / Sim
+                    if otm_only:
+                        if option_type == "PUT" and not is_otm_put(strike, underlying_price):
+                            continue
+                        if option_type == "CALL" and not is_otm_call(strike, underlying_price):
+                            continue
                     all_codes.append(code)
                     code_expiry[code] = exp_str
                     n_in_exp += 1
