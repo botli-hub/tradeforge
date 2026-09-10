@@ -92,6 +92,44 @@ def _join_line(head: str, *segments: str) -> str:
     return " · ".join(bits)
 
 
+def _fmt_premium_usd(val: Any) -> str:
+    """权利金金额展示:始终 $x.xx(含 0 → $0.00)。"""
+    try:
+        n = float(val if val is not None else 0)
+    except (TypeError, ValueError):
+        n = 0.0
+    return f"${n:,.2f}"
+
+
+def format_premium_totals_lines(
+    premium_month: Optional[float] = None,
+    premium_total: Optional[float] = None,
+) -> List[str]:
+    """本月 / 累计权利金两行(与 get_stats.premium_month/total 同口径)。"""
+    return [
+        f"本月权利金 {_fmt_premium_usd(premium_month)}",
+        f"累计权利金 {_fmt_premium_usd(premium_total)}",
+    ]
+
+
+def fetch_premium_totals(
+    get_stats_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+) -> Dict[str, float]:
+    """读取实盘权利金汇总;失败则归零。不含 Sim。"""
+    try:
+        if get_stats_fn is None:
+            from app.data.wheel_repository import get_stats
+            get_stats_fn = get_stats
+        stats = get_stats_fn() or {}
+        return {
+            "premium_month": float(stats.get("premium_month") or 0),
+            "premium_total": float(stats.get("premium_total") or 0),
+        }
+    except Exception as e:
+        logger.warning("status digest premium totals failed: %s", e)
+        return {"premium_month": 0.0, "premium_total": 0.0}
+
+
 def format_position_line(title: str, fields: Dict[str, Any]) -> str:
     fields = enrich_position_fields(fields)
     symbol = fields.get("symbol") or "?"
@@ -150,11 +188,19 @@ def build_status_digest_text(
     *,
     now: Optional[datetime] = None,
     touch_limit: int = 10,
+    premium_month: Optional[float] = None,
+    premium_total: Optional[float] = None,
 ) -> str:
-    """组装完整摘要文本(可能超过 4096;调用方再 chunk)。"""
+    """组装完整摘要文本(可能超过 4096;调用方再 chunk)。
+
+    premium_month / premium_total: 实盘台账净权利金(与 get_stats 同口径);
+    未传入时按 $0.00 展示,保证摘要结构稳定。
+    """
     now = now or datetime.now(SHANGHAI)
     ts = now.strftime("%Y-%m-%d %H:%M CST")
     lines: List[str] = [f"📊 TradeForge 状态摘要 · {ts}", ""]
+    lines.extend(format_premium_totals_lines(premium_month, premium_total))
+    lines.append("")
 
     positions = rows.get("positions") or []
     lines.append(f"📍 在场持仓 ({len(positions)})")
@@ -305,7 +351,13 @@ def run_status_digest(
 
         rows = collect_status_rows(cfg)
         touch_limit = int(sd.get("touch_limit") or 10)
-        text = build_status_digest_text(rows, touch_limit=touch_limit)
+        premiums = fetch_premium_totals()
+        text = build_status_digest_text(
+            rows,
+            touch_limit=touch_limit,
+            premium_month=premiums["premium_month"],
+            premium_total=premiums["premium_total"],
+        )
         chunks = chunk_telegram_text(text)
         out["preview"] = chunks[0] if chunks else text
         out["messages"] = chunks
@@ -315,6 +367,7 @@ def run_status_digest(
             "touches": min(len(rows.get("touches") or []), touch_limit),
             "sim": len(rows.get("sim") or []),
         }
+        out["premium"] = premiums
 
         if dry_run:
             out["ok"] = True

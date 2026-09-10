@@ -15,7 +15,9 @@ from app.services.status_digest import (  # noqa: E402
     build_status_digest_text,
     chunk_telegram_text,
     collect_status_rows,
+    fetch_premium_totals,
     format_position_line,
+    format_premium_totals_lines,
     format_sim_line,
     format_touch_line,
     get_status_digest_cfg,
@@ -97,6 +99,8 @@ def test_build_empty():
         now=datetime(2026, 9, 6, 8, 0, tzinfo=SH),
     )
     assert "状态摘要" in text
+    assert "本月权利金 $0.00" in text
+    assert "累计权利金 $0.00" in text
     assert "在场持仓 (0)" in text
     assert "最近触线 (0)" in text
     assert "Sim纸面 (0)" in text
@@ -311,3 +315,93 @@ def test_should_run_daily_hour():
     # late may be True if kv not set for today — we don't assert True to avoid DB;
     # just ensure hour gate works for early
     assert late.hour >= 8
+
+
+def test_format_premium_totals_lines_zero_and_values():
+    zero = format_premium_totals_lines(None, None)
+    assert zero == ["本月权利金 $0.00", "累计权利金 $0.00"]
+    lines = format_premium_totals_lines(1234.5, 98765.4)
+    assert lines[0] == "本月权利金 $1,234.50"
+    assert lines[1] == "累计权利金 $98,765.40"
+
+
+def test_build_includes_premium_totals_near_header():
+    text = build_status_digest_text(
+        {
+            "positions": [
+                (
+                    "cycle:1",
+                    "AAPL CSP_OPEN",
+                    {
+                        "symbol": "AAPL",
+                        "status": "CSP_OPEN",
+                        "side": "PUT",
+                        "strike": 180,
+                        "expiry": "2026-01-17",
+                        "dte": 10,
+                        "premium": 100,
+                    },
+                )
+            ],
+            "touches": [],
+            "sim": [],
+        },
+        now=datetime(2026, 9, 10, 8, 0, tzinfo=SH),
+        premium_month=148.0,
+        premium_total=12345.67,
+    )
+    assert "TradeForge 状态摘要 · 2026-09-10 08:00 CST" in text
+    assert "本月权利金 $148.00" in text
+    assert "累计权利金 $12,345.67" in text
+    # 汇总在标题之后、在场持仓之前
+    header_i = text.index("状态摘要")
+    month_i = text.index("本月权利金 $148.00")
+    total_i = text.index("累计权利金 $12,345.67")
+    pos_i = text.index("在场持仓 (1)")
+    assert header_i < month_i < total_i < pos_i
+
+
+def test_fetch_premium_totals_mock_stats():
+    got = fetch_premium_totals(
+        get_stats_fn=lambda: {"premium_month": 10.5, "premium_total": 99}
+    )
+    assert got == {"premium_month": 10.5, "premium_total": 99.0}
+
+
+def test_fetch_premium_totals_fallback_zero():
+    def boom():
+        raise RuntimeError("db down")
+
+    got = fetch_premium_totals(get_stats_fn=boom)
+    assert got == {"premium_month": 0.0, "premium_total": 0.0}
+
+
+def test_run_force_dry_run_includes_premium_lines():
+    import app.services.status_digest as sd
+
+    orig_collect = sd.collect_status_rows
+    orig_fetch = sd.fetch_premium_totals
+    sd.collect_status_rows = lambda cfg=None, **kw: {  # type: ignore
+        "positions": [], "touches": [], "sim": []
+    }
+    sd.fetch_premium_totals = lambda get_stats_fn=None: {  # type: ignore
+        "premium_month": 12.0,
+        "premium_total": 3400.5,
+    }
+    try:
+        out = run_status_digest(
+            {"status_digest": {"enabled": False}},
+            force=True,
+            dry_run=True,
+            send_fn=lambda body, **kwargs: {"ok": True, "sent": False},
+        )
+    finally:
+        sd.collect_status_rows = orig_collect  # type: ignore
+        sd.fetch_premium_totals = orig_fetch  # type: ignore
+
+    preview = out.get("preview") or ""
+    assert out["ok"] is True
+    assert "本月权利金 $12.00" in preview
+    assert "累计权利金 $3,400.50" in preview
+    assert out.get("premium") == {"premium_month": 12.0, "premium_total": 3400.5}
+
