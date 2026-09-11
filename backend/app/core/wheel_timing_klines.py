@@ -174,7 +174,8 @@ def ema_touch(
     compute_ema=None,
 ) -> Optional[Dict[str, Any]]:
     """last/high ≥ EMA200 强 / EMA50 一级。未触及返回 None。不访问 Futu。"""
-    level_map = level_map or {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
+    if level_map is None:
+        level_map = {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
     if compute_ema is None:
         def compute_ema(series, period):  # type: ignore[misc]
             return series.ewm(span=period, adjust=False).mean()
@@ -185,6 +186,9 @@ def ema_touch(
     n_bars = len(closes)
 
     def _try(period: int, min_bars: int, key: str) -> Optional[Dict[str, Any]]:
+        # level_map 缺 key 则跳过(如 Call 1h 仅扫 EMA200),避免 KeyError
+        if key not in level_map:
+            return None
         if n_bars < min_bars:
             return None
         partial = n_bars < period

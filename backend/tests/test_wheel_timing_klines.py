@@ -8,6 +8,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.wheel_call_scan import call_level_map  # noqa: E402
 from app.core.wheel_timing_klines import (  # noqa: E402
     CALL_SCAN_TIMEFRAMES,
     TIMEFRAME_DAY,
@@ -77,6 +78,44 @@ def test_ema_touch_high_also_hits():
     hit = ema_touch(closes, high, ema50_min=50, ema200_min=200, allow_partial_ema=True)
     assert hit is not None
     assert hit["ema_type"] == "EMA50"
+
+
+def test_ema_touch_skips_missing_level_map_key():
+    """level_map 只有 EMA200 时不因缺 EMA50 崩溃;可只命中 200。"""
+    closes = pd.Series([1.0] * 220)
+    # 价够触 EMA50 但缺 key → 跳过 50,仍可命中 200
+    hit = ema_touch(
+        closes, 1.05,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA200": "WHEEL_CALL"},
+    )
+    assert hit is not None
+    assert hit["ema_type"] == "EMA200"
+    assert hit["signal_level"] == "WHEEL_CALL"
+    # 价低于 EMA → None,且不 KeyError
+    assert ema_touch(
+        closes, 0.5,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA200": "WHEEL_CALL"},
+    ) is None
+    # 空 map → 两条都跳过
+    assert ema_touch(
+        closes, 1.05,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={},
+    ) is None
+
+
+def test_call_level_map_1h_only_ema200_daily_both():
+    """1h 默认仅 EMA200;1d 仍 EMA50+EMA200;可配 call_1h_ema_types。"""
+    assert call_level_map("1h") == {"EMA200": "WHEEL_CALL"}
+    assert call_level_map("1d") == {"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"}
+    assert call_level_map(
+        "1h", wheel_timing={"call_1h_ema_types": ["EMA50", "EMA200"]},
+    ) == {"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"}
+    assert call_level_map(
+        "1h", wheel_timing={"call_1h_ema_types": "EMA200"},
+    ) == {"EMA200": "WHEEL_CALL"}
 
 
 def test_put_stays_daily_kltype():
@@ -167,6 +206,10 @@ def test_scan_all_call_1h_and_1d_holding_put_day():
     assert futu_kl_names("1d")[0] == "K_DAY"
     # sell_above 110 > cost 100; 两档 timeframe 同 strike 下限
     assert all(c.get("strike_min") == 110 for c in call)
+    # 1h 仅 EMA200;1d 仍 EMA50+EMA200
+    by_tf = {c.get("timeframe"): c.get("level_map") for c in call}
+    assert by_tf["1h"] == {"EMA200": "WHEEL_CALL"}
+    assert by_tf["1d"] == {"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"}
     # 档案键分桶:1h 与 1d 不碰撞
     assert history_key("US.X", "1h") != history_key("US.X", "1d")
 

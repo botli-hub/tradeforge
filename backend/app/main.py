@@ -46,7 +46,7 @@ async def startup():
     threading.Thread(target=auto_push_loop, daemon=True).start()
     # 在场合约高优先级行动 Telegram 告警
     threading.Thread(target=_position_alert_loop, daemon=True).start()
-    # 缠论 5m/30m/1d 买卖点 Telegram(chan_alerts.enabled; 同指纹只推一次; 不自动下单)
+    # 缠论买卖点 Telegram(默认 30m/1d; chan_alerts.enabled; 同指纹只推一次; 不自动下单)
     threading.Thread(target=_chan_alert_loop, daemon=True).start()
     # Notion 私有看板同步(notion.enabled + token; 失败只记日志; 不改 TG)
     from app.services.notion_sync import notion_sync_loop
@@ -221,7 +221,7 @@ def _position_alert_loop():
 
 
 def _chan_alert_loop():
-    """美股盘中短轮询缠论 5m/30m/1d 买卖点,只推增量。日线按 poll_minutes_1d。关闭见 chan_alerts.enabled。"""
+    """美股盘中短轮询缠论买卖点(默认 30m/1d),只推增量。日线按 poll_minutes_1d。关闭见 chan_alerts.enabled。"""
     import time
     import logging
     log = logging.getLogger("chan_alerts")

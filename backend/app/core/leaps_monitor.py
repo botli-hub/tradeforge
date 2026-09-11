@@ -107,7 +107,7 @@ class WheelTimingMonitor:
     卖 Call 触线(启用标的一律扫,可不持股;有 HOLDING 时 strike 锚成本/愿卖价):
       - CALL 仅扫严格 OTM: strike > spot(排除 ATM/ITM;无 epsilon)
       - CALL 另加 strike ≥ max(cost basis, sell_above)(无持股则愿卖价或无下限)
-      - 合约 1h 与 1d 价格触及自身 EMA50/EMA200(档案按 timeframe 分桶)
+      - 合约 1h 仅 EMA200 强信号;1d 触及 EMA50/EMA200(档案按 timeframe 分桶)
     IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
     信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
     合约冷却复用 LEAPS 的 leaps_cooldowns。
