@@ -6,10 +6,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.chan_alerts import (  # noqa: E402
+    DEFAULT_CHAN_ALERTS,
     allowed_timeframes,
     chan_signal_fingerprint,
     due_timeframes,
     format_chan_alert,
+    get_chan_alert_cfg,
     process_chan_signals,
     resolve_universe,
     run_chan_alert_cycle,
@@ -48,6 +50,20 @@ def _sig(**kw):
     }
     row.update(kw)
     return row
+
+
+def test_default_timeframes_exclude_5m():
+    """代码默认/空配置兜底不含 5m,避免重启把运行时关掉的 5m 加回来。"""
+    assert "5m" not in DEFAULT_CHAN_ALERTS["timeframes"]
+    assert DEFAULT_CHAN_ALERTS["timeframes"] == ["30m", "1d"]
+    # 无 overlay 时 get_chan_alert_cfg / allowed_timeframes 也不含 5m
+    assert "5m" not in get_chan_alert_cfg({})["timeframes"]
+    assert "5m" not in allowed_timeframes({})
+    assert allowed_timeframes({}) == ["30m", "1d"]
+    from app.core.config import DEFAULT_CONFIG
+    assert "5m" not in DEFAULT_CONFIG["chan_alerts"]["timeframes"]
+    assert DEFAULT_CONFIG["chan_alerts"]["timeframes"] == ["30m", "1d"]
+
 
 
 def test_new_signal_would_push_once():

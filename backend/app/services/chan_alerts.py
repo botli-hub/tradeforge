@@ -1,6 +1,7 @@
-"""缠论 5m/30m/1d 买卖点 Telegram 增量推送.
+"""缠论买卖点 Telegram 增量推送(默认 30m/1d)。
 
-扫 5m / 30m / 日线(1d);忽略 1m/1h。标的默认启用 Wheel 池。
+默认同级别 30m / 日线(1d);5m 仍允许显式配置,但不在代码默认里。
+忽略 1m/1h。标的默认启用 Wheel 池。
 日线默认 ~每美股会话扫一次(poll_minutes_1d≈390),不几分钟刷屏。
 走现有 alerts 管道:fingerprint 去重、quiet_hours、wheel_push_log。
 不自动下单,不碰 POSITION_QUANT / wheel_reconcile。
@@ -34,7 +35,7 @@ _DEFAULT_POLL = {"5m": 5, "30m": 30, "1d": 390}
 
 DEFAULT_CHAN_ALERTS: Dict[str, Any] = {
     "enabled": True,
-    "timeframes": ["5m", "30m", "1d"],
+    "timeframes": ["30m", "1d"],
     "symbols": [],  # 空 = 启用 Wheel 标的
     "poll_minutes_5m": 5,
     "poll_minutes_30m": 30,

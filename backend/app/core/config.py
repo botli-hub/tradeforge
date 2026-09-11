@@ -78,6 +78,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "ema200_min_bars": 120,
         # 根数 < 标准周期但仍 ≥ ema*_min 时仍算 EMA,信号带 ema_partial
         "allow_partial_ema": True,
+        # Call 1h 触线只推这些 EMA(默认仅 EMA200 强信号);日线仍 EMA50+EMA200
+        "call_1h_ema_types": ["EMA200"],
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
@@ -190,10 +192,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "high_enter": 60.0,
         "high_exit": 55.0,
     },
-    # 缠论买卖点 Telegram(5m/30m/1d; enabled=false 关闭; 不自动下单)
+    # 缠论买卖点 Telegram(默认 30m/1d; 5m 可配但代码默认不含; enabled=false 关闭; 不自动下单)
     "chan_alerts": {
         "enabled": True,
-        "timeframes": ["5m", "30m", "1d"],
+        "timeframes": ["30m", "1d"],
         "symbols": [],  # 空=启用 Wheel 标的
         "poll_minutes_5m": 5,
         "poll_minutes_30m": 30,
