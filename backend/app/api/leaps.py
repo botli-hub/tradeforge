@@ -140,8 +140,9 @@ def trigger_wheel_scan(body: WheelScanRequest, background_tasks: BackgroundTasks
         return {"status": "already_running"}
     # 立刻置 running,避免前端首几次轮询仍见 idle
     _timing_prog.reset_for_start(telegram_configured=False)
-    background_tasks.add_task(_run_wheel_scan, body.symbol)
-    return {"status": "started", "symbol": body.symbol}
+    # 手动触发绕过 session_only(周末/盘外仍可扫)
+    background_tasks.add_task(_run_wheel_scan, body.symbol, True)
+    return {"status": "started", "symbol": body.symbol, "force": True}
 
 
 @router.get("/wheel-scan/status")
@@ -155,14 +156,28 @@ def wheel_timing_history(page: int = 1, page_size: int = 20, symbol: Optional[st
     return repo.get_timing_history(page=page, page_size=page_size, symbol=symbol)
 
 
-def _run_wheel_scan(symbol: Optional[str] = None):
+def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
+    """扫 Wheel 开仓时机。force=True 时跳过 session_only(手动 API);自动循环 force=False。"""
     from datetime import datetime
     from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal, signal_strength
     from app.core import wheel_timing_scan_patch  # noqa: F401 — Call 1h+1d / non-HOLDING
     from app.services.notifier import timing_channel_kind, resolve_telegram_channel
     cfg = _load_config()
-    monitor = WheelTimingMonitor(cfg)
     timing_cfg = cfg.get("wheel_timing", {}) or {}
+    # 自动路径: session_only 默认 true → 非美股 RTH(含周末)直接跳过,不推 TG
+    if not force and bool(timing_cfg.get("session_only", True)):
+        try:
+            from app.services.chan_alerts import is_us_rth
+            rth = is_us_rth()
+        except Exception:
+            rth = True
+        if not rth:
+            logger.info(
+                "wheel 时机自动扫描跳过: 非美股 RTH (session_only=true, force=%s)",
+                force,
+            )
+            return
+    monitor = WheelTimingMonitor(cfg)
     min_iv = float(timing_cfg.get("push_min_iv_rank", 50) or 0)
     strong_only = bool(timing_cfg.get("push_strong_only", True))
     # Put / Call 分频道;任一配置即视为 TG 可用(不再用旧全局 bot 推时机)

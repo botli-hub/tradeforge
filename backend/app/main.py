@@ -162,7 +162,8 @@ def _weekly_report_loop():
 
 def _wheel_timing_loop():
     """按设置页保存的 wheel_timing.auto_scan_minutes(存本地数据库)周期扫描开仓时机。
-    启动后先等满一个间隔再首跑,避免与手动扫描/前端请求争抢富途限频额度。"""
+    启动后先等满一个间隔再首跑,避免与手动扫描/前端请求争抢富途限频额度。
+    session_only(默认 true)时非美股 RTH(含周末)由 _run_wheel_scan 直接跳过、不推 TG。"""
     import time
     from app.api.leaps import _load_config, _run_wheel_scan
     while True:
