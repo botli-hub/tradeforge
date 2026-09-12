@@ -87,7 +87,7 @@ def test_run_wheel_scan_does_not_call_process_position_alerts():
         "wheel_timing": {"push_min_iv_rank": 50, "push_strong_only": True},
         "futu": {"host": "127.0.0.1", "port": 11111},
     }), patch.dict(sys.modules, modules):
-        leaps._run_wheel_scan(symbol=None)
+        leaps._run_wheel_scan(symbol=None, force=True)
 
     alert_engine.process_position_alerts.assert_not_called()
     wheel_api.check_open_positions_core.assert_not_called()

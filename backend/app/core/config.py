@@ -63,6 +63,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "dte_min": 10, "dte_max": 55, "contract_max_per_symbol": 0,
         "iv_percentile_threshold": 0, "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
+        # 仅美股 RTH 自动扫(周末/盘外不推 TG);手动 POST /wheel-scan 仍可 force
+        "session_only": True,
         # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
         "strike_range_down": 0.20, "strike_range_up": 0.10,
         # 每标的最多扫几个到期日(旧逻辑写死 3,周期权密时会漏掉 21–45 舒适区)
