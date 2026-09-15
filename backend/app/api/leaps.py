@@ -160,7 +160,7 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
     """扫 Wheel 开仓时机。force=True 时跳过 session_only(手动 API);自动循环 force=False。"""
     from datetime import datetime
     from app.core.leaps_monitor import WheelTimingMonitor, format_wheel_signal, signal_strength
-    from app.core import wheel_timing_scan_patch  # noqa: F401 — Call 1h+1d / non-HOLDING
+    from app.core import wheel_timing_scan_patch  # noqa: F401 — Put/Call 1h+1d / non-HOLDING
     from app.services.notifier import timing_channel_kind, resolve_telegram_channel
     cfg = _load_config()
     timing_cfg = cfg.get("wheel_timing", {}) or {}

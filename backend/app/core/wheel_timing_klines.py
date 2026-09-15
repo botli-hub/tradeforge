@@ -1,4 +1,4 @@
-"""Wheel 触线 K 线：CALL=1h+1d / PUT=1d，按 timeframe 缓存与 EMA。
+"""Wheel 触线 K 线：CALL=1h+1d / PUT=1h+1d，按 timeframe 缓存与 EMA。
 
 期权合约 K 线不走 FutuAdapter；由 leaps_monitor 价格缓存拉取。
 本模块只含纯函数，便于无 OpenD 单测。
@@ -12,6 +12,8 @@ TIMEFRAME_DAY = "1d"
 TIMEFRAME_HOUR = "1h"
 # Call 触线双周期:1h(盘中) + 1d(日线);档案按 timeframe 分桶不碰撞
 CALL_SCAN_TIMEFRAMES = (TIMEFRAME_HOUR, TIMEFRAME_DAY)
+# Put 触线双周期:与 Call 对齐扫 1h+1d;EMA 仍两端都走 EMA50+EMA200(不做 Call 1h-only-EMA200)
+PUT_SCAN_TIMEFRAMES = (TIMEFRAME_HOUR, TIMEFRAME_DAY)
 
 # Futu KLType / SubType 名。adapter._ktype_map 已有 1h→K_60M，但期权 bar 不走 adapter。
 _KL_DAY = ("K_DAY", "K_DAY")
@@ -28,7 +30,7 @@ def normalize_timeframe(timeframe: Optional[str]) -> str:
 
 
 def default_timeframe(option_type: Optional[str]) -> str:
-    """CALL 默认 1h(另可显式扫 1d)；PUT / LEAPS 默认日 K。"""
+    """CALL 默认 1h(另可显式扫 1d)；PUT / LEAPS 默认日 K(扫描另可显式扫 1h)。"""
     if str(option_type or "").strip().upper() == "CALL":
         return TIMEFRAME_HOUR
     return TIMEFRAME_DAY
