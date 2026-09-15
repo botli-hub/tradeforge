@@ -1,5 +1,5 @@
 from app.core import wheel_timing_scan_patch  # noqa: F401
-"""Call 触线 1h / Put 日K：无 OpenD。"""
+"""Call/Put 触线 1h+1d：无 OpenD。"""
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.wheel_call_scan import call_level_map  # noqa: E402
 from app.core.wheel_timing_klines import (  # noqa: E402
     CALL_SCAN_TIMEFRAMES,
+    PUT_SCAN_TIMEFRAMES,
     TIMEFRAME_DAY,
     TIMEFRAME_HOUR,
     bars_on_day,
@@ -43,6 +44,7 @@ def test_call_holding_cycles_helper_and_cost_basis():
     assert call_cost_basis_for_scan(cycles) == 120
     assert call_cost_basis_for_scan([{"status": "IDLE"}]) is None
     assert CALL_SCAN_TIMEFRAMES == (TIMEFRAME_HOUR, TIMEFRAME_DAY)
+    assert PUT_SCAN_TIMEFRAMES == (TIMEFRAME_HOUR, TIMEFRAME_DAY)
 
 
 def test_ema_touch_1h_hit_ema50():
@@ -118,6 +120,24 @@ def test_call_level_map_1h_only_ema200_daily_both():
     ) == {"EMA200": "WHEEL_CALL"}
 
 
+def test_put_scan_timeframes_and_ema_both_on_1h():
+    """Put 扫描 1h+1d;1h 仍 EMA50+EMA200(与 Call 1h 仅 EMA200 对照)。"""
+    assert PUT_SCAN_TIMEFRAMES == (TIMEFRAME_HOUR, TIMEFRAME_DAY)
+    # Call 1h 仅 EMA200 不变
+    assert call_level_map("1h") == {"EMA200": "WHEEL_CALL"}
+    # Put 两端 level_map 由 scan 固定传入双线(本单测验证常量与对照)
+    put_lm = {"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"}
+    closes = pd.Series([1.0] * 60)
+    hit = ema_touch(
+        closes, 1.05,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map=put_lm,
+    )
+    assert hit is not None
+    assert hit["ema_type"] == "EMA50"
+    assert hit["signal_level"] == "WHEEL_PUT"
+
+
 def test_put_stays_daily_kltype():
     assert default_timeframe("PUT") == TIMEFRAME_DAY
     assert default_timeframe("CALL") == TIMEFRAME_HOUR
@@ -165,7 +185,7 @@ def test_bars_on_day_matches_1h_prefix():
 
 
 def test_scan_all_call_1h_and_1d_holding_put_day():
-    """scan_all: PUT=1d; CALL 扫 1h+1d; HOLDING 时 strike 用成本/愿卖价。"""
+    """scan_all: PUT/CALL 均扫 1h+1d; HOLDING 时 Call strike 用成本/愿卖价。"""
     from app.core.leaps_monitor import WheelTimingMonitor
 
     captured = []
@@ -196,17 +216,21 @@ def test_scan_all_call_1h_and_1d_holding_put_day():
     sides = [(c.get("option_type"), c.get("timeframe"), c.get("strike_min")) for c in captured]
     put = [c for c in captured if c.get("option_type") == "PUT"]
     call = [c for c in captured if c.get("option_type") == "CALL"]
-    assert len(put) == 1, sides
-    assert put[0].get("timeframe") == "1d"
-    assert futu_kl_names(put[0]["timeframe"])[0] == "K_DAY"
+    assert len(put) == 2, f"PUT must scan 1h+1d, got {sides}"
+    put_tfs = sorted(c.get("timeframe") for c in put)
+    assert put_tfs == ["1d", "1h"]
+    assert futu_kl_names("1h")[0] == "K_60M"
+    assert futu_kl_names("1d")[0] == "K_DAY"
+    # Put 1h/1d 均 EMA50+EMA200 → WHEEL_PUT(不做 Call 1h-only-EMA200)
+    put_by_tf = {c.get("timeframe"): c.get("level_map") for c in put}
+    assert put_by_tf["1h"] == {"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"}
+    assert put_by_tf["1d"] == {"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"}
     assert len(call) == 2, f"CALL must scan 1h+1d, got {sides}"
     call_tfs = sorted(c.get("timeframe") for c in call)
     assert call_tfs == ["1d", "1h"]
-    assert futu_kl_names("1h")[0] == "K_60M"
-    assert futu_kl_names("1d")[0] == "K_DAY"
     # sell_above 110 > cost 100; 两档 timeframe 同 strike 下限
     assert all(c.get("strike_min") == 110 for c in call)
-    # 1h 仅 EMA200;1d 仍 EMA50+EMA200
+    # Call 1h 仅 EMA200;1d 仍 EMA50+EMA200
     by_tf = {c.get("timeframe"): c.get("level_map") for c in call}
     assert by_tf["1h"] == {"EMA200": "WHEEL_CALL"}
     assert by_tf["1d"] == {"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"}
@@ -215,7 +239,7 @@ def test_scan_all_call_1h_and_1d_holding_put_day():
 
 
 def test_scan_all_non_holding_call_still_scanned():
-    """非 HOLDING 也扫 Call(1h+1d);Put 路径不变。不伪造 CC。"""
+    """非 HOLDING 也扫 Call(1h+1d);Put 同步扫 1h+1d。不伪造 CC。"""
     from app.core.leaps_monitor import WheelTimingMonitor
 
     captured = []
@@ -243,8 +267,12 @@ def test_scan_all_non_holding_call_still_scanned():
 
     put = [c for c in captured if c.get("option_type") == "PUT"]
     call = [c for c in captured if c.get("option_type") == "CALL"]
-    assert len(put) == 1
-    assert put[0].get("timeframe") == "1d"
+    assert len(put) == 2
+    assert sorted(c.get("timeframe") for c in put) == ["1d", "1h"]
+    assert all(
+        c.get("level_map") == {"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"}
+        for c in put
+    )
     assert len(call) == 2, "non-HOLDING Call must still be scanned"
     assert sorted(c.get("timeframe") for c in call) == ["1d", "1h"]
     # 无成本基础时用愿卖价

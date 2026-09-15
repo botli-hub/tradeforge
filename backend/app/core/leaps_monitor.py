@@ -18,6 +18,7 @@ import pandas as pd
 from app.data import leaps_repository as repo
 from app.core.wheel_expiries import pick_windowed_expiries, select_expiries  # noqa: F401
 from app.core.wheel_timing_klines import (
+    PUT_SCAN_TIMEFRAMES,
     TIMEFRAME_DAY,
     TIMEFRAME_HOUR,
     bars_on_day,
@@ -80,7 +81,7 @@ class LeapsSignal:
     theta: Optional[float] = None        # 绝对 theta(|option_theta|);缺省 None→择优按 0
     below_floor: bool = False            # 标的现价低于接货底线(软警告)
     ema_partial: bool = False            # K 线不足标准周期,EMA 为近似
-    timeframe: str = "1d"                # '1d' Put 日K | '1h' Call 小时K
+    timeframe: str = "1d"                # '1d'/'1h'；Put/Call 均按周期分桶
 
 
 def _compute_ema(series: pd.Series, period: int) -> pd.Series:
@@ -98,12 +99,13 @@ def _iv_percentile(iv_history: List[float], current_iv: float) -> float:
 class WheelTimingMonitor:
     """Wheel 开仓时机扫描 —— 核心原则:期权合约价格受长期均线压制,
     合约价触及自身均线 EMA50(一级)或 EMA200(强)即为卖出时机。
-    PUT 用日K(K_DAY / timeframe 1d)；CALL 扫 1h+1d(K_60M / K_DAY)。
+    PUT / CALL 均扫 1h+1d(K_60M / K_DAY);档案按 timeframe 分桶。
 
     卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
       - 标的现价 > 接货底线价
       - PUT 仅扫严格 OTM: strike < spot(排除 ATM/ITM;无 epsilon)
-      - PUT 合约(DTE/strike 按 wheel_timing 配置)价格触及 EMA50/EMA200
+      - PUT 合约(DTE/strike 按 wheel_timing 配置)1h/1d 均触及 EMA50/EMA200
+        (不做 Call 的 1h-only-EMA200)
     卖 Call 触线(启用标的一律扫,可不持股;有 HOLDING 时 strike 锚成本/愿卖价):
       - CALL 仅扫严格 OTM: strike > spot(排除 ATM/ITM;无 epsilon)
       - CALL 另加 strike ≥ max(cost basis, sell_above)(无持股则愿卖价或无下限)
@@ -187,38 +189,41 @@ class WheelTimingMonitor:
                 dte_lo, dte_hi = self._dte_window(t)
                 core_lo, core_hi = self._core_dte_window(t)
 
-                # 卖 Put:启用标的一律扫描(状态机支持多轮并行,是否开仓由用户决定);
-                # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过)
-                _prog(
-                    target_i=ti, target_n=n_targets, symbol=sym, side="PUT",
-                    expiry=None, contract_i=0, contract_n=0,
-                    message=f"触线 · {sym} PUT · 标的 {ti}/{n_targets}",
-                )
-                rep: Dict[str, Any] = {
-                    "symbol": sym, "side": "PUT",
-                    "dte": f"{dte_lo}-{dte_hi}",
-                    "core_dte": f"{core_lo}-{core_hi}",
-                }
-                signals.extend(self.monitor.scan_symbol(
-                    sym, t["floor_price"], is_intraday=is_intraday,
-                    option_type="PUT",
-                    dte_min=dte_lo, dte_max=dte_hi,
-                    level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
-                    iv_threshold=self.iv_threshold,
-                    respect_30d_cap=False, with_suggestions=False,
-                    report=rep,
-                    strike_range_down=self.strike_range_down,
-                    strike_range_up=self.strike_range_up,
-                    floor_hard=False,
-                    progress_cb=_prog,
-                    max_expiries=self.max_expiries,
-                    core_dte_min=core_lo, core_dte_max=core_hi,
-                    prefer_core_dte=self.prefer_core_dte,
-                    timeframe=TIMEFRAME_DAY,
-                    otm_only=True,
-                ))
-                if report is not None:
-                    report.append(rep)
+                # 卖 Put:启用标的一律扫 1h+1d(状态机支持多轮并行,是否开仓由用户决定);
+                # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过);
+                # 1h/1d 均 EMA50+EMA200 → WHEEL_PUT(不做 Call 1h-only-EMA200)
+                for put_tf in PUT_SCAN_TIMEFRAMES:
+                    _prog(
+                        target_i=ti, target_n=n_targets, symbol=sym, side="PUT",
+                        expiry=None, contract_i=0, contract_n=0,
+                        message=f"触线 · {sym} PUT {put_tf} · 标的 {ti}/{n_targets}",
+                    )
+                    rep: Dict[str, Any] = {
+                        "symbol": sym, "side": "PUT",
+                        "timeframe": put_tf,
+                        "dte": f"{dte_lo}-{dte_hi}",
+                        "core_dte": f"{core_lo}-{core_hi}",
+                    }
+                    signals.extend(self.monitor.scan_symbol(
+                        sym, t["floor_price"], is_intraday=is_intraday,
+                        option_type="PUT",
+                        dte_min=dte_lo, dte_max=dte_hi,
+                        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+                        iv_threshold=self.iv_threshold,
+                        respect_30d_cap=False, with_suggestions=False,
+                        report=rep,
+                        strike_range_down=self.strike_range_down,
+                        strike_range_up=self.strike_range_up,
+                        floor_hard=False,
+                        progress_cb=_prog,
+                        max_expiries=self.max_expiries,
+                        core_dte_min=core_lo, core_dte_max=core_hi,
+                        prefer_core_dte=self.prefer_core_dte,
+                        timeframe=put_tf,
+                        otm_only=True,
+                    ))
+                    if report is not None:
+                        report.append(rep)
 
                 # 卖 Call:启用标的一律扫 1h+1d(可不持股);有 HOLDING 时 strike 锚成本/愿卖价
                 from app.core.wheel_call_scan import scan_call_touches
@@ -610,7 +615,7 @@ class LeapsMonitor:
                     rep["iv_filtered"] += 1
                     continue
 
-                # S1: 价格触及 EMA200 / EMA50（CALL=1h 序列 / PUT=日K）
+                # S1: 价格触及 EMA200 / EMA50（CALL/PUT 按 timeframe(1h/1d)）
                 n_bars = len(closes)
                 hit = ema_touch(
                     closes, float(trigger_price),

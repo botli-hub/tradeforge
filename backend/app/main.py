@@ -28,7 +28,7 @@ async def startup():
     init_db()
     from app.core.wheel_stance import ensure_stance_column
     from app.core.wheel_call_timing import ensure_sell_above_column
-    from app.core import wheel_timing_scan_patch  # noqa: F401 — Call 1h+1d
+    from app.core import wheel_timing_scan_patch  # noqa: F401 — Put/Call 1h+1d
     ensure_stance_column()
     ensure_sell_above_column()
     scheduler = get_history_scheduler()

@@ -1,4 +1,4 @@
-"""Thin patch: WheelTimingMonitor.scan_all → Call 1h+1d + non-HOLDING.
+"""Thin patch: WheelTimingMonitor.scan_all → Put/Call 1h+1d + non-HOLDING.
 
 Import this module (or call install()) once. Prefer over rewriting leaps_monitor.py.
 不自动下单。
@@ -16,7 +16,7 @@ def install() -> None:
         return
     from app.core.leaps_monitor import WheelTimingMonitor, LeapsSignal
     from app.core.wheel_call_scan import scan_call_touches
-    from app.core.wheel_timing_klines import TIMEFRAME_DAY
+    from app.core.wheel_timing_klines import PUT_SCAN_TIMEFRAMES
     import logging
     logger = logging.getLogger("app.core.leaps_monitor")
 
@@ -49,38 +49,41 @@ def install() -> None:
                 dte_lo, dte_hi = self._dte_window(t)
                 core_lo, core_hi = self._core_dte_window(t)
 
-                # 卖 Put:启用标的一律扫描(状态机支持多轮并行,是否开仓由用户决定);
-                # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过)
-                _prog(
-                    target_i=ti, target_n=n_targets, symbol=sym, side="PUT",
-                    expiry=None, contract_i=0, contract_n=0,
-                    message=f"触线 · {sym} PUT · 标的 {ti}/{n_targets}",
-                )
-                rep: Dict[str, Any] = {
-                    "symbol": sym, "side": "PUT",
-                    "dte": f"{dte_lo}-{dte_hi}",
-                    "core_dte": f"{core_lo}-{core_hi}",
-                }
-                signals.extend(self.monitor.scan_symbol(
-                    sym, t["floor_price"], is_intraday=is_intraday,
-                    option_type="PUT",
-                    dte_min=dte_lo, dte_max=dte_hi,
-                    level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
-                    iv_threshold=self.iv_threshold,
-                    respect_30d_cap=False, with_suggestions=False,
-                    report=rep,
-                    strike_range_down=self.strike_range_down,
-                    strike_range_up=self.strike_range_up,
-                    floor_hard=False,
-                    progress_cb=_prog,
-                    max_expiries=self.max_expiries,
-                    core_dte_min=core_lo, core_dte_max=core_hi,
-                    prefer_core_dte=self.prefer_core_dte,
-                    timeframe=TIMEFRAME_DAY,
-                    otm_only=True,
-                ))
-                if report is not None:
-                    report.append(rep)
+                # 卖 Put:启用标的一律扫 1h+1d(状态机支持多轮并行,是否开仓由用户决定);
+                # 接货底线降级为软警告(信号带 below_floor 标记,不再硬性跳过);
+                # 1h/1d 均 EMA50+EMA200 → WHEEL_PUT(不做 Call 1h-only-EMA200)
+                for put_tf in PUT_SCAN_TIMEFRAMES:
+                    _prog(
+                        target_i=ti, target_n=n_targets, symbol=sym, side="PUT",
+                        expiry=None, contract_i=0, contract_n=0,
+                        message=f"触线 · {sym} PUT {put_tf} · 标的 {ti}/{n_targets}",
+                    )
+                    rep: Dict[str, Any] = {
+                        "symbol": sym, "side": "PUT",
+                        "timeframe": put_tf,
+                        "dte": f"{dte_lo}-{dte_hi}",
+                        "core_dte": f"{core_lo}-{core_hi}",
+                    }
+                    signals.extend(self.monitor.scan_symbol(
+                        sym, t["floor_price"], is_intraday=is_intraday,
+                        option_type="PUT",
+                        dte_min=dte_lo, dte_max=dte_hi,
+                        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+                        iv_threshold=self.iv_threshold,
+                        respect_30d_cap=False, with_suggestions=False,
+                        report=rep,
+                        strike_range_down=self.strike_range_down,
+                        strike_range_up=self.strike_range_up,
+                        floor_hard=False,
+                        progress_cb=_prog,
+                        max_expiries=self.max_expiries,
+                        core_dte_min=core_lo, core_dte_max=core_hi,
+                        prefer_core_dte=self.prefer_core_dte,
+                        timeframe=put_tf,
+                        otm_only=True,
+                    ))
+                    if report is not None:
+                        report.append(rep)
 
                 # Call: 启用标的一律扫 1h+1d(可不持股);持仓时 strike 锚成本;CC 挂机仍认 1h
                 signals.extend(scan_call_touches(
