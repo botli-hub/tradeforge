@@ -113,4 +113,34 @@ def get_sim_events(limit: int = 50, symbol: Optional[str] = None):
 def get_sim_config():
     cfg = get_sim_cfg(_cfg())
     # 不回传任何密钥
-    return {"sim_wheel": cfg, "label": "纸面/非实盘", "paper_only": True}
+    return {
+        "sim_wheel": cfg,
+        "chan_equity_sim": cfg.get("chan_equity_sim"),
+        "label": "纸面/非实盘",
+        "paper_only": True,
+    }
+
+
+@router.get("/equity/positions")
+def get_equity_positions(strategy: Optional[str] = None, symbol: Optional[str] = None):
+    """缠论正股纸面持仓(与 Touch Wheel CSP/CC 隔离)。"""
+    items = repo.list_equity_positions(strategy=strategy, symbol=symbol, only_open=False)
+    return {
+        "items": items,
+        "count": len(items),
+        "label": "纸面/非实盘",
+        "paper_only": True,
+        "share_pool": "isolated",
+    }
+
+
+@router.get("/equity/trades")
+def get_equity_trades(strategy: Optional[str] = None, symbol: Optional[str] = None, limit: int = 50):
+    """缠论正股纸面成交。"""
+    items = repo.list_equity_trades(strategy=strategy, symbol=symbol, limit=limit)
+    return {
+        "items": items,
+        "count": len(items),
+        "label": "纸面/非实盘",
+        "paper_only": True,
+    }

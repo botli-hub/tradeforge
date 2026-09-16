@@ -1,12 +1,16 @@
 """完整轮子纸面账 (Sim Wheel) — 独立状态机,不碰实盘台账 / FirstTrade / POSITION_QUANT.
 
 状态: IDLE → CSP_OPEN → HOLDING → CC_OPEN → IDLE/CLOSED
-信号进账: Put触线 / Call触线 / 缠论 B/S(默认 B→卖Put)
+信号进账: Put触线 / Call触线 / 缠论 B/S
 
 Touch Wheel(v1 纸面):
 - 张数按周期: 1h=1 / 1d=2(EMA 不加倍);策略键细桶 put_1h_ema50 等
 - CSP 止盈主路径=同标的 Call 触线买回对应张数;无 Call 信号不主动权利金止盈
 - 破愿接 hold_to_assign;同批 1h+1d 默认 prefer_daily;不自动 FirstTrade
+
+缠论正股(附录 A, chan_buy_mode=equity_long):
+- 5m/30m/1d B/S → ±5/±30/±100 股;策略键 chan5m/chan30m/chan1d
+- 与 CSP/CC 分账(share_pool=isolated);不允许裸空;不改 TG 缠论推送
 """
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ logger = logging.getLogger(__name__)
 STATUSES = ("IDLE", "CSP_OPEN", "HOLDING", "CC_OPEN", "CLOSED")
 # 兼容旧键;触线细桶为 put_1h_ema50 / call_1d_ema200 等
 STRATEGIES = (
-    "put_touch", "call_touch", "chan5m", "chan30m",
+    "put_touch", "call_touch", "chan5m", "chan30m", "chan1d",
     "put_1h_ema50", "put_1h_ema200", "put_1d_ema50", "put_1d_ema200",
     "call_1h_ema50", "call_1h_ema200", "call_1d_ema50", "call_1d_ema200",
 )
@@ -43,9 +47,16 @@ DEFAULT_TOUCH_WHEEL: Dict[str, Any] = {
     "allow_parallel_csp": True,
 }
 
+DEFAULT_CHAN_EQUITY: Dict[str, Any] = {
+    "share_pool": "isolated",  # v1 与 Touch Wheel CSP/CC 分账;后期可 shared
+    "qty_by_timeframe": {"5m": 5, "30m": 30, "1d": 100},
+}
+
+
 DEFAULT_SIM: Dict[str, Any] = {
     "enabled": True,
-    "chan_buy_mode": "sell_put",  # v1 不做 equity_long
+    "chan_buy_mode": "equity_long",  # 附录 A: 缠论 B/S → 纸面买卖正股(不再映射卖 Put)
+    "chan_equity_sim": dict(DEFAULT_CHAN_EQUITY),
     "call_without_shares": "skip",
     "levels": {"L1": 0.02, "L2": 0.04, "L3": 0.06},  # 仅缠论等非触线路径
     "cc_force_days": 0,  # Touch Wheel 默认关;显式 >0 才强挂
@@ -115,6 +126,15 @@ def get_sim_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             # 重新挂载 touch_wheel(不被 sim_wheel 整表冲掉)
             merged["touch_wheel"] = get_touch_wheel_cfg(cfg)
             tw = merged["touch_wheel"]
+            # chan_equity_sim 深合并
+            ce = dict(DEFAULT_CHAN_EQUITY)
+            if isinstance(overlay.get("chan_equity_sim"), dict):
+                ce.update(overlay["chan_equity_sim"])
+                if isinstance(overlay["chan_equity_sim"].get("qty_by_timeframe"), dict):
+                    q = dict(DEFAULT_CHAN_EQUITY["qty_by_timeframe"])
+                    q.update(overlay["chan_equity_sim"]["qty_by_timeframe"])
+                    ce["qty_by_timeframe"] = q
+            merged["chan_equity_sim"] = ce
             if "cc_force_days" in overlay:
                 merged["cc_force_days"] = int(overlay["cc_force_days"] or 0)
             else:
@@ -123,6 +143,18 @@ def get_sim_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 merged["call_without_shares"] = tw.get("call_without_shares", merged["call_without_shares"])
             if "put_breach_floor" not in overlay:
                 merged["put_breach_floor"] = tw.get("put_breach_floor", merged["put_breach_floor"])
+    # 顶层 chan_equity_sim 覆盖(与 touch_wheel 并列配置)
+    if cfg and isinstance(cfg.get("chan_equity_sim"), dict):
+        ce = dict(merged.get("chan_equity_sim") or DEFAULT_CHAN_EQUITY)
+        ce.update(cfg["chan_equity_sim"])
+        if isinstance(cfg["chan_equity_sim"].get("qty_by_timeframe"), dict):
+            q = dict(ce.get("qty_by_timeframe") or DEFAULT_CHAN_EQUITY["qty_by_timeframe"])
+            q.update(cfg["chan_equity_sim"]["qty_by_timeframe"])
+            ce["qty_by_timeframe"] = q
+        merged["chan_equity_sim"] = ce
+    if not isinstance(merged.get("chan_equity_sim"), dict):
+        merged["chan_equity_sim"] = dict(DEFAULT_CHAN_EQUITY)
+
     # 权益:优先 sim_wheel.equity;否则 wheel_portfolio.total_equity;否则默认
     if cfg and (not merged.get("equity") or float(merged.get("equity") or 0) <= 0):
         pe = (cfg.get("wheel_portfolio") or {}).get("total_equity")
@@ -259,15 +291,42 @@ def is_touch_alert(alert: Dict[str, Any]) -> bool:
     return cat in ("put_touch", "timing_put", "call_touch", "timing_call")
 
 
+def normalize_chan_timeframe(tf: Any) -> str:
+    """缠论级别归一到 5m / 30m / 1d。"""
+    t = str(tf or "").strip().lower()
+    if t.startswith("30") or t in ("30m", "30min", "k_30m"):
+        return "30m"
+    if t in ("1d", "d", "day", "daily", "1day", "k_1d") or "1d" in t or "day" in t:
+        return "1d"
+    if t.startswith("5") or t in ("5m", "5min", "k_5m"):
+        return "5m"
+    return "5m"
+
+
+def equity_qty_from_timeframe(
+    tf: Any,
+    qty_by_timeframe: Optional[Dict[str, Any]] = None,
+) -> int:
+    """附录 A: 5m→5 / 30m→30 / 1d→100 股。"""
+    m = qty_by_timeframe or DEFAULT_CHAN_EQUITY["qty_by_timeframe"]
+    nt = normalize_chan_timeframe(tf)
+    try:
+        q = int(m.get(nt, 0))
+    except (TypeError, ValueError):
+        q = 0
+    return max(0, q)
+
+
 def strategy_of_alert(alert: Dict[str, Any]) -> str:
-    """策略维度: 触线细桶 put_1h_ema50…; 缠论 chan5m/chan30m; 兼容旧 put_touch。"""
+    """策略维度: 触线细桶 put_1h_ema50…; 缠论 chan5m/chan30m/chan1d; 兼容旧 put_touch。"""
     cat = (alert.get("category") or alert.get("source") or "").lower()
     level = (alert.get("signal_level") or "").upper()
     tf = str(alert.get("timeframe") or "").lower()
     kind = str(alert.get("kind") or "").upper()
 
     if cat == "chan" or kind in {"B1", "B2", "B3", "S1", "S2", "S3"}:
-        return "chan30m" if tf.startswith("30") else "chan5m"
+        nt = normalize_chan_timeframe(tf)
+        return {"5m": "chan5m", "30m": "chan30m", "1d": "chan1d"}.get(nt, "chan5m")
 
     side = "call" if (
         level == "WHEEL_CALL" or cat in ("call_touch", "timing_call")
@@ -486,6 +545,11 @@ class SimWheelEngine:
 
         strategy = strategy_of_alert(alert)
         kind = str(alert.get("kind") or alert.get("signal_level") or "").upper()
+
+        # 附录 A: chan_buy_mode=equity_long → 缠论 B/S 纸面买卖正股(与 CSP/CC 分账)
+        if self._is_chan_equity_mode(alert):
+            return self._equity_long_from_alert(alert, fp, strategy, now)
+
         side = self._alert_side(alert)
 
         if side == "PUT":
@@ -497,6 +561,234 @@ class SimWheelEngine:
             fingerprint=fp, detail={"kind": kind}, created_at=_now_iso(now),
         )
         return {"ok": False, "reason": "unknown_side", "fingerprint": fp}
+
+    def _is_chan_equity_mode(self, alert: Dict[str, Any]) -> bool:
+        mode = str(self.cfg.get("chan_buy_mode") or "").strip().lower()
+        if mode != "equity_long":
+            return False
+        cat = (alert.get("category") or alert.get("source") or "").lower()
+        kind = str(alert.get("kind") or "").upper()
+        return cat == "chan" or kind in {"B1", "B2", "B3", "S1", "S2", "S3"}
+
+    def _chan_equity_cfg(self) -> Dict[str, Any]:
+        ce = self.cfg.get("chan_equity_sim")
+        return ce if isinstance(ce, dict) else dict(DEFAULT_CHAN_EQUITY)
+
+    def _equity_fill_price(self, alert: Dict[str, Any]) -> float:
+        return _f(
+            alert.get("underlying_price")
+            or alert.get("price")
+            or alert.get("spot")
+            or alert.get("trigger_price"),
+            0.0,
+        )
+
+    def _equity_long_from_alert(
+        self,
+        alert: Dict[str, Any],
+        fp: str,
+        strategy: str,
+        now: datetime,
+    ) -> Dict[str, Any]:
+        """缠论 B→买正股 / S→卖正股;不允许裸空;与 Touch Wheel 分账。"""
+        symbol = str(alert.get("symbol") or "").strip().upper()
+        kind = str(alert.get("kind") or "").upper()
+        spot = self._equity_fill_price(alert)
+        ce = self._chan_equity_cfg()
+        signal_qty = equity_qty_from_timeframe(
+            alert.get("timeframe"),
+            ce.get("qty_by_timeframe"),
+        )
+        iso = _now_iso(now)
+
+        if spot <= 0:
+            self.repo.add_event(
+                cycle_id=None, symbol=symbol, event_type="skipped_no_price",
+                fingerprint=fp, detail={"kind": kind}, created_at=iso,
+            )
+            return {"ok": False, "reason": "no_price", "fingerprint": fp}
+
+        if signal_qty <= 0:
+            self.repo.add_event(
+                cycle_id=None, symbol=symbol, event_type="ignored_unknown",
+                fingerprint=fp, detail={"kind": kind, "qty": signal_qty}, created_at=iso,
+            )
+            return {"ok": False, "reason": "no_qty", "fingerprint": fp}
+
+        if kind.startswith("B"):
+            return self._equity_buy(
+                symbol=symbol, strategy=strategy, qty=float(signal_qty),
+                price=spot, fingerprint=fp, kind=kind, now=now, alert=alert,
+            )
+        if kind.startswith("S"):
+            return self._equity_sell(
+                symbol=symbol, strategy=strategy, signal_qty=float(signal_qty),
+                price=spot, fingerprint=fp, kind=kind, now=now, alert=alert,
+            )
+        self.repo.add_event(
+            cycle_id=None, symbol=symbol, event_type="ignored_unknown",
+            fingerprint=fp, detail={"kind": kind}, created_at=iso,
+        )
+        return {"ok": False, "reason": "unknown_side", "fingerprint": fp}
+
+    def _equity_buy(
+        self,
+        *,
+        symbol: str,
+        strategy: str,
+        qty: float,
+        price: float,
+        fingerprint: str,
+        kind: str,
+        now: datetime,
+        alert: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        iso = _now_iso(now)
+        pos = self.repo.get_equity_position(strategy, symbol) or {
+            "strategy": strategy, "symbol": symbol,
+            "shares": 0.0, "avg_cost": 0.0, "realized_pnl": 0.0,
+        }
+        old_shares = _f(pos.get("shares"), 0)
+        old_avg = _f(pos.get("avg_cost"), 0)
+        new_shares = old_shares + qty
+        new_avg = (
+            ((old_shares * old_avg) + (qty * price)) / new_shares
+            if new_shares > 0 else 0.0
+        )
+        self.repo.upsert_equity_position({
+            "strategy": strategy,
+            "symbol": symbol,
+            "shares": new_shares,
+            "avg_cost": new_avg,
+            "realized_pnl": _f(pos.get("realized_pnl"), 0),
+            "updated_at": iso,
+        })
+        trade_id = str(uuid.uuid4())
+        self.repo.insert_equity_trade({
+            "id": trade_id,
+            "strategy": strategy,
+            "symbol": symbol,
+            "side": "BUY",
+            "qty": qty,
+            "price": price,
+            "fingerprint": fingerprint,
+            "note": kind,
+            "realized_pnl": None,
+            "created_at": iso,
+        })
+        self.repo.add_event(
+            cycle_id=None, symbol=symbol, event_type="equity_buy",
+            fingerprint=fingerprint,
+            detail={
+                "strategy": strategy, "kind": kind, "qty": qty, "price": price,
+                "shares_after": new_shares, "avg_cost": new_avg,
+                "share_pool": (self._chan_equity_cfg().get("share_pool") or "isolated"),
+                "trade_id": trade_id,
+            },
+            created_at=iso,
+        )
+        return {
+            "ok": True,
+            "action": "equity_buy",
+            "fingerprint": fingerprint,
+            "strategy": strategy,
+            "symbol": symbol,
+            "qty": qty,
+            "price": price,
+            "shares": new_shares,
+            "avg_cost": new_avg,
+            "trade_id": trade_id,
+        }
+
+    def _equity_sell(
+        self,
+        *,
+        symbol: str,
+        strategy: str,
+        signal_qty: float,
+        price: float,
+        fingerprint: str,
+        kind: str,
+        now: datetime,
+        alert: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        iso = _now_iso(now)
+        pos = self.repo.get_equity_position(strategy, symbol)
+        held = _f((pos or {}).get("shares"), 0)
+        if held <= 0:
+            self.repo.add_event(
+                cycle_id=None, symbol=symbol, event_type="skipped_no_shares",
+                fingerprint=fingerprint,
+                detail={
+                    "strategy": strategy, "kind": kind,
+                    "signal_qty": signal_qty, "mode": "equity_long",
+                },
+                created_at=iso,
+            )
+            return {
+                "ok": False,
+                "reason": "skipped_no_shares",
+                "fingerprint": fingerprint,
+                "strategy": strategy,
+                "symbol": symbol,
+            }
+
+        sell_qty = min(signal_qty, held)
+        partial = sell_qty < signal_qty
+        avg_cost = _f((pos or {}).get("avg_cost"), 0)
+        pnl = (price - avg_cost) * sell_qty
+        new_shares = held - sell_qty
+        realized = _f((pos or {}).get("realized_pnl"), 0) + pnl
+        self.repo.upsert_equity_position({
+            "strategy": strategy,
+            "symbol": symbol,
+            "shares": new_shares,
+            "avg_cost": avg_cost if new_shares > 0 else 0.0,
+            "realized_pnl": realized,
+            "updated_at": iso,
+        })
+        trade_id = str(uuid.uuid4())
+        note = f"{kind}|partial_exit" if partial else kind
+        self.repo.insert_equity_trade({
+            "id": trade_id,
+            "strategy": strategy,
+            "symbol": symbol,
+            "side": "SELL",
+            "qty": sell_qty,
+            "price": price,
+            "fingerprint": fingerprint,
+            "note": note,
+            "realized_pnl": pnl,
+            "created_at": iso,
+        })
+        ev = "partial_exit" if partial else "equity_sell"
+        self.repo.add_event(
+            cycle_id=None, symbol=symbol, event_type=ev,
+            fingerprint=fingerprint,
+            detail={
+                "strategy": strategy, "kind": kind,
+                "signal_qty": signal_qty, "qty": sell_qty, "price": price,
+                "shares_after": new_shares, "realized_pnl": pnl,
+                "partial": partial,
+                "share_pool": (self._chan_equity_cfg().get("share_pool") or "isolated"),
+                "trade_id": trade_id,
+            },
+            created_at=iso,
+        )
+        return {
+            "ok": True,
+            "action": ev,
+            "fingerprint": fingerprint,
+            "strategy": strategy,
+            "symbol": symbol,
+            "qty": sell_qty,
+            "signal_qty": signal_qty,
+            "price": price,
+            "shares": new_shares,
+            "realized_pnl": pnl,
+            "partial": partial,
+            "trade_id": trade_id,
+        }
 
     def _alert_side(self, alert: Dict[str, Any]) -> Optional[str]:
         level = (alert.get("signal_level") or "").upper()
