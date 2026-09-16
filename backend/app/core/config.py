@@ -48,6 +48,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "iv_percentile_threshold": 70,
         "ema50_min_bars": 60,
         "ema200_min_bars": 210,
+        # 自然日历日(与 wheel_timing.cooldown_trading_days 同语义，不再 ×1.4)
         "contract_cooldown_trading_days": 5,
         "per_symbol_max_30d": 10,
         "intraday_use_last_price": True,
@@ -61,7 +62,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "wheel_timing": {
         "dte_min": 10, "dte_max": 55, "contract_max_per_symbol": 0,
-        "iv_percentile_threshold": 0, "cooldown_trading_days": 1,
+        "iv_percentile_threshold": 0,
+        # 合约冷却：自然日历日(fill 1 → 1 天)，不再按交易日 ×1.4
+        "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
         # 仅美股 RTH 自动扫(周末/盘外不推 TG);手动 POST /wheel-scan 仍可 force
         "session_only": True,
@@ -80,7 +83,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "ema200_min_bars": 120,
         # 根数 < 标准周期但仍 ≥ ema*_min 时仍算 EMA,信号带 ema_partial
         "allow_partial_ema": True,
-        # Call 1h 触线只推这些 EMA(默认仅 EMA200 强信号);日线仍 EMA50+EMA200
+        # Call 1h 触线 EMA 列表(DEFAULT 仅 EMA200);运行时 config 驱动，
+        # 席位可设 ["EMA50","EMA200"] 恢复双线。日线仍 EMA50+EMA200；不影响 Put。
         "call_1h_ema_types": ["EMA200"],
     },
     "wheel_position": {

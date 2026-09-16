@@ -120,6 +120,65 @@ def test_call_level_map_1h_only_ema200_daily_both():
     ) == {"EMA200": "WHEEL_CALL"}
 
 
+def test_scan_call_touches_honors_call_1h_ema_types_from_monitor_cfg():
+    """scan_call_touches 从 monitor.cfg.wheel_timing 读 call_1h_ema_types 构造 level_map。"""
+    from unittest.mock import MagicMock, patch
+    from app.core.wheel_call_scan import scan_call_touches
+
+    captured = []
+
+    def fake_scan_symbol(*args, **kwargs):
+        captured.append(kwargs.get("level_map"))
+        return []
+
+    monitor = MagicMock()
+    monitor.cfg = {
+        "wheel_timing": {"call_1h_ema_types": ["EMA50", "EMA200"]},
+    }
+    monitor.scan_symbol.side_effect = fake_scan_symbol
+
+    with patch(
+        "app.core.wheel_call_scan.CALL_SCAN_TIMEFRAMES", ("1h",),
+    ), patch(
+        "app.core.wheel_call_scan.call_holding_cycles", return_value=[],
+    ), patch(
+        "app.core.wheel_call_scan.call_cost_basis_for_scan", return_value=None,
+    ), patch(
+        "app.core.wheel_call_scan.call_strike_min", return_value=None,
+    ):
+        scan_call_touches(
+            monitor=monitor, symbol="SPY", target={}, cycles=[],
+            is_intraday=True, dte_lo=10, dte_hi=45,
+            core_lo=21, core_hi=35, iv_threshold=0,
+            strike_range_down=0.2, strike_range_up=0.1,
+            max_expiries=3, prefer_core_dte=True,
+        )
+
+    assert len(captured) == 1
+    assert captured[0] == {"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"}
+
+    # 仅 EMA200
+    captured.clear()
+    monitor.cfg = {"wheel_timing": {"call_1h_ema_types": ["EMA200"]}}
+    with patch(
+        "app.core.wheel_call_scan.CALL_SCAN_TIMEFRAMES", ("1h",),
+    ), patch(
+        "app.core.wheel_call_scan.call_holding_cycles", return_value=[],
+    ), patch(
+        "app.core.wheel_call_scan.call_cost_basis_for_scan", return_value=None,
+    ), patch(
+        "app.core.wheel_call_scan.call_strike_min", return_value=None,
+    ):
+        scan_call_touches(
+            monitor=monitor, symbol="SPY", target={}, cycles=[],
+            is_intraday=True, dte_lo=10, dte_hi=45,
+            core_lo=21, core_hi=35, iv_threshold=0,
+            strike_range_down=0.2, strike_range_up=0.1,
+            max_expiries=3, prefer_core_dte=True,
+        )
+    assert captured[0] == {"EMA200": "WHEEL_CALL"}
+
+
 def test_put_scan_timeframes_and_ema_both_on_1h():
     """Put 扫描 1h+1d;1h 仍 EMA50+EMA200(与 Call 1h 仅 EMA200 对照)。"""
     assert PUT_SCAN_TIMEFRAMES == (TIMEFRAME_HOUR, TIMEFRAME_DAY)
