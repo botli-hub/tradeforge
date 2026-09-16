@@ -5,6 +5,7 @@ pydantic==2.10.6
 numpy==2.2.4
 pandas==2.2.3
 futu-api==10.0.6008
+protobuf==3.20.3  # pin for futu-api 10.0.6008 _pb2 (avoid protobuf 4+/7+ break)
 pyyaml==6.0.2
 httpx==0.28.1
 google-api-python-client==2.160.0
