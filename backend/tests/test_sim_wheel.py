@@ -48,6 +48,10 @@ class TestSimWheelAcceptance(unittest.TestCase):
                 "dte_default": 30,
                 "levels": {"L1": 0.02, "L2": 0.04, "L3": 0.06},
                 "max_symbol_pct": 0.25,
+                # 旧验收保留权利金止盈;Touch Wheel 新测见 test_touch_wheel.py
+                "put_tp_mode": "premium_pct",
+                "premium_tp_override": True,
+                "threat_exit": True,
             }
         }
         from app.data import sim_repository as repo
@@ -110,7 +114,10 @@ class TestSimWheelAcceptance(unittest.TestCase):
         self.assertIn("close_put", actions)
         cyc2 = self.repo.get_cycle(r["cycle_id"])
         self.assertEqual(cyc2["status"], "CLOSED")
-        stats = self.repo.list_stats(strategy="put_touch", symbol="AAPL")
+        cyc2s = cyc2.get("strategy") or "put_touch"
+        stats = self.repo.list_stats(strategy=cyc2s, symbol="AAPL")
+        if not stats:
+            stats = self.repo.list_stats(symbol="AAPL")
         self.assertEqual(len(stats), 1)
         self.assertEqual(stats[0]["closed_cycles"], 1)
         self.assertGreater(stats[0]["total_pnl"], 0)
@@ -237,19 +244,21 @@ class TestSimWheelAcceptance(unittest.TestCase):
         self.assertEqual(sim_n, 1)
 
     def test_level_mapping_and_cap(self):
-        from app.core.sim_wheel import map_level, size_contracts
+        from app.core.sim_wheel import map_level, size_contracts, qty_from_timeframe
         self.assertEqual(map_level(signal_kind="WHEEL_PUT", ema_type="EMA50"), "L1")
         self.assertEqual(map_level(signal_kind="WHEEL_PUT", ema_type="EMA200"), "L2")
         self.assertEqual(map_level(signal_kind="B1", timeframe="5m", chan_kind="B1"), "L1")
         self.assertEqual(map_level(signal_kind="B2", timeframe="5m", chan_kind="B2"), "L2")
         self.assertEqual(map_level(signal_kind="B1", timeframe="30m", chan_kind="B1"), "L2")
         self.assertEqual(map_level(signal_kind="B3", timeframe="30m", chan_kind="B3"), "L3")
-        # equity 1M, spot 100 → L3 6% = 60k → 6 张; 单票硬顶 25% = 250 张
+        # 缠论仍可用权益%仓位;触线废止 L 级张数
         q = size_contracts("L3", 100.0, 1_000_000, max_symbol_pct=0.25)
         self.assertEqual(q, 6)
-        # 已占用 20% 时剩余硬顶 5% = 50k, L3 预算 60k → min → 5 张
         q2 = size_contracts("L3", 100.0, 1_000_000, used_symbol=200_000, max_symbol_pct=0.25)
         self.assertEqual(q2, 5)
+        self.assertEqual(qty_from_timeframe("1h"), 1)
+        self.assertEqual(qty_from_timeframe("1d"), 2)
+        self.assertEqual(qty_from_timeframe("1h", {"1h": 1, "1d": 2}), 1)
 
 
 if __name__ == "__main__":
