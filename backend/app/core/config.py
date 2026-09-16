@@ -216,7 +216,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "chan_buy_mode": "sell_put",
         "call_without_shares": "skip",
         "levels": {"L1": 0.02, "L2": 0.04, "L3": 0.06},
-        "cc_force_days": 5,
+        "cc_force_days": 0,  # touch_wheel 主路径;可显式打开
         "put_breach_floor": "hold_to_assign",
         "roll": "tag_only",
         "max_symbol_pct": 0.25,
@@ -228,6 +228,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "hard_roll_dte": 21,
         "threat_otm_buffer_pct": 5.0,
         "tg_summary": True,
+    },
+    # 触线四级完整轮子(Touch Wheel);纸面 Sim + 席位指令共用口径;不自动 FirstTrade
+    "touch_wheel": {
+        "qty_by_timeframe": {"1h": 1, "1d": 2},
+        "ema_does_not_scale_qty": True,
+        "same_batch_1h_1d": "prefer_daily",  # prefer_daily | stack
+        "put_breach_floor": "hold_to_assign",
+        "call_without_shares": "skip",
+        # 止盈:Call 触线平 Put;无信号则持有
+        "put_tp_mode": "call_touch",  # call_touch | premium_pct | both
+        "premium_tp_override": False,
+        "threat_exit": False,
+        "put_touch_closes_call": True,  # CC 期间 Put 触线则平对应张数 Call
+        "cc_force_days": 0,  # 0=关;主路径靠触线
+        "cooldown_calendar_days": 1,
+        "max_open_csp_per_symbol": 0,  # 0=不限并行轮
+        "allow_parallel_csp": True,
     },
     # Notion 私有草稿板同步(SQLite → 持仓/触线/Sim);token 勿提交 git
     # smile 板: page 3d271fa5-… / 持仓 c99ca82a-… / 触线 a3704582-… / Sim 5539f0fe-…

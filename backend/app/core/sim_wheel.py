@@ -2,7 +2,11 @@
 
 状态: IDLE → CSP_OPEN → HOLDING → CC_OPEN → IDLE/CLOSED
 信号进账: Put触线 / Call触线 / 缠论 B/S(默认 B→卖Put)
-v1: put_breach_floor=hold_to_assign; roll 只打 would_roll; 无持股 Call → skip.
+
+Touch Wheel(v1 纸面):
+- 张数按周期: 1h=1 / 1d=2(EMA 不加倍);策略键细桶 put_1h_ema50 等
+- CSP 止盈主路径=同标的 Call 触线买回对应张数;无 Call 信号不主动权利金止盈
+- 破愿接 hold_to_assign;同批 1h+1d 默认 prefer_daily;不自动 FirstTrade
 """
 from __future__ import annotations
 
@@ -16,33 +20,90 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 logger = logging.getLogger(__name__)
 
 STATUSES = ("IDLE", "CSP_OPEN", "HOLDING", "CC_OPEN", "CLOSED")
-STRATEGIES = ("put_touch", "call_touch", "chan5m", "chan30m")
+# 兼容旧键;触线细桶为 put_1h_ema50 / call_1d_ema200 等
+STRATEGIES = (
+    "put_touch", "call_touch", "chan5m", "chan30m",
+    "put_1h_ema50", "put_1h_ema200", "put_1d_ema50", "put_1d_ema200",
+    "call_1h_ema50", "call_1h_ema200", "call_1d_ema50", "call_1d_ema200",
+)
+
+DEFAULT_TOUCH_WHEEL: Dict[str, Any] = {
+    "qty_by_timeframe": {"1h": 1, "1d": 2},
+    "ema_does_not_scale_qty": True,
+    "same_batch_1h_1d": "prefer_daily",
+    "put_breach_floor": "hold_to_assign",
+    "call_without_shares": "skip",
+    "put_tp_mode": "call_touch",
+    "premium_tp_override": False,
+    "threat_exit": False,
+    "put_touch_closes_call": True,
+    "cc_force_days": 0,
+    "cooldown_calendar_days": 1,
+    "max_open_csp_per_symbol": 0,
+    "allow_parallel_csp": True,
+}
 
 DEFAULT_SIM: Dict[str, Any] = {
     "enabled": True,
     "chan_buy_mode": "sell_put",  # v1 不做 equity_long
     "call_without_shares": "skip",
-    "levels": {"L1": 0.02, "L2": 0.04, "L3": 0.06},
-    "cc_force_days": 5,
+    "levels": {"L1": 0.02, "L2": 0.04, "L3": 0.06},  # 仅缠论等非触线路径
+    "cc_force_days": 0,  # Touch Wheel 默认关;显式 >0 才强挂
     "put_breach_floor": "hold_to_assign",
     "roll": "tag_only",
-    "max_symbol_pct": 0.25,
+    "max_symbol_pct": 0.25,  # 缠论路径;触线不按单票 25% 硬顶
     "max_portfolio_pct": 0.80,
     "equity": 100_000.0,  # 纸面权益兜底;可被 cfg 覆盖
     "contract_size": 100,
     "dte_default": 30,
-    # 纸面止盈 — 读 sim 配置,绝不改 wheel_position / POSITION_QUANT
+    # 纸面权利金止盈 — 仅 premium_tp_override / put_tp_mode 含 premium 时启用
     "hard_profit_pct": 42.0,
     "soft_profit_pct": 28.0,
     "min_remaining_ann": 12.0,
     "hard_roll_dte": 21,
     "threat_otm_buffer_pct": 5.0,
     "tg_summary": True,
+    "touch_wheel": dict(DEFAULT_TOUCH_WHEEL),
 }
+
+
+def get_touch_wheel_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    tw = dict(DEFAULT_TOUCH_WHEEL)
+    if not cfg:
+        return tw
+    overlay = cfg.get("touch_wheel") if isinstance(cfg, dict) else None
+    if isinstance(overlay, dict):
+        tw.update(overlay)
+        if isinstance(overlay.get("qty_by_timeframe"), dict):
+            q = dict(DEFAULT_TOUCH_WHEEL["qty_by_timeframe"])
+            q.update(overlay["qty_by_timeframe"])
+            tw["qty_by_timeframe"] = q
+    # 允许 sim_wheel 覆盖同名键(测试便利)
+    sim = cfg.get("sim_wheel") if isinstance(cfg, dict) else None
+    if isinstance(sim, dict):
+        for k in (
+            "put_tp_mode", "premium_tp_override", "threat_exit",
+            "put_touch_closes_call", "same_batch_1h_1d", "call_without_shares",
+            "put_breach_floor", "cc_force_days", "allow_parallel_csp",
+            "max_open_csp_per_symbol",
+        ):
+            if k in sim:
+                tw[k] = sim[k]
+        if isinstance(sim.get("qty_by_timeframe"), dict):
+            q = dict(tw["qty_by_timeframe"])
+            q.update(sim["qty_by_timeframe"])
+            tw["qty_by_timeframe"] = q
+    return tw
 
 
 def get_sim_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     merged = dict(DEFAULT_SIM)
+    tw = get_touch_wheel_cfg(cfg)
+    merged["touch_wheel"] = tw
+    # 触线口径同步到顶层(引擎读写便利)
+    merged["call_without_shares"] = tw.get("call_without_shares", merged["call_without_shares"])
+    merged["put_breach_floor"] = tw.get("put_breach_floor", merged["put_breach_floor"])
+    merged["cc_force_days"] = int(tw.get("cc_force_days", merged["cc_force_days"]) or 0)
     if cfg:
         overlay = cfg.get("sim_wheel") or {}
         if isinstance(overlay, dict):
@@ -51,6 +112,17 @@ def get_sim_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 levels = dict(DEFAULT_SIM["levels"])
                 levels.update(overlay["levels"])
                 merged["levels"] = levels
+            # 重新挂载 touch_wheel(不被 sim_wheel 整表冲掉)
+            merged["touch_wheel"] = get_touch_wheel_cfg(cfg)
+            tw = merged["touch_wheel"]
+            if "cc_force_days" in overlay:
+                merged["cc_force_days"] = int(overlay["cc_force_days"] or 0)
+            else:
+                merged["cc_force_days"] = int(tw.get("cc_force_days") or 0)
+            if "call_without_shares" not in overlay:
+                merged["call_without_shares"] = tw.get("call_without_shares", merged["call_without_shares"])
+            if "put_breach_floor" not in overlay:
+                merged["put_breach_floor"] = tw.get("put_breach_floor", merged["put_breach_floor"])
     # 权益:优先 sim_wheel.equity;否则 wheel_portfolio.total_equity;否则默认
     if cfg and (not merged.get("equity") or float(merged.get("equity") or 0) <= 0):
         pe = (cfg.get("wheel_portfolio") or {}).get("total_equity")
@@ -140,8 +212,55 @@ def map_level(
     return "L1"
 
 
+def normalize_timeframe(tf: Any) -> str:
+    """归一到 1h / 1d(触线张数键)。未知偏保守按 1h。"""
+    t = str(tf or "").strip().lower()
+    if t in ("1h", "60m", "60min", "hour", "hourly", "k_1h"):
+        return "1h"
+    if t in ("1d", "d", "day", "daily", "1day", "k_1d"):
+        return "1d"
+    if "1h" in t or t.startswith("60"):
+        return "1h"
+    if "1d" in t or "day" in t:
+        return "1d"
+    return "1h"
+
+
+def normalize_ema(ema: Any) -> str:
+    e = str(ema or "").strip().upper().replace(" ", "")
+    if e in ("EMA200", "200", "E200"):
+        return "ema200"
+    return "ema50"
+
+
+def qty_from_timeframe(
+    tf: Any,
+    qty_by_timeframe: Optional[Dict[str, Any]] = None,
+) -> int:
+    """触线张数只跟周期: 1h→1, 1d→2。EMA 不加倍。"""
+    m = qty_by_timeframe or DEFAULT_TOUCH_WHEEL["qty_by_timeframe"]
+    nt = normalize_timeframe(tf)
+    try:
+        q = int(m.get(nt, m.get("1h", 1)))
+    except (TypeError, ValueError):
+        q = 1
+    return max(0, q)
+
+
+def is_touch_alert(alert: Dict[str, Any]) -> bool:
+    """触线(非缠论)信号。"""
+    cat = (alert.get("category") or alert.get("source") or "").lower()
+    kind = str(alert.get("kind") or "").upper()
+    level = str(alert.get("signal_level") or "").upper()
+    if cat == "chan" or kind in {"B1", "B2", "B3", "S1", "S2", "S3"}:
+        return False
+    if level in ("WHEEL_PUT", "WHEEL_CALL", "PUT_TOUCH", "CALL_TOUCH"):
+        return True
+    return cat in ("put_touch", "timing_put", "call_touch", "timing_call")
+
+
 def strategy_of_alert(alert: Dict[str, Any]) -> str:
-    """策略维度: put_touch / call_touch / chan5m / chan30m。"""
+    """策略维度: 触线细桶 put_1h_ema50…; 缠论 chan5m/chan30m; 兼容旧 put_touch。"""
     cat = (alert.get("category") or alert.get("source") or "").lower()
     level = (alert.get("signal_level") or "").upper()
     tf = str(alert.get("timeframe") or "").lower()
@@ -149,9 +268,91 @@ def strategy_of_alert(alert: Dict[str, Any]) -> str:
 
     if cat == "chan" or kind in {"B1", "B2", "B3", "S1", "S2", "S3"}:
         return "chan30m" if tf.startswith("30") else "chan5m"
-    if level == "WHEEL_CALL" or cat in ("call_touch", "timing_call"):
-        return "call_touch"
-    return "put_touch"
+
+    side = "call" if (
+        level == "WHEEL_CALL" or cat in ("call_touch", "timing_call")
+        or str(alert.get("side") or "").upper() in ("CALL", "C")
+    ) else "put"
+    # 无周期/EMA 时退回笼统键(兼容旧测试)
+    raw_tf = alert.get("timeframe")
+    raw_ema = alert.get("ema_type")
+    if raw_tf or raw_ema:
+        return f"{side}_{normalize_timeframe(raw_tf)}_{normalize_ema(raw_ema)}"
+    return "call_touch" if side == "call" else "put_touch"
+
+
+def resolve_same_batch_1h_1d(
+    signals: Sequence[Any],
+    *,
+    mode: str = "prefer_daily",
+) -> Tuple[List[Any], List[Dict[str, Any]]]:
+    """同标的同侧同批 1h+1d: 默认只留日线(张数=2),1h 记 shadow_superseded_by_1d。
+
+    输入宜已按 (symbol,side[,tf]) 择优。返回 (keepers, shadow_events)。
+    mode=stack 则两周期都保留(各自张数,不叠成单笔 3 张)。
+    """
+    # 本地归一 timeframe / group key
+    def _tf_of(sig: Any) -> str:
+        if isinstance(sig, dict):
+            return normalize_timeframe(sig.get("timeframe"))
+        return normalize_timeframe(getattr(sig, "timeframe", None))
+
+    def _gk(sig: Any) -> Tuple[str, str]:
+        if isinstance(sig, dict):
+            sym = str(sig.get("symbol") or "").upper()
+            side = str(sig.get("side") or sig.get("signal_level") or "").upper()
+            if "CALL" in side:
+                side = "CALL"
+            elif "PUT" in side:
+                side = "PUT"
+            else:
+                from app.core.touch_best import signal_side
+                side = signal_side(sig)
+            return sym, side
+        from app.core.touch_best import group_key as gk
+        return gk(sig)
+
+    mode_l = (mode or "prefer_daily").strip().lower()
+    if mode_l in ("stack", "stack_intraday_and_daily", "both"):
+        return list(signals or []), []
+
+    # prefer_daily: 同 (symbol,side) 若有 1d 则丢弃 1h
+    by_group: Dict[Tuple[str, str], Dict[str, List[Any]]] = {}
+    order: List[Tuple[str, str]] = []
+    for sig in signals or []:
+        key = _gk(sig)
+        if not key[0]:
+            continue
+        if key not in by_group:
+            by_group[key] = {"1h": [], "1d": [], "other": []}
+            order.append(key)
+        nt = _tf_of(sig)
+        if nt == "1d":
+            by_group[key]["1d"].append(sig)
+        elif nt == "1h":
+            by_group[key]["1h"].append(sig)
+        else:
+            by_group[key]["other"].append(sig)
+
+    keepers: List[Any] = []
+    shadows: List[Dict[str, Any]] = []
+    for key in order:
+        buckets = by_group[key]
+        if buckets["1d"] and buckets["1h"]:
+            keepers.extend(buckets["1d"])
+            keepers.extend(buckets["other"])
+            for s in buckets["1h"]:
+                shadows.append({
+                    "signal": s,
+                    "reason": "shadow_superseded_by_1d",
+                    "symbol": key[0],
+                    "side": key[1],
+                })
+        else:
+            keepers.extend(buckets["1d"])
+            keepers.extend(buckets["1h"])
+            keepers.extend(buckets["other"])
+    return keepers, shadows
 
 
 def alert_fingerprint(alert: Dict[str, Any]) -> str:
@@ -313,27 +514,171 @@ class SimWheelEngine:
             return "CALL"
         return None
 
+    def _touch_cfg(self) -> Dict[str, Any]:
+        tw = self.cfg.get("touch_wheel")
+        return tw if isinstance(tw, dict) else dict(DEFAULT_TOUCH_WHEEL)
+
+    def _signal_qty(self, alert: Dict[str, Any], strategy: str) -> int:
+        """触线 → qty_from_timeframe; 缠论仍走 L1/L2/L3 size_contracts。"""
+        if is_touch_alert(alert) or strategy.startswith(("put_1", "call_1", "put_touch", "call_touch")):
+            return qty_from_timeframe(
+                alert.get("timeframe"),
+                (self._touch_cfg().get("qty_by_timeframe") or DEFAULT_TOUCH_WHEEL["qty_by_timeframe"]),
+            )
+        return -1  # 哨兵:调用方走 size_contracts
+
+    def _list_csp_open(self, symbol: str) -> List[Dict[str, Any]]:
+        rows = self.repo.list_cycles(symbol=symbol, include_closed=False) or []
+        return [c for c in rows if c.get("status") == "CSP_OPEN"]
+
+    def _list_cc_open(self, symbol: str) -> List[Dict[str, Any]]:
+        rows = self.repo.list_cycles(symbol=symbol, include_closed=False) or []
+        return [c for c in rows if c.get("status") == "CC_OPEN"]
+
+    def _holding_cycle(self, symbol: str) -> Optional[Dict[str, Any]]:
+        rows = self.repo.list_cycles(symbol=symbol, include_closed=False) or []
+        for st in ("HOLDING", "CC_OPEN"):
+            for c in rows:
+                if c.get("status") == st and _f(c.get("shares"), 0) > 0:
+                    return c
+        return None
+
+    def _uncovered_shares(self, symbol: str) -> float:
+        rows = self.repo.list_cycles(symbol=symbol, include_closed=False) or []
+        size = int(self.cfg.get("contract_size") or 100)
+        shares = 0.0
+        covered = 0.0
+        for c in rows:
+            if c.get("status") in ("HOLDING", "CC_OPEN"):
+                shares += _f(c.get("shares"), 0)
+            if c.get("status") == "CC_OPEN":
+                covered += _f(c.get("open_qty"), 0) * size
+        return max(0.0, shares - covered)
+
+    def _csp_close_sort_key(self, c: Dict[str, Any], as_of: Optional[date] = None):
+        """多腿买回顺序: DTE 更短 → strike 更高 → 开仓更早。"""
+        as_of = as_of or date.today()
+        exp = _parse_day(c.get("open_expiry"))
+        dte = (exp - as_of).days if exp else 10**9
+        strike = _f(c.get("open_strike"), 0)
+        started = str(c.get("started_at") or "")
+        return (dte, -strike, started)
+
+    def _put_mark_for_close(self, alert: Dict[str, Any], c: Dict[str, Any]) -> float:
+        mark = _f(alert.get("put_close_mark") or alert.get("close_mark"), 0)
+        if mark > 0:
+            return mark
+        # 纸面:按开仓权利金一定比例估算买回(不表示真实市价)
+        return max(0.05, _f(c.get("open_price"), 0.5) * 0.4)
+
+    def _buyback_puts(
+        self,
+        symbol: str,
+        qty: int,
+        *,
+        now: datetime,
+        reason: str,
+        alert: Optional[Dict[str, Any]] = None,
+        fingerprint: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """按优先级买回该标的开仓 Put 共 qty 张。"""
+        alert = alert or {}
+        want = max(0, int(qty))
+        if want <= 0:
+            return []
+        cycles = sorted(self._list_csp_open(symbol), key=lambda c: self._csp_close_sort_key(c, now.date()))
+        out: List[Dict[str, Any]] = []
+        left = want
+        for c in cycles:
+            if left <= 0:
+                break
+            open_qty = int(_f(c.get("open_qty"), 0))
+            if open_qty <= 0:
+                continue
+            take = min(left, open_qty)
+            mark = self._put_mark_for_close(alert, c)
+            out.append(self._close_put(c, mark, now, reason=reason, close_qty=take, fingerprint=fingerprint))
+            left -= take
+        return out
+
+    def _buyback_calls(
+        self,
+        symbol: str,
+        qty: int,
+        *,
+        now: datetime,
+        reason: str,
+        alert: Optional[Dict[str, Any]] = None,
+        fingerprint: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        alert = alert or {}
+        want = max(0, int(qty))
+        if want <= 0:
+            return []
+        cycles = self._list_cc_open(symbol)
+        out: List[Dict[str, Any]] = []
+        left = want
+        for c in cycles:
+            if left <= 0:
+                break
+            open_qty = int(_f(c.get("open_qty"), 0))
+            if open_qty <= 0:
+                continue
+            take = min(left, open_qty)
+            mark = _f(alert.get("call_close_mark") or alert.get("close_mark"), 0)
+            if mark <= 0:
+                mark = max(0.05, _f(c.get("open_price"), 0.5) * 0.4)
+            out.append(self._close_call(c, mark, now, reason=reason, close_qty=take, fingerprint=fingerprint))
+            left -= take
+        return out
+
     def _open_csp_from_alert(
         self, alert: Dict[str, Any], fp: str, strategy: str, now: datetime,
     ) -> Dict[str, Any]:
         symbol = str(alert["symbol"]).strip().upper()
-        # 同策略×标的已有 CSP_OPEN → 忽略
-        open_csp = self.repo.find_open_cycle(symbol, strategy, status="CSP_OPEN")
-        if open_csp:
-            self.repo.add_event(
-                cycle_id=open_csp["id"], symbol=symbol, event_type="ignored_stacked",
-                fingerprint=fp, detail={"status": "CSP_OPEN"}, created_at=_now_iso(now),
-            )
-            return {"ok": False, "reason": "already_csp_open", "fingerprint": fp}
+        tw = self._touch_cfg()
 
-        # 同标的 HOLDING/CC_OPEN 时不再开新 Put
-        holding = self.repo.find_symbol_active(symbol, statuses=("HOLDING", "CC_OPEN", "CSP_OPEN"))
-        if holding:
-            self.repo.add_event(
-                cycle_id=holding["id"], symbol=symbol, event_type="ignored_occupied",
-                fingerprint=fp, detail={"status": holding.get("status")}, created_at=_now_iso(now),
+        # 对称规则: CC 期间 Put 触线 → 先平对应张数 Call
+        put_closes_call = bool(tw.get("put_touch_closes_call", True))
+        close_actions: List[Dict[str, Any]] = []
+        if put_closes_call and is_touch_alert(alert) and self._list_cc_open(symbol):
+            q_close = self._signal_qty(alert, strategy)
+            if q_close < 0:
+                q_close = qty_from_timeframe(alert.get("timeframe"), tw.get("qty_by_timeframe"))
+            close_actions = self._buyback_calls(
+                symbol, q_close, now=now, reason="put_touch_closes_call",
+                alert=alert, fingerprint=fp,
             )
-            return {"ok": False, "reason": "symbol_occupied", "fingerprint": fp}
+
+        # 并行 CSP:默认允许;可选 max_open_csp_per_symbol
+        open_csp = self._list_csp_open(symbol)
+        allow_parallel = bool(tw.get("allow_parallel_csp", True))
+        max_csp = int(tw.get("max_open_csp_per_symbol") or 0)
+        if is_touch_alert(alert):
+            if (not allow_parallel) and open_csp:
+                self.repo.add_event(
+                    cycle_id=open_csp[0]["id"], symbol=symbol, event_type="ignored_stacked",
+                    fingerprint=fp, detail={"status": "CSP_OPEN"}, created_at=_now_iso(now),
+                )
+                return {"ok": False, "reason": "already_csp_open", "fingerprint": fp,
+                        "prior_actions": close_actions}
+            if max_csp > 0 and len(open_csp) >= max_csp:
+                self.repo.add_event(
+                    cycle_id=open_csp[0]["id"], symbol=symbol, event_type="ignored_max_csp",
+                    fingerprint=fp, detail={"max": max_csp, "open": len(open_csp)},
+                    created_at=_now_iso(now),
+                )
+                return {"ok": False, "reason": "max_open_csp", "fingerprint": fp,
+                        "prior_actions": close_actions}
+        else:
+            # 缠论:保留旧「同策略已开则忽略」
+            stacked = self.repo.find_open_cycle(symbol, strategy, status="CSP_OPEN")
+            if stacked:
+                self.repo.add_event(
+                    cycle_id=stacked["id"], symbol=symbol, event_type="ignored_stacked",
+                    fingerprint=fp, detail={"status": "CSP_OPEN"}, created_at=_now_iso(now),
+                )
+                return {"ok": False, "reason": "already_csp_open", "fingerprint": fp}
 
         spot = _f(alert.get("underlying_price") or alert.get("spot") or alert.get("price"), 0)
         strike = _f(alert.get("strike"), 0)
@@ -373,15 +718,34 @@ class SimWheelEngine:
         )
         usage = self.repo.capital_usage()
         used_sym = float((usage.get("per_symbol") or {}).get(symbol, {}).get("committed") or 0)
-        qty = size_contracts(
-            level, spot or strike, float(self.cfg["equity"]),
-            used_symbol=used_sym,
-            used_portfolio=float(usage.get("total_committed") or 0),
-            max_symbol_pct=float(self.cfg.get("max_symbol_pct") or 0.25),
-            max_portfolio_pct=float(self.cfg.get("max_portfolio_pct") or 0.80),
-            levels=self.cfg.get("levels"),
-            contract_size=int(self.cfg.get("contract_size") or 100),
-        )
+        used_port = float(usage.get("total_committed") or 0)
+        equity = float(self.cfg["equity"])
+        size = int(self.cfg.get("contract_size") or 100)
+
+        qty = self._signal_qty(alert, strategy)
+        if qty < 0:
+            qty = size_contracts(
+                level, spot or strike, equity,
+                used_symbol=used_sym,
+                used_portfolio=used_port,
+                max_symbol_pct=float(self.cfg.get("max_symbol_pct") or 0.25),
+                max_portfolio_pct=float(self.cfg.get("max_portfolio_pct") or 0.80),
+                levels=self.cfg.get("levels"),
+                contract_size=size,
+            )
+        else:
+            # 触线:只受组合占用约束(无单票 25% 硬顶)
+            need = qty * (spot or strike) * size
+            port_room = max(0.0, equity * float(self.cfg.get("max_portfolio_pct") or 0.80) - used_port)
+            if need > port_room + 1e-6:
+                self.repo.add_event(
+                    cycle_id=None, symbol=symbol, event_type="skipped_size_cap",
+                    fingerprint=fp, detail={"qty": qty, "need": need, "port_room": port_room},
+                    created_at=_now_iso(now),
+                )
+                return {"ok": False, "reason": "size_cap", "fingerprint": fp,
+                        "prior_actions": close_actions}
+
         if qty <= 0:
             self.repo.add_event(
                 cycle_id=None, symbol=symbol, event_type="skipped_size_cap",
@@ -408,7 +772,7 @@ class SimWheelEngine:
             "shares": 0.0,
             "share_cost": 0.0,
             "cost_basis": None,
-            "total_premium": round(qty * premium * int(self.cfg.get("contract_size") or 100), 4),
+            "total_premium": round(qty * premium * size, 4),
             "realized_pnl": None,
             "open_strike": strike,
             "open_expiry": str(exp)[:10],
@@ -434,7 +798,7 @@ class SimWheelEngine:
             "qty": float(qty),
             "price": premium,
             "premium_net": cycle["total_premium"],
-            "note": f"sim open L{level[-1] if level else '?'}",
+            "note": f"sim open tf={normalize_timeframe(alert.get('timeframe'))} qty={qty}",
             "traded_at": _now_iso(now),
             "created_at": _now_iso(now),
         })
@@ -444,55 +808,85 @@ class SimWheelEngine:
             detail={
                 "level": level, "qty": qty, "strike": strike, "premium": premium,
                 "timeframe": alert.get("timeframe"),
+                "strategy": strategy,
             },
             created_at=_now_iso(now),
         )
-        return {"ok": True, "action": "open_csp", "cycle_id": cycle_id, "fingerprint": fp, "level": level}
+        return {
+            "ok": True, "action": "open_csp", "cycle_id": cycle_id,
+            "fingerprint": fp, "level": level, "qty": qty, "strategy": strategy,
+            "prior_actions": close_actions,
+        }
 
     def _open_cc_from_alert(
         self, alert: Dict[str, Any], fp: str, strategy: str, now: datetime,
         *, force: bool = False,
     ) -> Dict[str, Any]:
         symbol = str(alert["symbol"]).strip().upper()
-        holding = self.repo.find_symbol_active(symbol, statuses=("HOLDING",))
-        if not holding:
-            # 无持股 → skip(默认)
-            mode = self.cfg.get("call_without_shares") or "skip"
+        tw = self._touch_cfg()
+        close_actions: List[Dict[str, Any]] = []
+
+        # Call 触线止盈 Put:先按周期张数买回同标的 CSP
+        put_tp_mode = str(tw.get("put_tp_mode") or "call_touch").lower()
+        if (
+            (not force)
+            and is_touch_alert(alert)
+            and put_tp_mode in ("call_touch", "both")
+            and self._list_csp_open(symbol)
+        ):
+            q_close = self._signal_qty(alert, strategy)
+            if q_close < 0:
+                q_close = qty_from_timeframe(alert.get("timeframe"), tw.get("qty_by_timeframe"))
+            # 实际买回 ≤ 当前开仓 Put 总张数
+            total_put = sum(int(_f(c.get("open_qty"), 0)) for c in self._list_csp_open(symbol))
+            q_close = min(q_close, total_put)
+            close_actions = self._buyback_puts(
+                symbol, q_close, now=now, reason="call_touch_closes_put",
+                alert=alert, fingerprint=fp,
+            )
+
+        holding = self._holding_cycle(symbol)
+        uncovered = self._uncovered_shares(symbol)
+        size = int(self.cfg.get("contract_size") or 100)
+
+        if not holding or uncovered < size:
+            mode = self.cfg.get("call_without_shares") or tw.get("call_without_shares") or "skip"
+            if close_actions:
+                # 只完成 Put 减仓,不挂 CC
+                return {
+                    "ok": True, "action": "close_put_only", "fingerprint": fp,
+                    "prior_actions": close_actions, "reason": "no_uncovered_after_put_close",
+                }
             self.repo.add_event(
                 cycle_id=None, symbol=symbol, event_type="skipped_no_shares",
-                fingerprint=fp, detail={"mode": mode, "force": force},
+                fingerprint=fp, detail={"mode": mode, "force": force, "uncovered": uncovered},
                 created_at=_now_iso(now),
             )
             return {"ok": False, "reason": "skipped_no_shares", "fingerprint": fp}
 
-        if holding.get("status") == "CC_OPEN" or self.repo.find_open_cycle(
-            symbol, holding.get("strategy") or strategy, status="CC_OPEN",
-        ):
-            # 已有 CC
+        if holding.get("status") == "CC_OPEN" or self._list_cc_open(symbol):
             self.repo.add_event(
                 cycle_id=holding["id"], symbol=symbol, event_type="ignored_cc_open",
                 fingerprint=fp, detail={}, created_at=_now_iso(now),
             )
-            return {"ok": False, "reason": "already_cc_open", "fingerprint": fp}
+            return {
+                "ok": False, "reason": "already_cc_open", "fingerprint": fp,
+                "prior_actions": close_actions,
+            }
 
-        # 使用持股所在 cycle(策略沿用开 Put 的策略)
         cycle = holding
         shares = _f(cycle.get("shares"), 0)
         cost_basis = _f(cycle.get("cost_basis") or cycle.get("share_cost"), 0)
         spot = _f(alert.get("underlying_price") or alert.get("spot") or alert.get("price"), 0)
         strike = _f(alert.get("strike"), 0)
         if strike <= 0:
-            # ATM / 成本上方
             base = max(cost_basis, spot) if (cost_basis or spot) else 0
             strike = round(base, 2) if base else 0
         if strike <= 0:
             return {"ok": False, "reason": "no_strike", "fingerprint": fp}
-        # strike ≥ 成本基础
         if cost_basis > 0 and strike < cost_basis and not force:
             strike = cost_basis
 
-        # 同源触线:严格 OTM(strike > spot);ATM/ITM 不进纸面。force_cc 例外。
-        # Call 成本/愿卖价下限仍由上方 cost_basis 抬升与 live strike_min 对齐。
         if (not force) and is_timing_scan_alert(alert) and spot > 0:
             from app.core.wheel_timing_klines import is_otm_call
             if not is_otm_call(strike, spot):
@@ -502,7 +896,10 @@ class SimWheelEngine:
                     detail={"side": "CALL", "strike": strike, "spot": spot, "cost_basis": cost_basis},
                     created_at=_now_iso(now),
                 )
-                return {"ok": False, "reason": "not_otm", "fingerprint": fp}
+                return {
+                    "ok": False, "reason": "not_otm", "fingerprint": fp,
+                    "prior_actions": close_actions,
+                }
 
         level = cycle.get("level") or map_level(
             signal_kind=str(alert.get("signal_level") or alert.get("kind") or ""),
@@ -510,20 +907,33 @@ class SimWheelEngine:
             timeframe=alert.get("timeframe"),
             chan_kind=alert.get("kind"),
         )
-        qty = size_contracts(
-            level, spot or strike, float(self.cfg["equity"]),
-            for_call_shares=shares,
-            levels=self.cfg.get("levels"),
-            contract_size=int(self.cfg.get("contract_size") or 100),
-        )
+
+        sig_qty = self._signal_qty(alert, strategy)
+        if sig_qty < 0:
+            qty = size_contracts(
+                level, spot or strike, float(self.cfg["equity"]),
+                for_call_shares=uncovered,
+                levels=self.cfg.get("levels"),
+                contract_size=size,
+            )
+            if qty <= 0:
+                qty = max(1, int(uncovered // size))
+        else:
+            qty = min(sig_qty, int(uncovered // size))
+
         if qty <= 0:
-            qty = max(1, int(shares // int(self.cfg.get("contract_size") or 100)))
+            if close_actions:
+                return {
+                    "ok": True, "action": "close_put_only", "fingerprint": fp,
+                    "prior_actions": close_actions,
+                }
+            return {"ok": False, "reason": "no_qty", "fingerprint": fp}
+
         premium = _f(alert.get("bid") or alert.get("premium") or alert.get("trigger_price"), 0)
         if premium <= 0:
             premium = max(0.05, strike * 0.008)
         dte = int(alert.get("dte") or self.cfg.get("dte_default") or 30)
         exp = alert.get("expiry") or (now.date() + timedelta(days=dte)).isoformat()
-        size = int(self.cfg.get("contract_size") or 100)
         prem_net = round(qty * premium * size, 4)
 
         cycle_id = cycle["id"]
@@ -559,11 +969,14 @@ class SimWheelEngine:
             fingerprint=fp,
             detail={
                 "qty": qty, "strike": strike, "premium": premium, "force": force,
-                "timeframe": alert.get("timeframe"),
+                "timeframe": alert.get("timeframe"), "strategy": strategy,
             },
             created_at=_now_iso(now),
         )
-        return {"ok": True, "action": ev, "cycle_id": cycle_id, "fingerprint": fp}
+        return {
+            "ok": True, "action": ev, "cycle_id": cycle_id, "fingerprint": fp,
+            "qty": qty, "prior_actions": close_actions,
+        }
 
     # ── tick:行情推进 ─────────────────────────────────────────────────────
 
@@ -634,22 +1047,29 @@ class SimWheelEngine:
             # 无期权标记价时,仅用现货粗估 ITM;止盈需 mark
             return out
 
+        tw = self._touch_cfg()
+        put_tp_mode = str(tw.get("put_tp_mode") or "call_touch").lower()
+        premium_ok = bool(tw.get("premium_tp_override")) or put_tp_mode in ("premium_pct", "both")
+        threat_exit = bool(tw.get("threat_exit"))
+
         profit = put_profit_pct(open_price, mark)
         rem = remaining_ann(open_price, mark, dte or 0, strike)
         buf = otm_buffer_pct(spot, strike, "PUT") if spot else None
 
-        if profit is not None and profit >= hard:
-            out.append(self._close_put(c, mark, now, reason="hard_tp"))
-            return out
-        if profit is not None and profit >= soft and rem is not None and rem < min_ann:
-            out.append(self._close_put(c, mark, now, reason="soft_tp_low_ann"))
-            return out
+        # 主路径 call_touch:无 Call 信号不主动权利金止盈
+        if premium_ok:
+            if profit is not None and profit >= hard:
+                out.append(self._close_put(c, mark, now, reason="hard_tp"))
+                return out
+            if profit is not None and profit >= soft and rem is not None and rem < min_ann:
+                out.append(self._close_put(c, mark, now, reason="soft_tp_low_ann"))
+                return out
         if (
-            dte is not None and dte <= roll_dte
+            threat_exit
+            and dte is not None and dte <= roll_dte
             and buf is not None and buf < threat
             and (profit is None or profit < hard)
         ):
-            # v1 不 Roll,只打标;可选买回 — PRD:威胁买回 IDLE + would_roll
             self.repo.add_event(
                 cycle_id=c["id"], symbol=c["symbol"], event_type="would_roll",
                 fingerprint=None,
@@ -658,11 +1078,30 @@ class SimWheelEngine:
             )
             out.append(self._close_put(c, mark, now, reason="threat_would_roll"))
             return out
+        elif (
+            dte is not None and dte <= roll_dte
+            and buf is not None and buf < threat
+            and (profit is None or profit < hard)
+        ):
+            # 默认威胁窗仍持有,只打标
+            self.repo.add_event(
+                cycle_id=c["id"], symbol=c["symbol"], event_type="would_roll",
+                fingerprint=None,
+                detail={"dte": dte, "buffer": buf, "profit": profit, "held": True},
+                created_at=_now_iso(now),
+            )
+            out.append({"cycle_id": c["id"], "action": "would_roll_hold"})
         return out
 
-    def _close_put(self, c: Dict[str, Any], mark: float, now: datetime, reason: str) -> Dict[str, Any]:
+    def _close_put(
+        self, c: Dict[str, Any], mark: float, now: datetime, reason: str,
+        *, close_qty: Optional[float] = None, fingerprint: Optional[str] = None,
+    ) -> Dict[str, Any]:
         size = int(self.cfg.get("contract_size") or 100)
-        qty = _f(c.get("open_qty"), 1)
+        open_qty = _f(c.get("open_qty"), 1)
+        qty = open_qty if close_qty is None else min(open_qty, max(0.0, float(close_qty)))
+        if qty <= 0:
+            return {"cycle_id": c["id"], "action": "close_put", "reason": reason, "qty": 0}
         cost = qty * mark * size
         new_prem = round(_f(c.get("total_premium")) - cost, 4)
         self.repo.insert_leg({
@@ -678,6 +1117,29 @@ class SimWheelEngine:
             "traded_at": _now_iso(now),
             "created_at": _now_iso(now),
         })
+        remaining = open_qty - qty
+        if remaining > 1e-9:
+            # 部分减仓,周期仍 CSP_OPEN
+            self.repo.update_cycle(c["id"], {
+                "status": "CSP_OPEN",
+                "total_premium": new_prem,
+                "open_qty": float(remaining),
+                "updated_at": _now_iso(now),
+            })
+            # 同步内存,供同批后续腿使用
+            c["open_qty"] = float(remaining)
+            c["total_premium"] = new_prem
+            self.repo.add_event(
+                cycle_id=c["id"], symbol=c["symbol"], event_type="close_put",
+                fingerprint=fingerprint,
+                detail={"reason": reason, "qty": qty, "remaining": remaining, "partial": True},
+                created_at=_now_iso(now),
+            )
+            return {
+                "cycle_id": c["id"], "action": "close_put", "reason": reason,
+                "qty": qty, "remaining": remaining, "partial": True,
+            }
+
         pnl = new_prem  # 无股票腿
         self.repo.update_cycle(c["id"], {
             "status": "CLOSED",
@@ -692,13 +1154,15 @@ class SimWheelEngine:
             "closed_at": _now_iso(now),
             "updated_at": _now_iso(now),
         })
+        c["open_qty"] = 0
+        c["status"] = "CLOSED"
         self.repo.add_event(
             cycle_id=c["id"], symbol=c["symbol"], event_type="close_put",
-            fingerprint=None, detail={"reason": reason, "pnl": pnl},
+            fingerprint=fingerprint, detail={"reason": reason, "pnl": pnl, "qty": qty},
             created_at=_now_iso(now),
         )
         self.repo.record_closed_stats(c, pnl=pnl, assigned=False, called_away=False, now=now)
-        return {"cycle_id": c["id"], "action": "close_put", "reason": reason, "pnl": pnl}
+        return {"cycle_id": c["id"], "action": "close_put", "reason": reason, "pnl": pnl, "qty": qty}
 
     def _expire_put(self, c: Dict[str, Any], now: datetime) -> Dict[str, Any]:
         pnl = _f(c.get("total_premium"))
@@ -785,7 +1249,9 @@ class SimWheelEngine:
         self, c: Dict[str, Any], spot: float, now: datetime, as_of: date,
     ) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
-        force_days = int(self.cfg.get("cc_force_days") or 5)
+        force_days = int(self.cfg.get("cc_force_days") or 0)
+        if force_days <= 0:
+            return out
         since = _parse_day(c.get("holding_since") or c.get("updated_at") or c.get("started_at"))
         if not since:
             return out
@@ -840,9 +1306,15 @@ class SimWheelEngine:
             return out
         return out
 
-    def _close_call(self, c: Dict[str, Any], mark: float, now: datetime, reason: str) -> Dict[str, Any]:
+    def _close_call(
+        self, c: Dict[str, Any], mark: float, now: datetime, reason: str,
+        *, close_qty: Optional[float] = None, fingerprint: Optional[str] = None,
+    ) -> Dict[str, Any]:
         size = int(self.cfg.get("contract_size") or 100)
-        qty = _f(c.get("open_qty"), 1)
+        open_qty = _f(c.get("open_qty"), 1)
+        qty = open_qty if close_qty is None else min(open_qty, max(0.0, float(close_qty)))
+        if qty <= 0:
+            return {"cycle_id": c["id"], "action": "close_call", "reason": reason, "qty": 0}
         cost = qty * mark * size
         new_prem = round(_f(c.get("total_premium")) - cost, 4)
         self.repo.insert_leg({
@@ -858,6 +1330,27 @@ class SimWheelEngine:
             "traded_at": _now_iso(now),
             "created_at": _now_iso(now),
         })
+        remaining = open_qty - qty
+        if remaining > 1e-9:
+            self.repo.update_cycle(c["id"], {
+                "status": "CC_OPEN",
+                "total_premium": new_prem,
+                "open_qty": float(remaining),
+                "updated_at": _now_iso(now),
+            })
+            c["open_qty"] = float(remaining)
+            c["total_premium"] = new_prem
+            self.repo.add_event(
+                cycle_id=c["id"], symbol=c["symbol"], event_type="close_call",
+                fingerprint=fingerprint,
+                detail={"reason": reason, "qty": qty, "remaining": remaining, "partial": True},
+                created_at=_now_iso(now),
+            )
+            return {
+                "cycle_id": c["id"], "action": "close_call", "reason": reason,
+                "qty": qty, "remaining": remaining, "partial": True,
+            }
+
         self.repo.update_cycle(c["id"], {
             "status": "HOLDING",
             "total_premium": new_prem,
@@ -871,11 +1364,14 @@ class SimWheelEngine:
             "holding_since": _now_iso(now),
             "updated_at": _now_iso(now),
         })
+        c["open_qty"] = 0
+        c["status"] = "HOLDING"
         self.repo.add_event(
             cycle_id=c["id"], symbol=c["symbol"], event_type="close_call",
-            fingerprint=None, detail={"reason": reason}, created_at=_now_iso(now),
+            fingerprint=fingerprint, detail={"reason": reason, "qty": qty},
+            created_at=_now_iso(now),
         )
-        return {"cycle_id": c["id"], "action": "close_call", "reason": reason}
+        return {"cycle_id": c["id"], "action": "close_call", "reason": reason, "qty": qty}
 
     def _expire_call(self, c: Dict[str, Any], now: datetime) -> Dict[str, Any]:
         self.repo.insert_leg({
@@ -951,10 +1447,27 @@ class SimWheelEngine:
         return {"cycle_id": c["id"], "action": "called_away", "pnl": pnl}
 
 
-def select_best_alerts_for_sim(alerts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """同 tick/batch 多合约:仅最优进纸面(与 TG 择优同规则)。"""
+def select_best_alerts_for_sim(
+    alerts: List[Dict[str, Any]],
+    *,
+    same_batch_1h_1d: str = "prefer_daily",
+) -> List[Dict[str, Any]]:
+    """同 tick/batch:先按 (symbol,side,tf) 择优,再同批 1h+1d 冲突策略。"""
     from app.core.touch_best import select_best_touch_signals
-    return list(select_best_touch_signals(alerts or []))
+    per_tf = list(select_best_touch_signals(alerts or [], group_by_timeframe=True))
+    keepers, _shadows = resolve_same_batch_1h_1d(per_tf, mode=same_batch_1h_1d)
+    return list(keepers)
+
+
+def select_touch_batch_for_push(
+    alerts: List[Any],
+    *,
+    same_batch_1h_1d: str = "prefer_daily",
+) -> Tuple[List[Any], List[Dict[str, Any]]]:
+    """扫描出口:择优 + 1h/1d 冲突。返回 (push_list, shadow_meta)。"""
+    from app.core.touch_best import select_best_touch_signals
+    per_tf = list(select_best_touch_signals(alerts or [], group_by_timeframe=True))
+    return resolve_same_batch_1h_1d(per_tf, mode=same_batch_1h_1d)
 
 
 def sim_on_alert(alert: Dict[str, Any], *, cfg: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None) -> Dict[str, Any]:

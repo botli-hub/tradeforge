@@ -191,14 +191,42 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
     try:
         signals = monitor.scan_all(symbol=symbol, report=report)
         logger.info("wheel 时机扫描完成,触发 %d 条", len(signals))
-        # 同标的同侧多合约触线:仅年化→theta 最优者进 TG / Sim;全量仍已写入时机历史
-        from app.core.touch_best import select_best_touch_signals
-        push_signals = select_best_touch_signals(signals)
-        if len(push_signals) < len(signals):
+        # 同标的同侧:先按周期择优,再同批 1h+1d(默认 prefer_daily→只留日线 2 张)
+        from app.core.sim_wheel import select_touch_batch_for_push
+        tw_mode = str(
+            ((cfg.get("touch_wheel") or {}).get("same_batch_1h_1d"))
+            or "prefer_daily"
+        )
+        push_signals, shadows = select_touch_batch_for_push(
+            signals, same_batch_1h_1d=tw_mode,
+        )
+        if len(push_signals) < len(signals) or shadows:
             logger.info(
-                "触线择优: %d → %d (按 symbol+side 年化/theta)",
-                len(signals), len(push_signals),
+                "触线择优+同批冲突: %d → %d (shadow=%d mode=%s)",
+                len(signals), len(push_signals), len(shadows), tw_mode,
             )
+        for sh in shadows:
+            try:
+                from app.data import sim_repository as sim_repo
+                sig = sh.get("signal")
+                sym = sh.get("symbol") or getattr(sig, "symbol", None)
+                sim_repo.add_event(
+                    cycle_id=None,
+                    symbol=str(sym or "").upper() or None,
+                    event_type="shadow_superseded_by_1d",
+                    fingerprint=None,
+                    detail={
+                        "side": sh.get("side"),
+                        "timeframe": getattr(sig, "timeframe", None)
+                        if not isinstance(sig, dict)
+                        else (sig or {}).get("timeframe"),
+                        "contract_code": getattr(sig, "contract_code", None)
+                        if not isinstance(sig, dict)
+                        else (sig or {}).get("contract_code"),
+                    },
+                )
+            except Exception as e:
+                logger.info("shadow event skip: %s", e)
         sent = 0
         for sig in push_signals:
             level = signal_strength(sig, min_iv)

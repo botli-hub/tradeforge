@@ -50,6 +50,7 @@ def test_run_wheel_scan_does_not_call_process_position_alerts():
     sim_wheel = types.ModuleType("app.core.sim_wheel")
     sim_wheel.alert_from_wheel_signal = MagicMock()
     sim_wheel.sim_on_alert = MagicMock()
+    sim_wheel.select_touch_batch_for_push = MagicMock(return_value=([], []))
 
     chan_alerts = types.ModuleType("app.services.chan_alerts")
     chan_alerts.run_chan_alert_cycle = MagicMock()
