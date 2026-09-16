@@ -191,53 +191,68 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
     try:
         signals = monitor.scan_all(symbol=symbol, report=report)
         logger.info("wheel 时机扫描完成,触发 %d 条", len(signals))
-        # 同标的同侧:先按周期择优,再同批 1h+1d(默认 prefer_daily→只留日线 2 张)
-        from app.core.sim_wheel import select_touch_batch_for_push
-        tw_mode = str(
-            ((cfg.get("touch_wheel") or {}).get("same_batch_1h_1d"))
-            or "prefer_daily"
-        )
-        push_signals, shadows = select_touch_batch_for_push(
-            signals, same_batch_1h_1d=tw_mode,
-        )
-        if len(push_signals) < len(signals) or shadows:
+        # TG: 只做旧择优(年化→theta),不套 touch_wheel 同批 prefer_daily
+        from app.core.touch_best import select_best_touch_signals
+        push_signals = select_best_touch_signals(signals)
+        if len(push_signals) < len(signals):
             logger.info(
-                "触线择优+同批冲突: %d → %d (shadow=%d mode=%s)",
-                len(signals), len(push_signals), len(shadows), tw_mode,
+                "触线择优: %d → %d (按 symbol+side 年化/theta)",
+                len(signals), len(push_signals),
             )
-        for sh in shadows:
-            try:
-                from app.data import sim_repository as sim_repo
-                sig = sh.get("signal")
-                sym = sh.get("symbol") or getattr(sig, "symbol", None)
-                sim_repo.add_event(
-                    cycle_id=None,
-                    symbol=str(sym or "").upper() or None,
-                    event_type="shadow_superseded_by_1d",
-                    fingerprint=None,
-                    detail={
-                        "side": sh.get("side"),
-                        "timeframe": getattr(sig, "timeframe", None)
-                        if not isinstance(sig, dict)
-                        else (sig or {}).get("timeframe"),
-                        "contract_code": getattr(sig, "contract_code", None)
-                        if not isinstance(sig, dict)
-                        else (sig or {}).get("contract_code"),
-                    },
+        # Sim: 单独走 touch wheel 同批规则(prefer_daily 等),不改 TG
+        try:
+            from app.core.sim_wheel import (
+                alert_from_wheel_signal,
+                select_touch_batch_for_push,
+                sim_on_alert,
+            )
+            tw_mode = str(
+                ((cfg.get("touch_wheel") or {}).get("same_batch_1h_1d"))
+                or "prefer_daily"
+            )
+            sim_signals, shadows = select_touch_batch_for_push(
+                signals, same_batch_1h_1d=tw_mode,
+            )
+            if len(sim_signals) < len(signals) or shadows:
+                logger.info(
+                    "Sim 触线同批: %d → %d (shadow=%d mode=%s)",
+                    len(signals), len(sim_signals), len(shadows), tw_mode,
                 )
-            except Exception as e:
-                logger.info("shadow event skip: %s", e)
+            for sh in shadows:
+                try:
+                    from app.data import sim_repository as sim_repo
+                    sig = sh.get("signal")
+                    sym = sh.get("symbol") or getattr(sig, "symbol", None)
+                    sim_repo.add_event(
+                        cycle_id=None,
+                        symbol=str(sym or "").upper() or None,
+                        event_type="shadow_superseded_by_1d",
+                        fingerprint=None,
+                        detail={
+                            "side": sh.get("side"),
+                            "timeframe": getattr(sig, "timeframe", None)
+                            if not isinstance(sig, dict)
+                            else (sig or {}).get("timeframe"),
+                            "contract_code": getattr(sig, "contract_code", None)
+                            if not isinstance(sig, dict)
+                            else (sig or {}).get("contract_code"),
+                        },
+                    )
+                except Exception as e:
+                    logger.info("shadow event skip: %s", e)
+            for sig in sim_signals:
+                try:
+                    sim_on_alert(alert_from_wheel_signal(sig), cfg=cfg)
+                except Exception as e:
+                    logger.info("sim wheel paper skip: %s", e)
+        except Exception as e:
+            logger.info("sim wheel paper skip: %s", e)
         sent = 0
         for sig in push_signals:
             level = signal_strength(sig, min_iv)
             # 默认只推可做/强,避免观察级刷屏;push_strong_only=False 时全推
             if strong_only and level == "WATCH":
                 continue
-            try:
-                from app.core.sim_wheel import alert_from_wheel_signal, sim_on_alert
-                sim_on_alert(alert_from_wheel_signal(sig), cfg=cfg)
-            except Exception as e:
-                logger.info("sim wheel paper skip: %s", e)
             try:
                 ch = timing_channel_kind(getattr(sig, "signal_level", None))
                 if not ch:
