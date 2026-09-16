@@ -95,10 +95,48 @@ def ensure_sim_tables(conn=None) -> None:
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sim_equity_position (
+            strategy TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            shares REAL NOT NULL DEFAULT 0,
+            avg_cost REAL NOT NULL DEFAULT 0,
+            realized_pnl REAL NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (strategy, symbol)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sim_equity_trade (
+            id TEXT PRIMARY KEY,
+            strategy TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            qty REAL NOT NULL,
+            price REAL NOT NULL,
+            fingerprint TEXT,
+            note TEXT,
+            realized_pnl REAL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_sim_cycle_sym ON sim_cycle(symbol, status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_sim_cycle_status ON sim_cycle(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_sim_event_fp ON sim_event(fingerprint)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_sim_leg_cycle ON sim_leg(cycle_id, traded_at)")
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sim_equity_pos ON sim_equity_position(symbol, strategy)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sim_equity_trade_fp ON sim_equity_trade(fingerprint)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sim_equity_trade_sym ON sim_equity_trade(symbol, created_at)"
+    )
     if own:
         conn.commit()
         conn.close()
@@ -113,7 +151,13 @@ def fingerprint_used(fingerprint: str) -> bool:
             "SELECT 1 FROM sim_event WHERE fingerprint = ? LIMIT 1",
             (fingerprint,),
         ).fetchone()
-        return row is not None
+        if row is not None:
+            return True
+        row2 = conn.execute(
+            "SELECT 1 FROM sim_equity_trade WHERE fingerprint = ? LIMIT 1",
+            (fingerprint,),
+        ).fetchone()
+        return row2 is not None
     finally:
         conn.close()
 
@@ -420,5 +464,121 @@ def count_open() -> int:
         return int(conn.execute(
             "SELECT COUNT(1) AS c FROM sim_cycle WHERE status != 'CLOSED'"
         ).fetchone()["c"])
+    finally:
+        conn.close()
+
+
+# ── 缠论正股纸面账(与 sim_cycle CSP/CC 隔离) ──────────────────────────────────
+
+def get_equity_position(strategy: str, symbol: str) -> Optional[Dict[str, Any]]:
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT * FROM sim_equity_position WHERE strategy = ? AND symbol = ?",
+            (strategy, (symbol or "").strip().upper()),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def upsert_equity_position(pos: Dict[str, Any]) -> None:
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO sim_equity_position (
+                strategy, symbol, shares, avg_cost, realized_pnl, updated_at
+            ) VALUES (
+                :strategy, :symbol, :shares, :avg_cost, :realized_pnl, :updated_at
+            )
+            ON CONFLICT(strategy, symbol) DO UPDATE SET
+                shares=excluded.shares,
+                avg_cost=excluded.avg_cost,
+                realized_pnl=excluded.realized_pnl,
+                updated_at=excluded.updated_at
+            """,
+            {
+                "strategy": pos["strategy"],
+                "symbol": str(pos["symbol"]).strip().upper(),
+                "shares": float(pos.get("shares") or 0),
+                "avg_cost": float(pos.get("avg_cost") or 0),
+                "realized_pnl": float(pos.get("realized_pnl") or 0),
+                "updated_at": pos.get("updated_at") or _now_iso(),
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def insert_equity_trade(trade: Dict[str, Any]) -> None:
+    conn = get_db()
+    try:
+        conn.execute(
+            """INSERT INTO sim_equity_trade (
+                id, strategy, symbol, side, qty, price, fingerprint, note, realized_pnl, created_at
+            ) VALUES (
+                :id, :strategy, :symbol, :side, :qty, :price, :fingerprint, :note, :realized_pnl, :created_at
+            )""",
+            {
+                "id": trade["id"],
+                "strategy": trade["strategy"],
+                "symbol": str(trade["symbol"]).strip().upper(),
+                "side": trade["side"],
+                "qty": float(trade["qty"]),
+                "price": float(trade["price"]),
+                "fingerprint": trade.get("fingerprint"),
+                "note": trade.get("note"),
+                "realized_pnl": trade.get("realized_pnl"),
+                "created_at": trade.get("created_at") or _now_iso(),
+            },
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_equity_positions(
+    strategy: Optional[str] = None,
+    symbol: Optional[str] = None,
+    *,
+    only_open: bool = True,
+) -> List[Dict[str, Any]]:
+    conn = get_db()
+    try:
+        sql = "SELECT * FROM sim_equity_position WHERE 1=1"
+        args: List[Any] = []
+        if strategy:
+            sql += " AND strategy = ?"
+            args.append(strategy)
+        if symbol:
+            sql += " AND symbol = ?"
+            args.append(symbol.strip().upper())
+        if only_open:
+            sql += " AND shares > 0"
+        sql += " ORDER BY strategy, symbol"
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+    finally:
+        conn.close()
+
+
+def list_equity_trades(
+    strategy: Optional[str] = None,
+    symbol: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    conn = get_db()
+    try:
+        sql = "SELECT * FROM sim_equity_trade WHERE 1=1"
+        args: List[Any] = []
+        if strategy:
+            sql += " AND strategy = ?"
+            args.append(strategy)
+        if symbol:
+            sql += " AND symbol = ?"
+            args.append(symbol.strip().upper())
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        args.append(max(1, min(int(limit or 100), 500)))
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
     finally:
         conn.close()
