@@ -418,7 +418,7 @@ def set_contract_cooldown(contract_code: str, symbol: str, trading_days: int = 5
     参数名 trading_days 为历史兼容；语义为自然日：fill 1 → 冷却 1 天。
     timeframe 仅记录。
     """
-    calendar_days = max(0, int(trading_days))
+    calendar_days = int(trading_days)
     cooldown_until = (datetime.now() + timedelta(days=calendar_days)).isoformat()
     conn = get_db()
     now = _now_iso()
