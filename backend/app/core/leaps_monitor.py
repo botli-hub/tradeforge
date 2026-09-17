@@ -1,7 +1,8 @@
 """LEAPS Put 权利金卖出信号核心引擎
 
 信号三条件（S1 & S2 & S3 同时满足）：
-  S1: 合约当日最高价（盘中用最新价）≥ EMA50（一级）或 ≥ EMA200（二级强信号）
+  S1: 合约当日最高价/盘中最新价触线后,须卖方 bid 确认(bid≥EMA);
+      无成交报价(bid/ask≤0)或今日 volume=0 仅凭 last → 跳过
   S2: 合约当前 IV ≥ 自身 52 周 IV 70 分位
   S3: 标的现价 > 接货底线价
 """
@@ -24,6 +25,7 @@ from app.core.wheel_timing_klines import (
     bars_on_day,
     ema_touch,
     futu_kl_names,
+    is_tradeable_quote,
     normalize_timeframe,
     resolve_scan_timeframe,
     snapshot_bar,
@@ -452,7 +454,7 @@ class LeapsMonitor:
         rep.update(
             spot=None, contracts=0, in_cooldown=0, no_history=0,
             bars_insufficient=0, iv_filtered=0, not_touching=0, signals=0,
-            ema_partial_hits=0, note=None,
+            ema_partial_hits=0, stale_no_quote=0, note=None,
             expiries_scanned=[], expiries_skipped=[],
             strike_lo=None, strike_hi=None,
             timeframe=tf,
@@ -630,18 +632,47 @@ class LeapsMonitor:
                     rep["iv_filtered"] += 1
                     continue
 
+                # 可成交报价门: bid>0 且 ask>0,否则 stale/no_quote 跳过
+                bid_q = contract.get("bid")
+                ask_q = contract.get("ask")
+                vol_q = contract.get("volume")
+                if vol_q is None:
+                    # 快照无 volume → 看当日 bar;无当日成交按 0(禁止仅凭 last)
+                    today_bars = bars_on_day(price_history, today)
+                    if today_bars:
+                        try:
+                            vol_q = sum(
+                                float((b or {}).get("volume") or 0) for b in today_bars
+                            )
+                        except (TypeError, ValueError):
+                            vol_q = 0
+                    else:
+                        vol_q = 0
+                if not is_tradeable_quote(bid_q, ask_q):
+                    logger.debug(
+                        "%s: stale/no_quote bid=%s ask=%s, skip",
+                        code, bid_q, ask_q,
+                    )
+                    rep["stale_no_quote"] = rep.get("stale_no_quote", 0) + 1
+                    continue
+
                 # S1: 价格触及 EMA200 / EMA50（CALL/PUT 按 timeframe(1h/1d)）
+                # last/high 初检后须卖方 bid 确认; volume=0 禁止仅凭 last
                 n_bars = len(closes)
                 hit = ema_touch(
                     closes, float(trigger_price),
                     ema50_min=self.ema50_min, ema200_min=self.ema200_min,
                     allow_partial_ema=self.allow_partial_ema,
                     level_map=level_map, compute_ema=_compute_ema,
+                    bid=bid_q, ask=ask_q, volume=vol_q,
+                    require_tradeable_quote=True,
+                    confirm_with_bid=True,
                 )
                 if hit is None:
                     if n_bars < self.ema50_min:
                         rep["bars_insufficient"] += 1
                     else:
+                        # 含: 未触线,或 last 假触但 bid < ema(丢弃)
                         rep["not_touching"] += 1
                     continue
                 signal_level = hit["signal_level"]
@@ -667,7 +698,8 @@ class LeapsMonitor:
                     if with_suggestions else []
                 )
 
-                sell_price = contract.get("bid") or contract.get("last_price") or 0
+                # 年化只用卖方 bid(可成交价);报价门已保证 bid>0
+                sell_price = float(bid_q or 0) or float(contract.get("bid") or 0)
                 # _dte 吃 YYMMDD；YYYY-MM-DD 则直接算
                 try:
                     if len(str(expiry_raw).replace("-", "")) >= 8 and "-" in str(expiry_raw):
@@ -692,7 +724,7 @@ class LeapsMonitor:
                     suggestions=suggestions,
                     is_intraday=is_intraday,
                     delta=contract.get("delta"),
-                    bid=contract.get("bid") or None,
+                    bid=float(bid_q) if bid_q not in (None, "") else None,
                     annualized=_annualized_yield(sell_price, strike, dte_val) if sell_price else None,
                     dte=dte_val,
                     theta=contract.get("theta"),
@@ -960,6 +992,8 @@ class LeapsMonitor:
                 last_price = float(srow.get("last_price", 0) or 0)
                 high_price = float(srow.get("high_price", 0) or 0)
                 bid_price = float(srow.get("bid_price", 0) or 0)
+                ask_price = float(srow.get("ask_price", 0) or 0)
+                volume_val = float(srow.get("volume", 0) or 0)
                 delta_val = abs(float(srow.get("option_delta", 0) or 0))
                 theta_val = abs(float(srow.get("option_theta", 0) or 0))
                 raw.append({
@@ -973,6 +1007,8 @@ class LeapsMonitor:
                     "close": last_price,
                     "high": high_price,
                     "bid": bid_price,
+                    "ask": ask_price,
+                    "volume": volume_val,
                     "delta": delta_val or None,
                     "theta": theta_val or None,
                 })

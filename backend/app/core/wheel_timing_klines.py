@@ -165,6 +165,16 @@ def bars_on_day(price_history: Sequence[Dict[str, Any]], today: str) -> List[Dic
     return [b for b in price_history if str((b or {}).get("date") or "")[:10] == day]
 
 
+def is_tradeable_quote(bid: Any, ask: Any) -> bool:
+    """可成交报价: bid>0 且 ask>0。缺/非数字/≤0 → False。"""
+    try:
+        b = float(bid)
+        a = float(ask)
+    except (TypeError, ValueError):
+        return False
+    return b > 0 and a > 0
+
+
 def ema_touch(
     closes,
     trigger_price: float,
@@ -174,17 +184,47 @@ def ema_touch(
     allow_partial_ema: bool = True,
     level_map: Optional[Dict[str, str]] = None,
     compute_ema=None,
+    bid: Optional[float] = None,
+    ask: Optional[float] = None,
+    volume: Optional[float] = None,
+    require_tradeable_quote: bool = False,
+    confirm_with_bid: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """last/high ≥ EMA200 强 / EMA50 一级。未触及返回 None。不访问 Futu。"""
+    """触线: last/high 初检后须卖方 bid 确认。
+
+    - last/high ≥ EMA200 强 / EMA50 一级(初检)
+    - require_tradeable_quote: 须 bid>0 且 ask>0,否则 None(stale/no_quote)
+    - volume≤0(今日无成交): 禁止仅凭 last 通过,只用 bid 作比较价
+    - confirm_with_bid: 命中后若 bid < ema_value → 丢弃假触线
+    未触及 / 未确认返回 None。不访问 Futu。
+    """
+    if require_tradeable_quote and not is_tradeable_quote(bid, ask):
+        return None
+
     if level_map is None:
         level_map = {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
     if compute_ema is None:
         def compute_ema(series, period):  # type: ignore[misc]
             return series.ewm(span=period, adjust=False).mean()
-    try:
-        px = float(trigger_price)
-    except (TypeError, ValueError):
-        return None
+
+    use_bid_only = False
+    if volume is not None:
+        try:
+            use_bid_only = float(volume) <= 0
+        except (TypeError, ValueError):
+            use_bid_only = True
+
+    if use_bid_only:
+        try:
+            px = float(bid)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+    else:
+        try:
+            px = float(trigger_price)
+        except (TypeError, ValueError):
+            return None
+
     n_bars = len(closes)
 
     def _try(period: int, min_bars: int, key: str) -> Optional[Dict[str, Any]]:
@@ -209,4 +249,15 @@ def ema_touch(
     hit = _try(200, int(ema200_min), "EMA200")
     if hit is None:
         hit = _try(50, int(ema50_min), "EMA50")
+    if hit is None:
+        return None
+
+    # 卖方成交价(bid)确认: 可卖价须仍在均线上方,否则 last 假触
+    if confirm_with_bid or use_bid_only:
+        try:
+            b = float(bid)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+        if b < float(hit["ema_value"]):
+            return None
     return hit
