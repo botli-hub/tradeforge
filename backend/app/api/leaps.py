@@ -270,7 +270,8 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
                     sent += 1
             except Exception as e:
                 logger.warning("wheel 信号推送失败: %s", e)
-        # 扫描+TG 后按桶键写入冷却(同批已择优;下次同桶跳过扫描/TG)
+        # 扫描+TG 后按桶键写入冷却(同批已择优;下次同美股交易日同桶跳过扫描/TG)
+        # cooldown_trading_days 已弃用(arm 忽略);仍传入以兼容旧调用形参
         try:
             cd_days = int(
                 (timing_cfg.get("cooldown_trading_days")
