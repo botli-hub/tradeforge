@@ -112,7 +112,8 @@ class WheelTimingMonitor:
       - Call 1h EMA 由 wheel_timing.call_1h_ema_types 决定(默认仅 EMA200);1d 仍 EMA50/EMA200(档案按 timeframe 分桶);Put 不受影响
     IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
     信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
-    合约冷却复用 LEAPS 的 leaps_cooldowns。
+    冷却复用 leaps_cooldowns,键为信号桶 SYMBOL|PUT|1h|EMA50(同桶多合约共享;
+    扫描与 TG 均跳过;由 _run_wheel_scan 在同批择优推送后写入)。
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -122,6 +123,8 @@ class WheelTimingMonitor:
         cd = cfg.get("cooldown_trading_days")
         if cd:
             self.monitor.cooldown_days = cd
+        # Wheel: 扫描中不写冷却,留给 _run_wheel_scan 同批择优+TG 后再 arm
+        self.monitor.arm_cooldown = False
         self.dte_min = cfg.get("dte_min", 10)
         self.dte_max = cfg.get("dte_max", 55)
         self.iv_threshold = cfg.get("iv_percentile_threshold", 0)
@@ -378,6 +381,8 @@ class LeapsMonitor:
         self.ema200_min = self.sig_cfg.get("ema200_min_bars", 210)
         self.allow_partial_ema = bool(self.sig_cfg.get("allow_partial_ema", False))
         self.cooldown_days = self.sig_cfg.get("contract_cooldown_trading_days", 5)
+        # True=scan_symbol 结束时按桶键写入冷却;Wheel 会关掉,改由推送路径写入
+        self.arm_cooldown = True
         self.max_30d = self.sig_cfg.get("per_symbol_max_30d", 3)
         self.dte_min = self.sig_cfg.get("contract_dte_min", 180)
         self.max_contracts = self.sig_cfg.get("contract_max_per_symbol", 5)
@@ -571,9 +576,18 @@ class LeapsMonitor:
                     ),
                 )
 
-                # 合约级冷却
-                if repo.is_contract_in_cooldown(code):
-                    logger.debug("%s: 冷却中，跳过", code)
+                # 信号桶冷却(扫前):该 side+tf 下候选 EMA 全部在冷却则整张跳过
+                _ema_candidates = [k for k in ("EMA200", "EMA50") if k in level_map]
+                if _ema_candidates and all(
+                    repo.is_contract_in_cooldown(
+                        repo.make_signal_cooldown_key(symbol, option_type, tf, ema)
+                    )
+                    for ema in _ema_candidates
+                ):
+                    logger.debug(
+                        "%s: 信号桶冷却中(全部 EMA),跳过扫描 %s %s %s",
+                        code, symbol, option_type, tf,
+                    )
                     rep["in_cooldown"] += 1
                     continue
 
@@ -636,6 +650,15 @@ class LeapsMonitor:
                 if ema_partial:
                     rep["ema_partial_hits"] = rep.get("ema_partial_hits", 0) + 1
 
+                # 信号桶冷却(触线后):同 symbol+side+tf+ema_type 共享窗口
+                _cd_key = repo.make_signal_cooldown_key(
+                    symbol, option_type, tf, ema_type,
+                )
+                if repo.is_contract_in_cooldown(_cd_key):
+                    logger.debug("%s: 信号桶 %s 冷却中，跳过", code, _cd_key)
+                    rep["in_cooldown"] += 1
+                    continue
+
                 # 获取 OTM put 建议
                 expiry_raw = contract.get("expiry") or exp_label
                 suggestions = (
@@ -677,9 +700,6 @@ class LeapsMonitor:
                 )
                 signals.append(sig)
 
-                # 设置冷却
-                repo.set_contract_cooldown(code, symbol, self.cooldown_days, timeframe=tf)
-
                 # 入库
                 repo.log_signal(
                     symbol=symbol,
@@ -709,6 +729,9 @@ class LeapsMonitor:
                 )
 
         rep["signals"] = len(signals)
+        # LEAPS 路径默认在此按桶键写入冷却;Wheel 关闭 arm_cooldown,改由推送路径写入
+        if getattr(self, "arm_cooldown", True) and signals:
+            repo.arm_signal_bucket_cooldowns(signals, self.cooldown_days)
         return signals
 
     # ── 内部方法 ──────────────────────────────────────────────────────────────

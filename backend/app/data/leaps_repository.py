@@ -397,6 +397,113 @@ def get_latest_call_touch(symbol: str, max_age_hours: float = 72,
 
 
 # ── 冷却状态 ──────────────────────────────────────────────────────────────────
+# 触线/Wheel 冷却主键(contract_code 列)现为信号桶键,格式:
+#   {SYMBOL}|{PUT|CALL}|{1h|1d}|{EMA50|EMA200}
+# 例: QQQ|PUT|1h|EMA50
+# 旧单合约 code 行可自然过期;新写入只使用桶键。UNCOV.* 等非桶键仍按原样存查。
+
+
+def make_signal_cooldown_key(
+    symbol: str,
+    side: str,
+    timeframe: str,
+    ema_type: str,
+) -> str:
+    """信号桶冷却键: SYMBOL|SIDE|TF|EMA (同桶多合约共享冷却窗口)。"""
+    sym = str(symbol or "").upper().strip()
+    side_u = str(side or "").upper().strip()
+    if side_u in ("P", "PUT") or "PUT" in side_u:
+        side_u = "PUT"
+    elif side_u in ("C", "CALL") or "CALL" in side_u:
+        side_u = "CALL"
+    else:
+        side_u = side_u or "PUT"
+
+    tf = str(timeframe or "").strip().lower()
+    if tf in ("1h", "60m", "60min", "hour", "hourly", "k_1h") or tf.startswith("60"):
+        tf = "1h"
+    elif tf in ("1d", "d", "day", "daily", "1day", "k_1d") or "day" in tf or tf == "1d":
+        tf = "1d"
+    elif "1h" in tf:
+        tf = "1h"
+    elif "1d" in tf:
+        tf = "1d"
+    else:
+        tf = tf or "1d"
+        if tf not in ("1h", "1d"):
+            tf = "1d"
+
+    ema = str(ema_type or "").upper().replace(" ", "")
+    if ema in ("EMA200", "200", "E200"):
+        ema = "EMA200"
+    else:
+        ema = "EMA50"
+    return f"{sym}|{side_u}|{tf}|{ema}"
+
+
+def signal_cooldown_key_from_signal(sig: Any) -> str:
+    """从 LeapsSignal / dict 推导桶键。"""
+    if isinstance(sig, dict):
+        symbol = sig.get("symbol")
+        level = str(sig.get("signal_level") or sig.get("side") or "")
+        timeframe = sig.get("timeframe")
+        ema_type = sig.get("ema_type")
+    else:
+        symbol = getattr(sig, "symbol", None)
+        level = str(getattr(sig, "signal_level", None) or getattr(sig, "side", None) or "")
+        timeframe = getattr(sig, "timeframe", None)
+        ema_type = getattr(sig, "ema_type", None)
+    side = "CALL" if "CALL" in level.upper() else "PUT"
+    if isinstance(sig, dict) and sig.get("side"):
+        side = str(sig.get("side"))
+    elif not isinstance(sig, dict) and getattr(sig, "side", None):
+        side = str(getattr(sig, "side"))
+    return make_signal_cooldown_key(symbol or "", side, timeframe or "1d", ema_type or "EMA50")
+
+
+def is_signal_bucket_in_cooldown(
+    symbol: str,
+    side: str,
+    timeframe: str,
+    ema_type: str,
+) -> bool:
+    return is_contract_in_cooldown(
+        make_signal_cooldown_key(symbol, side, timeframe, ema_type)
+    )
+
+
+def set_signal_bucket_cooldown(
+    symbol: str,
+    side: str,
+    timeframe: str,
+    ema_type: str,
+    trading_days: int = 1,
+) -> str:
+    """写入桶冷却;返回所用键。天数=自然日历日(不再 ×1.4)。"""
+    key = make_signal_cooldown_key(symbol, side, timeframe, ema_type)
+    set_contract_cooldown(key, str(symbol or "").upper(), trading_days, timeframe=timeframe)
+    return key
+
+
+def arm_signal_bucket_cooldowns(signals: List[Any], trading_days: int = 1) -> List[str]:
+    """一批信号按唯一桶键写入冷却(同批择优后再调用,避免扫中途互斥)。"""
+    armed: List[str] = []
+    seen = set()
+    for sig in signals or []:
+        key = signal_cooldown_key_from_signal(sig)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if isinstance(sig, dict):
+            sym = str(sig.get("symbol") or "").upper()
+            tf = sig.get("timeframe") or "1d"
+        else:
+            sym = str(getattr(sig, "symbol", "") or "").upper()
+            tf = getattr(sig, "timeframe", None) or "1d"
+        set_contract_cooldown(key, sym or "?", int(trading_days), timeframe=str(tf))
+        armed.append(key)
+    return armed
+
 
 def is_contract_in_cooldown(contract_code: str) -> bool:
     conn = get_db()
@@ -416,6 +523,8 @@ def set_contract_cooldown(contract_code: str, symbol: str, trading_days: int = 5
     """冷却 N 个自然日历日（config 天数原样生效，不再 ×1.4）。
 
     参数名 trading_days 为历史兼容；语义为自然日：fill 1 → 冷却 1 天。
+    contract_code 列现多为信号桶键(见 make_signal_cooldown_key);亦可为
+    UNCOV.* 等不透明键。旧单合约 code 可自然过期。
     timeframe 仅记录。
     """
     calendar_days = int(trading_days)

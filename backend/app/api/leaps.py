@@ -253,6 +253,14 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
             # 默认只推可做/强,避免观察级刷屏;push_strong_only=False 时全推
             if strong_only and level == "WATCH":
                 continue
+            # TG 跳过:信号桶已在冷却(跨扫描防刷;同批择优不受影响)
+            try:
+                cd_key = repo.signal_cooldown_key_from_signal(sig)
+                if repo.is_contract_in_cooldown(cd_key):
+                    logger.info("wheel TG 跳过(信号桶冷却): %s", cd_key)
+                    continue
+            except Exception as e:
+                logger.debug("cooldown TG check skip: %s", e)
             try:
                 ch = timing_channel_kind(getattr(sig, "signal_level", None))
                 if not ch:
@@ -262,6 +270,18 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
                     sent += 1
             except Exception as e:
                 logger.warning("wheel 信号推送失败: %s", e)
+        # 扫描+TG 后按桶键写入冷却(同批已择优;下次同桶跳过扫描/TG)
+        try:
+            cd_days = int(
+                (timing_cfg.get("cooldown_trading_days")
+                 or monitor.monitor.cooldown_days
+                 or 1)
+            )
+            armed = repo.arm_signal_bucket_cooldowns(signals, cd_days)
+            if armed:
+                logger.info("wheel 信号桶冷却已写入 %d 个: %s", len(armed), ", ".join(armed[:8]))
+        except Exception as e:
+            logger.warning("wheel 信号桶冷却写入失败: %s", e)
         _timing_prog.mark_done(signals_found=len(signals), telegram_sent=sent, report=report)
 
         # 管仓(在场合约/裸奔)不在此推送 — 仅走 _position_alert_loop / push_position_alerts
