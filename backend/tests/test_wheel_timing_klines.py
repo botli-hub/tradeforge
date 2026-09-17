@@ -22,6 +22,7 @@ from app.core.wheel_timing_klines import (  # noqa: E402
     ema_touch,
     futu_kl_names,
     history_key,
+    is_tradeable_quote,
     normalize_timeframe,
     resolve_scan_timeframe,
 )
@@ -105,6 +106,117 @@ def test_ema_touch_skips_missing_level_map_key():
         closes, 1.05,
         ema50_min=50, ema200_min=200, allow_partial_ema=True,
         level_map={},
+    ) is None
+
+
+def test_is_tradeable_quote():
+    assert is_tradeable_quote(4.35, 4.75) is True
+    assert is_tradeable_quote(0, 4.75) is False
+    assert is_tradeable_quote(4.35, 0) is False
+    assert is_tradeable_quote(None, 4.75) is False
+    assert is_tradeable_quote(4.35, None) is False
+    assert is_tradeable_quote("x", 1) is False
+
+
+def test_ema_touch_bid_confirm_rejects_stale_last():
+    """TQQQ261023P71000 类假触: last≥EMA50 但 bid/ask 均在线下 → 无信号。"""
+    # 平价序列 → EMA50≈6.14
+    closes = pd.Series([6.14] * 60)
+    last, ema_approx = 6.5948, 6.14
+    bid, ask = 4.35, 4.75
+    hit = ema_touch(
+        closes, last,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+        bid=bid, ask=ask, volume=0,
+        require_tradeable_quote=True,
+        confirm_with_bid=True,
+    )
+    assert hit is None
+    # 无 confirm 时旧逻辑会命中(对照)
+    soft = ema_touch(
+        closes, last,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+    )
+    assert soft is not None
+    assert last >= soft["ema_value"]
+    assert bid < soft["ema_value"]
+    assert ask < soft["ema_value"]
+    assert abs(soft["ema_value"] - ema_approx) < 0.05
+
+
+def test_ema_touch_bid_at_or_above_ema_signals():
+    """bid≥EMA → 确认通过,出信号(含 volume=0 只用 bid)。"""
+    closes = pd.Series([6.14] * 60)
+    hit = ema_touch(
+        closes, 6.59,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+        bid=6.20, ask=6.50, volume=0,
+        require_tradeable_quote=True,
+        confirm_with_bid=True,
+    )
+    assert hit is not None
+    assert hit["ema_type"] == "EMA50"
+    assert 6.20 >= hit["ema_value"]
+
+    # volume>0: last 初检 + bid 确认
+    hit2 = ema_touch(
+        closes, 6.59,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_CALL", "EMA200": "WHEEL_CALL"},
+        bid=6.20, ask=6.40, volume=12,
+        require_tradeable_quote=True,
+        confirm_with_bid=True,
+    )
+    assert hit2 is not None
+
+
+def test_ema_touch_missing_quote_skips():
+    """缺 bid/ask 或 ≤0 → require_tradeable_quote 时跳过。"""
+    closes = pd.Series([1.0] * 60)
+    kw = dict(
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT", "EMA200": "WHEEL_PUT"},
+        require_tradeable_quote=True,
+        confirm_with_bid=True,
+    )
+    assert ema_touch(closes, 1.05, bid=None, ask=1.1, volume=5, **kw) is None
+    assert ema_touch(closes, 1.05, bid=1.05, ask=None, volume=5, **kw) is None
+    assert ema_touch(closes, 1.05, bid=0, ask=1.1, volume=5, **kw) is None
+    assert ema_touch(closes, 1.05, bid=1.05, ask=0, volume=5, **kw) is None
+
+
+def test_ema_touch_vol0_forbids_last_alone():
+    """今日 volume=0: 禁止仅凭 last 通过; last 高但无 bid → None。"""
+    closes = pd.Series([1.0] * 60)
+    # volume=0 且无有效 bid
+    assert ema_touch(
+        closes, 1.5,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT"},
+        bid=None, ask=None, volume=0,
+        require_tradeable_quote=False,
+        confirm_with_bid=False,
+    ) is None
+    # volume=0 + 可成交但 bid 在线下
+    assert ema_touch(
+        closes, 1.5,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT"},
+        bid=0.5, ask=0.6, volume=0,
+        require_tradeable_quote=True,
+        confirm_with_bid=True,
+    ) is None
+    # volume>0 last 触但 bid 线下 → confirm 丢弃
+    assert ema_touch(
+        closes, 1.5,
+        ema50_min=50, ema200_min=200, allow_partial_ema=True,
+        level_map={"EMA50": "WHEEL_PUT"},
+        bid=0.5, ask=0.6, volume=10,
+        require_tradeable_quote=True,
+        confirm_with_bid=True,
     ) is None
 
 
