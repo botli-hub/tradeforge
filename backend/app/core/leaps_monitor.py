@@ -113,7 +113,8 @@ class WheelTimingMonitor:
     IV Rank 默认仅记录不作硬条件(wheel_timing.iv_percentile_threshold 可改)。
     信号级别 WHEEL_PUT / WHEEL_CALL,ema_type 字段区分触的是哪条线;
     冷却复用 leaps_cooldowns,键为信号桶 SYMBOL|PUT|1h|EMA50(同桶多合约共享;
-    扫描与 TG 均跳过;由 _run_wheel_scan 在同批择优推送后写入)。
+    同一美股交易日不重复,下一 RTH open 解冻;扫描与 TG 均跳过;
+    由 _run_wheel_scan 在同批择优推送后写入)。
     """
 
     def __init__(self, config: Dict[str, Any]):

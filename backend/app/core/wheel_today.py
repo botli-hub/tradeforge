@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, time, timedelta
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +74,47 @@ def us_session_phase(now: Optional[datetime] = None) -> str:
     if 21 * 60 <= mins or mins < 2 * 60:
         return "after"
     return "closed"
+
+
+
+# 美股权益交易日(信号桶冷却用)。无 exchange_calendars 依赖时用 weekday + NY tz；
+# 节假日按普通工作日处理(半日市仍算同一交易日)。
+_NY = ZoneInfo("America/New_York")
+_RTH_OPEN = time(9, 30)
+
+
+def _prev_weekday(d: date) -> date:
+    d = d - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
+def us_equity_session_date(now: Optional[datetime] = None) -> str:
+    """当前美股权益 session 日(YYYY-MM-DD, America/New_York)。
+
+    规则(与「同交易日不重复 / 下一交易日开盘解冻」对齐):
+    - 工作日 ≥ 09:30 ET: 当日为 session 日(半日市同日)
+    - 工作日 < 09:30 ET: 仍属上一交易日(解冻点=下一 RTH open)
+    - 周末: 上一周五(或最近工作日)
+
+    节假日: deps 无 exchange_calendars,按工作日近似;假日盘中写入的 id
+    会在下一真实开盘前一直视为「当前 session」(与 weekday 回退一致的保守近似)。
+    """
+    if now is None:
+        now_ny = datetime.now(tz=_NY)
+    elif now.tzinfo is None:
+        # 无 tz 时按美东墙上时钟解释(便于单测注入)
+        now_ny = now.replace(tzinfo=_NY)
+    else:
+        now_ny = now.astimezone(_NY)
+
+    d = now_ny.date()
+    if d.weekday() >= 5:
+        return _prev_weekday(d).isoformat()
+    if (now_ny.hour, now_ny.minute, now_ny.second) < (_RTH_OPEN.hour, _RTH_OPEN.minute, 0):
+        return _prev_weekday(d).isoformat()
+    return d.isoformat()
 
 
 def event_calendar(days: int = 21) -> List[Dict[str, Any]]:

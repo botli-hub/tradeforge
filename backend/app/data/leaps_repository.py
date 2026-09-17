@@ -1,5 +1,6 @@
 """LEAPS 信号监控数据访问层"""
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timedelta
@@ -400,7 +401,41 @@ def get_latest_call_touch(symbol: str, max_age_hours: float = 72,
 # 触线/Wheel 冷却主键(contract_code 列)现为信号桶键,格式:
 #   {SYMBOL}|{PUT|CALL}|{1h|1d}|{EMA50|EMA200}
 # 例: QQQ|PUT|1h|EMA50
-# 旧单合约 code 行可自然过期;新写入只使用桶键。UNCOV.* 等非桶键仍按原样存查。
+# 信号桶冷却语义=同一美股交易日不重复(存 session 日 YYYY-MM-DD),下一 RTH open 解冻。
+# 旧单合约 code / UNCOV.* 等非桶键仍用自然日历 until=now+N days。
+
+
+_TRADING_DAY_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _is_trading_day_id(value: Any) -> bool:
+    return bool(_TRADING_DAY_ID_RE.match(str(value or "")))
+
+
+def _upsert_cooldown(
+    contract_code: str,
+    symbol: str,
+    cooldown_until: str,
+    timeframe: Optional[str] = None,
+) -> None:
+    conn = get_db()
+    now = _now_iso()
+    tf = _tf(timeframe)
+    try:
+        conn.execute(
+            """
+            INSERT INTO leaps_cooldowns (contract_code, symbol, cooldown_until, created_at, updated_at, timeframe)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(contract_code) DO UPDATE SET
+                cooldown_until = excluded.cooldown_until,
+                updated_at = excluded.updated_at,
+                timeframe = excluded.timeframe
+            """,
+            (contract_code, symbol, cooldown_until, now, now, tf),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def make_signal_cooldown_key(
@@ -466,9 +501,11 @@ def is_signal_bucket_in_cooldown(
     side: str,
     timeframe: str,
     ema_type: str,
+    now: Optional[datetime] = None,
 ) -> bool:
     return is_contract_in_cooldown(
-        make_signal_cooldown_key(symbol, side, timeframe, ema_type)
+        make_signal_cooldown_key(symbol, side, timeframe, ema_type),
+        now=now,
     )
 
 
@@ -478,15 +515,35 @@ def set_signal_bucket_cooldown(
     timeframe: str,
     ema_type: str,
     trading_days: int = 1,
+    now: Optional[datetime] = None,
 ) -> str:
-    """写入桶冷却;返回所用键。天数=自然日历日(不再 ×1.4)。"""
+    """写入桶冷却;返回所用键。
+
+    存当前美股交易日 id(YYYY-MM-DD),同日再触 → 跳过。
+    trading_days 已弃用(信号桶路径忽略;保留形参兼容旧调用)。
+    """
+    _ = trading_days  # deprecated for signal-bucket path
+    from app.core.wheel_today import us_equity_session_date
+
     key = make_signal_cooldown_key(symbol, side, timeframe, ema_type)
-    set_contract_cooldown(key, str(symbol or "").upper(), trading_days, timeframe=timeframe)
+    day_id = us_equity_session_date(now)
+    _upsert_cooldown(key, str(symbol or "").upper(), day_id, timeframe=timeframe)
     return key
 
 
-def arm_signal_bucket_cooldowns(signals: List[Any], trading_days: int = 1) -> List[str]:
-    """一批信号按唯一桶键写入冷却(同批择优后再调用,避免扫中途互斥)。"""
+def arm_signal_bucket_cooldowns(
+    signals: List[Any],
+    trading_days: int = 1,
+    now: Optional[datetime] = None,
+) -> List[str]:
+    """一批信号按唯一桶键写入冷却(同批择优后再调用,避免扫中途互斥)。
+
+    trading_days 已弃用(忽略);写入 us_equity_session_date。
+    """
+    _ = trading_days
+    from app.core.wheel_today import us_equity_session_date
+
+    day_id = us_equity_session_date(now)
     armed: List[str] = []
     seen = set()
     for sig in signals or []:
@@ -500,63 +557,73 @@ def arm_signal_bucket_cooldowns(signals: List[Any], trading_days: int = 1) -> Li
         else:
             sym = str(getattr(sig, "symbol", "") or "").upper()
             tf = getattr(sig, "timeframe", None) or "1d"
-        set_contract_cooldown(key, sym or "?", int(trading_days), timeframe=str(tf))
+        _upsert_cooldown(key, sym or "?", day_id, timeframe=str(tf))
         armed.append(key)
     return armed
 
 
-def is_contract_in_cooldown(contract_code: str) -> bool:
+def is_contract_in_cooldown(
+    contract_code: str,
+    now: Optional[datetime] = None,
+) -> bool:
+    """冷却判定。
+
+    - cooldown_until 为 YYYY-MM-DD → 美股交易日模式:等于当前 session 日则冷却中
+    - 否则 → 旧自然日历时间戳: until > now
+    """
     conn = get_db()
-    now = datetime.now().isoformat()
     try:
         row = conn.execute(
             "SELECT cooldown_until FROM leaps_cooldowns WHERE contract_code = ?",
             (contract_code,),
         ).fetchone()
-        return bool(row and row["cooldown_until"] > now)
+        if not row:
+            return False
+        until = row["cooldown_until"]
+        if _is_trading_day_id(until):
+            from app.core.wheel_today import us_equity_session_date
+            return str(until) == us_equity_session_date(now)
+        now_iso = (now or datetime.now()).isoformat()
+        return bool(until > now_iso)
     finally:
         conn.close()
 
 
 def set_contract_cooldown(contract_code: str, symbol: str, trading_days: int = 5,
                           timeframe: Optional[str] = None):
-    """冷却 N 个自然日历日（config 天数原样生效，不再 ×1.4）。
+    """冷却 N 个自然日历日（LEAPS/UNCOV 等非信号桶路径）。
 
     参数名 trading_days 为历史兼容；语义为自然日：fill 1 → 冷却 1 天。
-    contract_code 列现多为信号桶键(见 make_signal_cooldown_key);亦可为
-    UNCOV.* 等不透明键。旧单合约 code 可自然过期。
+    信号桶请用 set_signal_bucket_cooldown / arm_signal_bucket_cooldowns
+    (存交易日 id,不走本函数)。
     timeframe 仅记录。
     """
     calendar_days = int(trading_days)
     cooldown_until = (datetime.now() + timedelta(days=calendar_days)).isoformat()
-    conn = get_db()
-    now = _now_iso()
-    tf = _tf(timeframe)
-    try:
-        conn.execute(
-            """
-            INSERT INTO leaps_cooldowns (contract_code, symbol, cooldown_until, created_at, updated_at, timeframe)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(contract_code) DO UPDATE SET
-                cooldown_until = excluded.cooldown_until,
-                updated_at = excluded.updated_at,
-                timeframe = excluded.timeframe
-            """,
-            (contract_code, symbol, cooldown_until, now, now, tf),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    _upsert_cooldown(contract_code, symbol, cooldown_until, timeframe=timeframe)
 
 
-def get_all_cooldowns() -> List[Dict[str, Any]]:
+def get_all_cooldowns(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
+    """活跃冷却列表。交易日 id 行:当前 session 日匹配则视为活跃。"""
+    from app.core.wheel_today import us_equity_session_date
+
     conn = get_db()
-    now = datetime.now().isoformat()
+    now_dt = now or datetime.now()
+    now_iso = now_dt.isoformat()
+    session_day = us_equity_session_date(now_dt)
     try:
         rows = conn.execute(
-            "SELECT * FROM leaps_cooldowns WHERE cooldown_until > ? ORDER BY cooldown_until",
-            (now,),
+            "SELECT * FROM leaps_cooldowns ORDER BY cooldown_until"
         ).fetchall()
-        return [dict(r) for r in rows]
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            until = d.get("cooldown_until")
+            if _is_trading_day_id(until):
+                if str(until) == session_day:
+                    out.append(d)
+            elif until and until > now_iso:
+                out.append(d)
+        return out
     finally:
         conn.close()

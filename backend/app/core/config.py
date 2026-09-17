@@ -63,8 +63,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "wheel_timing": {
         "dte_min": 10, "dte_max": 55, "contract_max_per_symbol": 0,
         "iv_percentile_threshold": 0,
-        # 信号桶冷却：自然日历日(fill 1 → 1 天)，不再 ×1.4；
-        # 键= SYMBOL|PUT|1h|EMA50(同桶多合约共享;扫描+TG 均跳过)
+        # 信号桶冷却键= SYMBOL|PUT|1h|EMA50(同桶共享;扫描+TG 均跳过)。
+        # 语义=同一美股交易日不重复(存 session 日);下一 RTH open 解冻。
+        # cooldown_trading_days 已弃用(信号桶路径忽略,保留兼容旧配置/调用)。
         "cooldown_trading_days": 1,
         "auto_scan_minutes": 30,
         # 仅美股 RTH 自动扫(周末/盘外不推 TG);手动 POST /wheel-scan 仍可 force
