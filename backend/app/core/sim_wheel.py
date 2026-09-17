@@ -543,6 +543,21 @@ class SimWheelEngine:
         if not symbol:
             return {"ok": False, "reason": "no_symbol"}
 
+        # 与 Wheel TG 共用信号桶冷却键(SYMBOL|PUT|1h|EMA50)
+        if is_timing_scan_alert(alert):
+            try:
+                from app.data import leaps_repository as leaps_repo
+                cd_key = leaps_repo.signal_cooldown_key_from_signal(alert)
+                if leaps_repo.is_contract_in_cooldown(cd_key):
+                    return {
+                        "ok": False,
+                        "reason": "signal_bucket_cooldown",
+                        "fingerprint": fp,
+                        "cooldown_key": cd_key,
+                    }
+            except Exception:
+                pass
+
         strategy = strategy_of_alert(alert)
         kind = str(alert.get("kind") or alert.get("signal_level") or "").upper()
 
