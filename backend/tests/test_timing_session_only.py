@@ -93,7 +93,7 @@ def test_auto_scan_runs_during_rth():
         leaps._run_wheel_scan(symbol=None, force=False)
 
     fake_monitor.scan_all.assert_called_once()
-    chan_alerts.run_chan_alert_cycle.assert_called_once()
+    chan_alerts.run_chan_alert_cycle.assert_not_called()
 
 
 def test_manual_force_bypasses_session_gate():
@@ -120,8 +120,8 @@ def test_manual_force_bypasses_session_gate():
         leaps._run_wheel_scan(symbol="AAPL", force=True)
 
     fake_monitor.scan_all.assert_called_once()
-    # force 绕过时不应调用 is_us_rth(或即使调用也不影响)
-    chan_alerts.run_chan_alert_cycle.assert_called_once()
+    # force 绕过 session 门禁;缠论仍不由此路径触发
+    chan_alerts.run_chan_alert_cycle.assert_not_called()
 
 
 def test_session_only_false_allows_weekend_auto():

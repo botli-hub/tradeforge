@@ -1,6 +1,7 @@
-"""时机扫描不得附带管仓推送(process_position_alerts / 裸奔)。
+"""时机扫描不得附带缠论推送(run_chan_alert_cycle)。
 
-管仓仅走 _position_alert_loop(alert_push_minutes) 与手动 push_position_alerts。
+缠论仅走 _chan_alert_loop; 自动/手动(force) _run_wheel_scan 均不调用。
+与 test_timing_scan_no_position_push 对称: 管仓/缠论各自专责, 不争 OpenD。
 """
 from __future__ import annotations
 
@@ -22,18 +23,15 @@ def _wheel_scan_body() -> str:
     return src[start:end]
 
 
-def test_run_wheel_scan_source_has_no_position_alert_side_path():
+def test_run_wheel_scan_source_has_no_chan_alert_call():
     body = _wheel_scan_body()
-    assert "process_position_alerts" not in body
-    assert "check_open_positions_core" not in body
-    assert "UNCOV." not in body
-    assert "管仓|裸奔" not in body
-    assert "alert_from_wheel_signal" in body
     assert "run_chan_alert_cycle" not in body
+    assert "_chan_alert_loop" in body or "缠论" in body  # 责任拆分注释
+    assert "alert_from_wheel_signal" in body
 
 
-def test_run_wheel_scan_does_not_call_process_position_alerts():
-    """运行空扫描时不应触发管仓体检/推送(不依赖 numpy/富途)。"""
+def test_run_wheel_scan_force_does_not_call_chan_alert_cycle():
+    """手动 force=True 时机扫描也不跑缠论(不依赖 numpy/富途)。"""
     from app.api import leaps
 
     fake_monitor = MagicMock()
@@ -54,6 +52,7 @@ def test_run_wheel_scan_does_not_call_process_position_alerts():
 
     chan_alerts = types.ModuleType("app.services.chan_alerts")
     chan_alerts.run_chan_alert_cycle = MagicMock()
+    chan_alerts.is_us_rth = MagicMock(return_value=True)
 
     wheel_timing_scan_patch = types.ModuleType("app.core.wheel_timing_scan_patch")
 
@@ -62,9 +61,7 @@ def test_run_wheel_scan_does_not_call_process_position_alerts():
     alert_engine.send_and_log = MagicMock()
 
     wheel_api = types.ModuleType("app.api.wheel")
-    wheel_api.check_open_positions_core = MagicMock(
-        return_value={"items": [{"symbol": "AAPL"}]}
-    )
+    wheel_api.check_open_positions_core = MagicMock(return_value={"items": []})
 
     notifier = types.ModuleType("app.services.notifier")
     notifier.timing_channel_kind = MagicMock(return_value=None)
@@ -90,22 +87,21 @@ def test_run_wheel_scan_does_not_call_process_position_alerts():
     }), patch.dict(sys.modules, modules):
         leaps._run_wheel_scan(symbol=None, force=True)
 
-    alert_engine.process_position_alerts.assert_not_called()
-    wheel_api.check_open_positions_core.assert_not_called()
     chan_alerts.run_chan_alert_cycle.assert_not_called()
     fake_monitor.scan_all.assert_called_once()
 
 
-def test_position_alert_hook_owns_uncovered():
-    """裸奔迁入 services 管仓挂钩,手动/定时 API 仍覆盖。"""
-    src = (BACKEND / "app" / "services" / "__init__.py").read_text(encoding="utf-8")
-    assert "UNCOV." in src
-    assert "管仓|裸奔" in src
-    assert "process_position_alerts" in src
+def test_chan_alert_loop_owns_run_chan_alert_cycle():
+    """main._chan_alert_loop 仍是缠论唯一周期入口。"""
+    src = (BACKEND / "app" / "main.py").read_text(encoding="utf-8")
+    assert "def _chan_alert_loop" in src
+    assert "run_chan_alert_cycle" in src
+    # 责任注释
+    assert "不经 _run_wheel_scan" in src or "唯一入口" in src
 
 
-def test_leaps_module_ast_wheel_scan_no_position_imports():
-    """静态: _run_wheel_scan 函数体内无管仓相关 import。"""
+def test_leaps_module_ast_wheel_scan_no_chan_cycle_call():
+    """静态: _run_wheel_scan 函数体内不引用 run_chan_alert_cycle。"""
     path = BACKEND / "app" / "api" / "leaps.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     fn = None
@@ -114,7 +110,7 @@ def test_leaps_module_ast_wheel_scan_no_position_imports():
             fn = node
             break
     assert fn is not None
-    banned = {"process_position_alerts", "check_open_positions_core", "send_and_log"}
+    banned = {"run_chan_alert_cycle"}
     found = set()
     for n in ast.walk(fn):
         if isinstance(n, ast.ImportFrom):
@@ -123,4 +119,6 @@ def test_leaps_module_ast_wheel_scan_no_position_imports():
                     found.add(alias.name)
         elif isinstance(n, ast.Name) and n.id in banned:
             found.add(n.id)
+        elif isinstance(n, ast.Attribute) and n.attr in banned:
+            found.add(n.attr)
     assert not found, f"_run_wheel_scan still references {found}"
