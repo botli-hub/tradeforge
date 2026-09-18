@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
@@ -43,6 +44,7 @@ DEFAULT_CHAN_ALERTS: Dict[str, Any] = {
     "session_only": True,  # 仅美股 RTH
     "bar_limit": 400,
     "recent_bars": 3,  # 只推近 N 根对应时长内的增量
+    "scan_max_workers": 4,  # 标的级并行;硬顶见 resolve_scan_max_workers
 }
 
 
@@ -461,9 +463,12 @@ def run_chan_alert_cycle(
     collected: List[Dict[str, Any]] = []
     bootstrap_tfs = {tf for tf in due if prime_on_empty and tf not in runs}
 
-    for symbol in universe:
+    def _analyze_symbol(symbol: str) -> tuple:
+        """单标的:扫全部 due 级别。返回 (scanned_rows, collected_rows)。"""
+        local_scanned: List[Dict[str, str]] = []
+        local_collected: List[Dict[str, Any]] = []
         for tf in due:
-            scanned.append({"symbol": symbol, "timeframe": tf})
+            local_scanned.append({"symbol": symbol, "timeframe": tf})
             try:
                 result = analyze_fn(symbol, tf, cfg)
             except Exception as e:
@@ -473,7 +478,7 @@ def run_chan_alert_cycle(
                 kind = str(s.get("kind") or "")
                 if kind not in {"B1", "B2", "B3", "S1", "S2", "S3"}:
                     continue
-                collected.append({
+                local_collected.append({
                     "symbol": symbol,
                     "timeframe": tf,
                     "kind": kind,
@@ -483,6 +488,29 @@ def run_chan_alert_cycle(
                     "note": s.get("note") or "",
                     "bootstrap": tf in bootstrap_tfs,
                 })
+        return local_scanned, local_collected
+
+    from app.core.opend import resolve_scan_max_workers
+    workers = resolve_scan_max_workers(ca.get("scan_max_workers"))
+    if workers <= 1 or len(universe) <= 1:
+        for symbol in universe:
+            sc, col = _analyze_symbol(symbol)
+            scanned.extend(sc)
+            collected.extend(col)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=min(workers, len(universe)),
+            thread_name_prefix="chan-scan",
+        ) as pool:
+            futs = {pool.submit(_analyze_symbol, sym): sym for sym in universe}
+            for fut in as_completed(futs):
+                sym = futs[fut]
+                try:
+                    sc, col = fut.result()
+                    scanned.extend(sc)
+                    collected.extend(col)
+                except Exception as e:
+                    logger.info("chan analyze future skip %s: %s", sym, e)
 
     primed_fps: List[str] = []
     live_items: List[Dict[str, Any]] = []
