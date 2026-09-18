@@ -88,6 +88,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # Call 1h 触线 EMA 列表(DEFAULT 仅 EMA200);运行时 config 驱动，
         # 席位可设 ["EMA50","EMA200"] 恢复双线。日线仍 EMA50+EMA200；不影响 Put。
         "call_1h_ema_types": ["EMA200"],
+        # 标的级并行扫描 workers(默认 4,硬顶 8);1=串行。OpenD 全局限频仍 ~3.2s。
+        "scan_max_workers": 4,
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
@@ -211,6 +213,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "session_only": True,  # 仅美股 RTH
         "bar_limit": 400,
         "recent_bars": 3,
+        # 标的级并行(默认 4,硬顶 8);与时机扫描同口径
+        "scan_max_workers": 4,
     },
     # 完整轮子纸面账(Sim Wheel);不改 POSITION_QUANT / 实盘止盈线
     "sim_wheel": {
