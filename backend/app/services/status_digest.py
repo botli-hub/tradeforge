@@ -7,6 +7,17 @@
 数据口径复用 notion_sync / google_sheets_sync 的 map_*。
 失败只打日志;消息按 TG 4096 上限分片。
 默认 enabled=false;手动 API 始终可强制推一次。
+
+最近触线仅含 wheel_targets.enabled=1 的标的;无匹配时展示「暂无」。
+Sim 仅当前未平仓纸面周期;清空后亦「暂无」。
+
+日推默认 America/New_York 09:30(美股 RTH open),由 status_digest_tz +
+status_digest_hour/minute(或 status_digest_at="HH:MM") 配置,不硬编码上海钟点。
+
+迁移(旧默认 Asia/Shanghai status_digest_hour=8):
+- 要用美股开盘:采用新默认(或显式 tz=America/New_York, hour=9, minute=30)
+- 要保持上海 08:00:设 status_digest_tz=Asia/Shanghai, hour=8, minute=0
+- 仅写了旧 hour、未写 tz/minute 的库配置会与新默认拼合,请核对一次
 """
 from __future__ import annotations
 
@@ -24,8 +35,13 @@ KV_SENT_DATE = "status_digest_sent_date"
 
 DEFAULT_STATUS_DIGEST: Dict[str, Any] = {
     "enabled": False,  # 安全默认关;手动 API 不受限
-    "status_digest_hour": 8,  # Asia/Shanghai 本地钟点;每天最多一次
-    "status_digest_minutes": 0,  # >0 时改用间隔推送,忽略 hour
+    # 日推时钟:默认美股 RTH open(不硬编码上海)
+    "status_digest_tz": "America/New_York",
+    "status_digest_hour": 9,
+    "status_digest_minute": 30,
+    # 可选 "HH:MM";若设置则覆盖 hour/minute
+    "status_digest_at": "",
+    "status_digest_minutes": 0,  # >0 时改用间隔推送,忽略日推时钟
     "touch_limit": 10,
 }
 
@@ -37,6 +53,70 @@ def get_status_digest_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         if isinstance(overlay, dict):
             merged.update({k: v for k, v in overlay.items() if v is not None})
     return merged
+
+
+def digest_zoneinfo(sd: Optional[Dict[str, Any]] = None) -> ZoneInfo:
+    """解析 status_digest_tz;非法时回落 America/New_York。"""
+    sd = sd or DEFAULT_STATUS_DIGEST
+    name = str(sd.get("status_digest_tz") or "America/New_York").strip() or "America/New_York"
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        logger.warning("status_digest_tz invalid %r, fallback America/New_York", name)
+        return ZoneInfo("America/New_York")
+
+
+def digest_clock(sd: Optional[Dict[str, Any]] = None) -> Tuple[int, int]:
+    """日推本地 (hour, minute)。
+
+    优先 status_digest_at="HH:MM";否则 status_digest_hour + status_digest_minute。
+    """
+    sd = sd or DEFAULT_STATUS_DIGEST
+    at = sd.get("status_digest_at")
+    if at is not None and str(at).strip():
+        raw = str(at).strip()
+        try:
+            parts = raw.split(":")
+            h = int(parts[0])
+            m = int(parts[1]) if len(parts) > 1 else 0
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return h, m
+        except (TypeError, ValueError, IndexError):
+            logger.warning("status_digest_at invalid %r, fallback hour/minute", at)
+    try:
+        hour = int(sd.get("status_digest_hour") if sd.get("status_digest_hour") is not None else 9)
+    except (TypeError, ValueError):
+        hour = 9
+    try:
+        minute = int(
+            sd.get("status_digest_minute") if sd.get("status_digest_minute") is not None else 30
+        )
+    except (TypeError, ValueError):
+        minute = 30
+    hour = max(0, min(23, hour))
+    minute = max(0, min(59, minute))
+    return hour, minute
+
+
+def enabled_wheel_symbols(
+    get_targets_fn: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+) -> set:
+    """wheel_targets 中 enabled 真值的标的(大写)。失败 → 空集。"""
+    try:
+        if get_targets_fn is None:
+            from app.data import wheel_repository as wrepo
+            get_targets_fn = wrepo.get_targets
+        out = set()
+        for t in get_targets_fn() or []:
+            if not t.get("enabled"):
+                continue
+            sym = str(t.get("symbol") or "").strip().upper()
+            if sym:
+                out.add(sym)
+        return out
+    except Exception as e:
+        logger.warning("status digest enabled targets failed: %s", e)
+        return set()
 
 
 def _fmt_num(val: Any, *, prefix: str = "", digits: int = 2) -> str:
@@ -284,8 +364,14 @@ def collect_status_rows(
     get_cycles_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None,
     get_timing_fn: Optional[Callable[..., Dict[str, Any]]] = None,
     list_sim_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None,
+    get_targets_fn: Optional[Callable[[], List[Dict[str, Any]]]] = None,
 ) -> Dict[str, List[Tuple[str, str, Dict[str, Any]]]]:
-    """复用 notion_sync map_*;touch_limit 取自 status_digest。可注入 repo 便于单测。"""
+    """复用 notion_sync map_*;touch_limit 取自 status_digest。可注入 repo 便于单测。
+
+    最近触线:只保留 wheel_targets.enabled 的标的(先取较大页再过滤截断);
+    无启用标的或无匹配 → touches=[] → 文案「暂无」。
+    Sim:仅当前未平仓周期(include_closed=False);清空后 sims=[] →「暂无」。
+    """
     from app.services.notion_sync import map_position_row, map_sim_row, map_touch_row
 
     sd = get_status_digest_cfg(cfg)
@@ -306,8 +392,21 @@ def collect_status_rows(
         sk, title, fields = map_position_row(c)
         positions.append((sk, title, enrich_position_fields(fields, c)))
 
-    hist = get_timing_fn(page=1, page_size=min(max(touch_limit, 1), 100))
-    touches = [map_touch_row(r) for r in (hist.get("items") or [])]
+    enabled = enabled_wheel_symbols(get_targets_fn)
+    touches: List[Tuple[str, str, Dict[str, Any]]] = []
+    if enabled and touch_limit > 0:
+        # 多取再滤,避免全局 recent N 被非观察标的占满
+        hist = get_timing_fn(page=1, page_size=100)
+        for r in hist.get("items") or []:
+            sym = str((r or {}).get("symbol") or "").strip().upper()
+            if sym not in enabled:
+                continue
+            touches.append(map_touch_row(r))
+            if len(touches) >= touch_limit:
+                break
+    # enabled 空或无匹配 → touches 保持 [] →「暂无」
+
+    # 仅当前 open sim;已清仓/CLOSED 不进摘要
     sims = [map_sim_row(c) for c in list_sim_fn(include_closed=False, limit=200)]
     return {"positions": positions, "touches": touches, "sim": sims}
 
@@ -386,7 +485,7 @@ def run_status_digest(
             r = send_fn(
                 body,
                 category="status_digest",
-                fingerprint=f"status_digest:{datetime.now(SHANGHAI).date().isoformat()}:{i}",
+                fingerprint=f"status_digest:{datetime.now(digest_zoneinfo(sd)).date().isoformat()}:{i}",
                 title="status_digest",
                 meta={
                     "chunk": i + 1,
@@ -415,12 +514,12 @@ def run_status_digest(
 
 
 def _should_run_daily(sd: Dict[str, Any], now_local: datetime) -> bool:
-    """Asia/Shanghai 本地 hour 到达且今日未推。"""
-    try:
-        hour = int(sd.get("status_digest_hour") if sd.get("status_digest_hour") is not None else 8)
-    except (TypeError, ValueError):
-        hour = 8
-    if now_local.hour < hour:
+    """配置时区本地钟点(含分钟)已到且该本地日未推。
+
+    now_local 应为 digest_zoneinfo(sd) 下的 aware datetime。
+    """
+    hour, minute = digest_clock(sd)
+    if (now_local.hour, now_local.minute) < (hour, minute):
         return False
     today = now_local.date().isoformat()
     try:
@@ -430,8 +529,9 @@ def _should_run_daily(sd: Dict[str, Any], now_local: datetime) -> bool:
         return True
 
 
-def mark_daily_sent(now_local: Optional[datetime] = None) -> None:
-    now_local = now_local or datetime.now(SHANGHAI)
+def mark_daily_sent(now_local: Optional[datetime] = None, sd: Optional[Dict[str, Any]] = None) -> None:
+    if now_local is None:
+        now_local = datetime.now(digest_zoneinfo(sd or DEFAULT_STATUS_DIGEST))
     try:
         from app.data.wheel_repository import set_kv
         set_kv(KV_SENT_DATE, now_local.date().isoformat())
@@ -442,7 +542,8 @@ def mark_daily_sent(now_local: Optional[datetime] = None) -> None:
 def status_digest_loop() -> None:
     """后台循环:
     - status_digest_minutes > 0 → 按分钟间隔推(不受日去重,但仍需 enabled)
-    - 否则 → 每天 Asia/Shanghai status_digest_hour 推一次
+    - 否则 → 每天在 status_digest_tz 的 hour:minute(或 status_digest_at) 推一次
+      默认 America/New_York 09:30(美股 RTH open)
     enabled=false 时休眠等待;失败只记日志。
     """
     time.sleep(160)  # 错开 Notion/Sheets/告警
@@ -472,20 +573,21 @@ def status_digest_loop() -> None:
                 time.sleep(sleep_s)
                 continue
 
-            # 日推模式:每分钟检查一次钟点
+            # 日推模式:每分钟按配置时区检查 hour:minute
             sleep_s = 60
-            now_local = datetime.now(SHANGHAI)
+            now_local = datetime.now(digest_zoneinfo(sd))
             if _should_run_daily(sd, now_local):
                 out = run_status_digest(cfg, force=False)
                 if out.get("sent_count"):
-                    mark_daily_sent(now_local)
+                    mark_daily_sent(now_local, sd)
                     logger.info(
-                        "status digest daily sent=%s chunks=%s counts=%s",
+                        "status digest daily sent=%s chunks=%s counts=%s tz=%s",
                         out.get("sent_count"), out.get("chunks"), out.get("counts"),
+                        sd.get("status_digest_tz"),
                     )
                 elif out.get("ok") and out.get("reason") in ("not_configured", "channel_silent"):
                     # 未配置 TG 也记已尝试,避免刷日志;手动可再 force
-                    mark_daily_sent(now_local)
+                    mark_daily_sent(now_local, sd)
                 elif out.get("skipped"):
                     pass
                 else:

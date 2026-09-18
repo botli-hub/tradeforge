@@ -274,11 +274,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "sheet_sim": "sim",
     },
     # Telegram 状态摘要(看板快照:在场/触线/Sim);与 notify_mode=digest 管仓待办无关
-    # 默认关;手动 POST /api/wheel/alerts/status-digest 始终可推。enabled 后按 hour(上海)日推或 minutes 间隔。
+    # 默认关;手动 POST /api/wheel/alerts/status-digest 始终可推。
+    # enabled 后按 status_digest_tz 的 hour:minute(或 status_digest_at) 日推,或 minutes 间隔。
+    # 默认 America/New_York 09:30(美股 RTH open)。旧上海 hour=8 → 见 status_digest 模块迁移说明。
     "status_digest": {
         "enabled": False,
-        "status_digest_hour": 8,  # Asia/Shanghai 本地钟点;每天最多一次
-        "status_digest_minutes": 0,  # >0 改用间隔推送(分钟),忽略 hour
+        "status_digest_tz": "America/New_York",
+        "status_digest_hour": 9,
+        "status_digest_minute": 30,
+        "status_digest_at": "",  # 可选 "HH:MM",覆盖 hour/minute
+        "status_digest_minutes": 0,  # >0 改用间隔推送(分钟),忽略日推时钟
         "touch_limit": 10,
     },
 }
