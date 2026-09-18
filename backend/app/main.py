@@ -222,7 +222,10 @@ def _position_alert_loop():
 
 
 def _chan_alert_loop():
-    """美股盘中短轮询缠论买卖点(默认 30m/1d),只推增量。日线按 poll_minutes_1d。关闭见 chan_alerts.enabled。"""
+    """美股盘中短轮询缠论买卖点(默认 30m/1d),只推增量。日线按 poll_minutes_1d。关闭见 chan_alerts.enabled。
+
+    缠论唯一入口: 不经 _run_wheel_scan(含手动 force),避免与时机扫描争抢 OpenD。
+    """
     import time
     import logging
     log = logging.getLogger("chan_alerts")

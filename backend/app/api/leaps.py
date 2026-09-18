@@ -286,12 +286,8 @@ def _run_wheel_scan(symbol: Optional[str] = None, force: bool = False):
         _timing_prog.mark_done(signals_found=len(signals), telegram_sent=sent, report=report)
 
         # 管仓(在场合约/裸奔)不在此推送 — 仅走 _position_alert_loop / push_position_alerts
-        # 缠论 5m/30m/1d 买卖点增量推送(fingerprint 去重; 不自动下单)
-        try:
-            from app.services.chan_alerts import run_chan_alert_cycle
-            run_chan_alert_cycle(cfg=cfg)
-        except Exception as e:
-            logger.info("缠论买卖点推送跳过: %s", e)
+        # 缠论买卖点亦不在此扫描 — 仅走 _chan_alert_loop
+        # (避免与独立缠论轮询争抢 OpenD; 手动 force 时机扫描同样不跑缠论)
     except Exception as e:
         logger.error("_run_wheel_scan 异常: %s", e)
         _timing_prog.mark_error(str(e))
