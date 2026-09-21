@@ -34,13 +34,14 @@ def _wheel_cfg(apply_iv_regime: bool = True) -> Dict[str, Any]:
 @router.get("/targets")
 def list_targets():
     from datetime import datetime
-    from app.core.wheel_floor import suggest_floor
+    from app.core.wheel_floor import apply_willing_floor
     from app.core.volatility import brief_profile
 
     from app.core.volatility import get_daily_closes
 
     targets = repo.get_targets()
-    # 附带全部活跃 cycle(支持同标的多轮并行) + 空转天数 + 现价 + 智能参考愿接价
+    # 附带全部活跃 cycle(支持同标的多轮并行) + 空转天数 + 现价
+    # 愿接=推荐价:对齐 floor_price 并写回,清掉手改残留
     for t in targets:
         cycles = repo.get_active_cycles(t["symbol"])
         t["active_cycles"] = cycles
@@ -70,39 +71,23 @@ def list_targets():
         except Exception:
             spot = None
         t["spot"] = round(spot, 2) if spot and spot > 0 else None
-        # 智能参考愿接价(市场结构,不自动写库)
         t["suggested_floor"] = None
         t["suggested_floor_delta"] = None
         t["suggested_floor_spot"] = None
         t["suggested_floor_note"] = None
         try:
-            sug = suggest_floor(
-                t["symbol"],
-                spot,
-                t.get("floor_price"),
-                (vol or {}).get("iv_rank") if isinstance(vol, dict) else None,
-            )
-            sf = sug.get("suggested_floor")
-            t["suggested_floor_note"] = sug.get("message")
-            sug_spot = sug.get("spot")
-            if sug_spot is not None and float(sug_spot) > 0:
-                t["suggested_floor_spot"] = round(float(sug_spot), 2)
-                if t["spot"] is None:
-                    t["spot"] = t["suggested_floor_spot"]
-            if sf is not None and float(sf) > 0:
-                t["suggested_floor"] = round(float(sf), 2)
-                cur = t.get("floor_price")
-                if cur is not None and float(cur) > 0:
-                    t["suggested_floor_delta"] = round(float(sf) - float(cur), 2)
+            iv = (vol or {}).get("iv_rank") if isinstance(vol, dict) else None
+            apply_willing_floor(t, spot=spot, iv_rank=iv, sync_db=True)
+            if t.get("spot") is None and t.get("suggested_floor_spot") is not None:
+                t["spot"] = t["suggested_floor_spot"]
         except Exception as e:
-            logger.warning("suggested_floor %s failed: %s", t.get("symbol"), e)
-            # 最后兜底:至少不要整列空白
+            logger.warning("willing_floor %s failed: %s", t.get("symbol"), e)
             try:
                 cur = float(t.get("floor_price") or 0)
                 if cur > 0:
                     t["suggested_floor"] = cur
                     t["suggested_floor_delta"] = 0.0
-                    t["suggested_floor_note"] = f"计算失败,暂显示当前愿接价({e})"
+                    t["suggested_floor_note"] = f"推荐价计算失败,暂用缓存({e})"
             except (TypeError, ValueError):
                 pass
     return targets
@@ -161,7 +146,8 @@ class TargetIn(BaseModel):
     symbol: str
     name: Optional[str] = None
     market: Optional[str] = None
-    floor_price: float
+    # 兼容旧客户端:传入会被忽略,愿接一律用推荐价
+    floor_price: Optional[float] = None
     max_capital: float = 0
     delta_min: float = 0.15
     delta_max: float = 0.30
@@ -177,8 +163,6 @@ def add_target(body: TargetIn):
     symbol = body.symbol.strip().upper()
     if not symbol:
         raise HTTPException(status_code=400, detail="symbol 不能为空")
-    if body.floor_price <= 0:
-        raise HTTPException(status_code=400, detail="愿接最高价(floor)必须大于 0")
     name, market = body.name, body.market
     if not name or not market:
         conn = get_db()
@@ -188,9 +172,30 @@ def add_target(body: TargetIn):
             conn.close()
         name = name or (row["name"] if row else symbol)
         market = market or (row["market"] if row else ("HK" if symbol.endswith(".HK") else "US"))
+    # 愿接=推荐价;忽略客户端传入的 floor_price
+    from app.core.wheel_floor import resolve_willing_price
+    from app.core.volatility import brief_profile, get_daily_closes
+    spot = None
+    try:
+        closes = get_daily_closes(symbol, limit=5)
+        if closes:
+            spot = float(closes[-1])
+    except Exception:
+        spot = None
+    iv = None
+    try:
+        iv = (brief_profile(symbol) or {}).get("iv_rank")
+    except Exception:
+        pass
+    willing = resolve_willing_price(symbol, spot, iv, None)
+    if willing is None or willing <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="无法计算推荐愿接价(缺日K/现价);请先订阅历史再添加",
+        )
     repo.upsert_target({
         "symbol": symbol, "name": name, "market": market,
-        "floor_price": body.floor_price, "max_capital": body.max_capital,
+        "floor_price": willing, "max_capital": body.max_capital,
         "delta_min": body.delta_min, "delta_max": body.delta_max,
         "dte_min": body.dte_min, "dte_max": body.dte_max,
         "min_annualized": body.min_annualized,
@@ -198,7 +203,7 @@ def add_target(body: TargetIn):
         "enabled": 1 if body.enabled else 0,
     })
     try:
-        repo.log_floor_change(symbol, None, float(body.floor_price), source="manual")
+        repo.log_floor_change(symbol, None, float(willing), source="recommend")
     except Exception as e:
         logger.warning("floor log on add failed: %s", e)
     # 自动订阅历史日K:HV/EMA/IV rank 等档案数据依赖本地K线积累
@@ -228,30 +233,30 @@ class TargetUpdate(BaseModel):
 @router.put("/targets/{symbol}")
 def update_target(symbol: str, body: TargetUpdate):
     data = body.model_dump()
-    floor_src = data.pop("floor_change_source", None)
+    data.pop("floor_change_source", None)
+    # 愿接不可手改:写入 floor_price 明确拒绝(防双轨回归)
+    if data.get("floor_price") is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="愿接价=推荐价,不可手改;请刷新标的或调用 /floor-suggest 查看",
+        )
     if data.get("enabled") is not None:
         data["enabled"] = 1 if data["enabled"] else 0
     old = repo.get_target(symbol)
     if old is None:
         raise HTTPException(status_code=404, detail=f"{symbol} 不是 wheel 标的")
-    old_floor = old.get("floor_price")
-    if not repo.update_target(symbol, **{k: v for k, v in data.items() if k != "floor_change_source"}):
+    payload = {k: v for k, v in data.items() if k != "floor_price" and v is not None}
+    if not payload:
+        raise HTTPException(status_code=400, detail="无可更新字段")
+    if not repo.update_target(symbol, **payload):
         raise HTTPException(status_code=404, detail=f"{symbol} 不是 wheel 标的或无可更新字段")
-    new = repo.get_target(symbol)
-    if new and data.get("floor_price") is not None:
-        try:
-            nf = float(new.get("floor_price") or 0)
-            of = float(old_floor) if old_floor is not None else None
-            if of is None or abs(nf - of) > 1e-9:
-                repo.log_floor_change(
-                    symbol.strip().upper(),
-                    of,
-                    nf,
-                    source=(floor_src or "manual"),
-                )
-        except Exception as e:
-            logger.warning("floor log failed: %s", e)
-    return new
+    # 顺带把愿接缓存对齐推荐价
+    try:
+        from app.core.wheel_floor import sync_target_willing_floor
+        sync_target_willing_floor(symbol.strip().upper())
+    except Exception as e:
+        logger.warning("sync willing floor after update failed: %s", e)
+    return repo.get_target(symbol)
 
 
 @router.delete("/targets/{symbol}")
@@ -470,7 +475,11 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     dte_min, dte_max = target["dte_min"], target["dte_max"]
     delta_min, delta_max = target["delta_min"], target["delta_max"]
     min_oi = target.get("min_open_interest") or 0
-    floor = target["floor_price"]
+    # 愿接=推荐价
+    from app.core.wheel_floor import resolve_willing_price
+    floor = resolve_willing_price(
+        symbol, None, None, target.get("floor_price"),
+    ) or target.get("floor_price")
 
     expirations = _load_option_expirations(symbol, host, port)
     timing_cfg = _wheel_cfg().get("wheel_timing", {}) or {}
@@ -1016,7 +1025,25 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             except Exception:
                 min_ann_by_symbol[c["symbol"]] = base_min
         tgt = target_by_symbol[c["symbol"]]
-        floor_px = float((tgt or {}).get("floor_price") or 0) or None
+        # 愿接=推荐价(非手改缓存)
+        floor_px = None
+        try:
+            from app.core.wheel_floor import resolve_willing_price
+            from app.core.volatility import brief_profile as _bp
+            iv = None
+            try:
+                iv = (_bp(c["symbol"]) or {}).get("iv_rank")
+            except Exception:
+                pass
+            cached = (tgt or {}).get("floor_price")
+            floor_px = resolve_willing_price(
+                c["symbol"], float(spot) if spot else None, iv, cached,
+            )
+        except Exception:
+            try:
+                floor_px = float((tgt or {}).get("floor_price") or 0) or None
+            except (TypeError, ValueError):
+                floor_px = None
         max_cap = float((tgt or {}).get("max_capital") or 0) or None
         qty = c.get("open_qty") or 1
         size = c.get("contract_size") or c.get("open_contract_size") or 100
@@ -1269,7 +1296,17 @@ def roll_options(
     put_strike_cap = None
     if side == "PUT":
         try:
-            put_strike_cap = float(target.get("floor_price") or 0) or None
+            # 愿接=推荐价
+            try:
+                from app.core.wheel_floor import resolve_willing_price
+                put_strike_cap = resolve_willing_price(
+                    symbol,
+                    float(spot) if spot else None,
+                    None,
+                    target.get("floor_price"),
+                )
+            except Exception:
+                put_strike_cap = float(target.get("floor_price") or 0) or None
         except (TypeError, ValueError):
             put_strike_cap = None
 
@@ -1989,15 +2026,28 @@ def admission(symbol: Optional[str] = Query(None)):
 
 @router.get("/floor-suggest")
 def floor_suggest_api(symbol: str = Query(...), spot: Optional[float] = Query(None)):
-    from app.core.wheel_floor import suggest_floor
+    """推荐愿接价(=愿接唯一源)。可选 sync 写回 target.floor_price。"""
+    from app.core.wheel_floor import suggest_floor, sync_target_willing_floor
     from app.core.volatility import brief_profile
-    t = repo.get_target(symbol.strip().upper())
-    vol = brief_profile(symbol.strip().upper())
-    return suggest_floor(
-        symbol.strip().upper(), spot,
+    sym = symbol.strip().upper()
+    t = repo.get_target(sym)
+    vol = brief_profile(sym)
+    out = suggest_floor(
+        sym, spot,
         (t or {}).get("floor_price"),
         vol.get("iv_rank"),
     )
+    # 有标的则写回缓存,保证监控/扫描读到推荐价
+    if t is not None:
+        try:
+            synced = sync_target_willing_floor(sym, spot=spot)
+            if synced is not None:
+                out["suggested_floor"] = synced
+                out["synced"] = True
+        except Exception as e:
+            logger.warning("floor-suggest sync failed: %s", e)
+            out["synced"] = False
+    return out
 
 
 @router.get("/floor-log")

@@ -364,12 +364,16 @@ function enrichOpenRow(
   row.kill_reasons = gate.reasons
 
   if (row.ranked?.exceeds_capital || row.tags.includes('超上限')) hard.push('超资金上限')
-  if (row.side === 'PUT' && t && row.strike != null && t.floor_price > 0 && row.strike > t.floor_price) {
+  // 愿接=推荐价(suggested_floor 优先,其次已同步的 floor_price)
+  const willingPx = (t?.suggested_floor != null && Number(t.suggested_floor) > 0)
+    ? Number(t.suggested_floor)
+    : (t && t.floor_price > 0 ? Number(t.floor_price) : 0)
+  if (row.side === 'PUT' && willingPx > 0 && row.strike != null && row.strike > willingPx) {
     soft.push('超过愿接价')
   }
   if (row.side === 'PUT' && row.signal && (row.signal as any).below_floor) soft.push('已入愿接区·指派风险升')
-  if (row.side === 'PUT' && t && row.strike != null && t.floor_price > 0 && row.strike <= t.floor_price) {
-    const cushion = t.floor_price - row.strike
+  if (row.side === 'PUT' && willingPx > 0 && row.strike != null && row.strike <= willingPx) {
+    const cushion = willingPx - row.strike
     if (cushion >= 0) soft.push(`愿接余量$${cushion.toFixed(cushion < 1 ? 2 : 0)}`)
   }
   if (row.side === 'CALL' && t) {
@@ -1400,7 +1404,7 @@ export default function WheelPage() {
   const [symbolQuery, setSymbolQuery] = useState('')
   // 看板行内编辑标的参数
   const [editParams, setEditParams] = useState<{
-    floor_price: string; delta_min: string; delta_max: string
+    delta_min: string; delta_max: string
     dte_min: string; dte_max: string; min_annualized: string
     stance: string
   } | null>(null)
@@ -1423,7 +1427,6 @@ export default function WheelPage() {
 
   // 添加标的表单
   const [addSymbol, setAddSymbol] = useState('')
-  const [addFloor, setAddFloor] = useState('')
   const [adding, setAdding] = useState(false)
 
   useEffect(() => subscribeSettings(next => setSettings(next)), [])
@@ -1857,15 +1860,13 @@ export default function WheelPage() {
 
   async function handleAddTarget() {
     const symbol = addSymbol.trim().toUpperCase()
-    const floor = parseFloat(addFloor)
     if (!symbol) { setError('请选择或输入标的代码'); return }
-    if (isNaN(floor) || floor <= 0) { setError('请填写有效的愿接最高价(floor)'); return }
     setAdding(true)
     setError(null)
     try {
-      await addWheelTarget({ symbol, floor_price: floor })
+      // 愿接=推荐价,后端自动计算,不再手填 floor
+      await addWheelTarget({ symbol })
       setAddSymbol('')
-      setAddFloor('')
       await loadAll()
     } catch (e: any) {
       setError('添加失败:' + e.message)
@@ -2351,7 +2352,7 @@ export default function WheelPage() {
         <div className="panel" style={{ borderColor: 'rgba(56,189,248,0.35)' }}>
           <div className="panel-title">👋 3 步上手</div>
           <ol style={{ margin: '0 0 12px', paddingLeft: 18, fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.6 }}>
-            <li>标的里添加代码并设愿接最高价(Put 行权价上限,不是止损)</li>
+            <li>标的里添加代码(愿接=推荐价自动计算,Put 行权价上限)</li>
             <li>机会扫描 → 优先 → 备忘 → 富途成交</li>
             <li>今日「待登记」填成交价，驱动状态机</li>
           </ol>
@@ -2975,7 +2976,7 @@ export default function WheelPage() {
                               {' · '}<b style={{ color: 'var(--text)' }}>{sel.stance === 'income' ? '只收租' : '允许接货'}</b>
                             </span>
                             <button title="修改找货参数" onClick={() => setEditParams({
-                              floor_price: String(sel.floor_price), delta_min: String(sel.delta_min),
+                              delta_min: String(sel.delta_min),
                               delta_max: String(sel.delta_max), dte_min: String(sel.dte_min),
                               dte_max: String(sel.dte_max), min_annualized: String(sel.min_annualized),
                               stance: sel.stance === 'income' ? 'income' : 'acquire',
@@ -3017,15 +3018,10 @@ export default function WheelPage() {
                             <option value="income">只收租</option>
                           </select>
                         </label>
-                        <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}
-                          title="真被指派时最多愿付的股价;此后卖Put的strike不得超过此价">
-                          愿接价$
-                          <input type="number" step="any" value={editParams.floor_price} style={{
-                            display: 'block', width: 90, padding: '4px 6px', marginTop: 2,
-                            background: 'var(--bg-secondary)', border: '1px solid var(--border)',
-                            borderRadius: 4, color: 'var(--text)', fontSize: 13,
-                          }} onChange={e => setEditParams(f => f ? { ...f, floor_price: e.target.value } : f)} />
-                        </label>
+                        <span style={{ fontSize: 12, color: 'var(--text-secondary)', alignSelf: 'center' }}
+                          title="愿接=推荐价,不可手改">
+                          愿接=推荐价
+                        </span>
                         {([
                           ['Δ min', 'delta_min', DELTA_OPTS],
                           ['Δ max', 'delta_max', DELTA_OPTS],
@@ -3053,13 +3049,11 @@ export default function WheelPage() {
                             setError(null)
                             try {
                               await updateWheelTarget(sel.symbol, {
-                                floor_price: parseFloat(editParams.floor_price),
                                 delta_min: parseFloat(editParams.delta_min),
                                 delta_max: parseFloat(editParams.delta_max),
                                 dte_min: parseInt(editParams.dte_min),
                                 dte_max: parseInt(editParams.dte_max),
                                 min_annualized: parseFloat(editParams.min_annualized),
-                                floor_change_source: 'manual',
                               })
                               const { patchTargetStance } = await import('../components/wheel/TargetStanceSelect')
                               await patchTargetStance(sel.symbol, editParams.stance === 'income' ? 'income' : 'acquire')
@@ -4261,24 +4255,21 @@ export default function WheelPage() {
                 )
               })()}
             </select>
-            <input type="number" step="any" value={addFloor} onChange={e => setAddFloor(e.target.value)}
-              placeholder="愿接最高价" style={{ ...inputStyle, width: 110 }}
-              title="被指派时最多愿付的股价(Put strike上限),不是止损线" />
             <button className="btn btn-primary" style={{ fontSize: 14, padding: '5px 14px' }}
               disabled={adding || !addSymbol} onClick={handleAddTarget}>
               {adding ? '添加中...' : '添加'}
             </button>
             <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              美股/港股均来自股票池；已添加的灰显不可选；未启用的也可直接加入 Wheel
+              愿接=推荐价(自动);美股/港股来自股票池；已添加灰显；未启用也可加入
             </span>
           </div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                {['标的', '现价 · 愿接 · 参考', '立场', '愿卖价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
+                {['标的', '现价 · 愿接(推荐价)', '立场', '愿卖价', 'Delta 区间', 'DTE 区间', '最低年化%', '最低OI', '状态', '操作'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 500 }}
-                    title={h === '愿卖价' ? 'CC strike 锚,与 Put 愿接价分开' : h === '立场' ? '默认允许接货。不愿接的标的不要加入（只收租会停新 Put）' : h.startsWith('现价') ? '现价=日K收盘 · 愿接=你的合同价 · 参考=市场结构建议' : undefined}
+                    title={h === '愿卖价' ? 'CC strike 锚,与 Put 愿接价分开' : h === '立场' ? '默认允许接货。不愿接的标的不要加入（只收租会停新 Put）' : h.startsWith('现价') ? '现价=日K收盘 · 愿接=推荐价(市场结构,不可手改)' : undefined}
                   >{h}</th>
                 ))}
               </tr>
@@ -4858,7 +4849,6 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
 }) {
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({
-    floor_price: String(target.floor_price),
     delta_min: String(target.delta_min), delta_max: String(target.delta_max),
     dte_min: String(target.dte_min), dte_max: String(target.dte_max),
     min_annualized: String(target.min_annualized),
@@ -4876,12 +4866,10 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
     setErr(null)
     try {
       await updateWheelTarget(target.symbol, {
-        floor_price: parseFloat(form.floor_price),
         delta_min: parseFloat(form.delta_min), delta_max: parseFloat(form.delta_max),
         dte_min: parseInt(form.dte_min), dte_max: parseInt(form.dte_max),
         min_annualized: parseFloat(form.min_annualized),
         min_open_interest: parseInt(form.min_open_interest),
-        floor_change_source: 'manual',
       })
       const { patchTargetStance } = await import('../components/wheel/TargetStanceSelect')
       await patchTargetStance(target.symbol, form.stance === 'income' ? 'income' : 'acquire')
@@ -4943,25 +4931,20 @@ function TargetRow({ target, onSaved, onToggle, onDelete }: {
     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg-secondary)' }}>
       <td style={{ padding: '8px 10px', fontWeight: 600 }}>{target.symbol}{err && <div style={{ color: '#f87171', fontSize: 13 }}>{err}</div>}</td>
       <td style={{ padding: '8px 10px' }}>
-        <div style={{ marginBottom: 4 }}>
-          <TargetPriceStrip
-            size="sm"
-            spot={target.spot}
-            floor={target.floor_price}
-            suggested={target.suggested_floor}
-            suggestedDelta={target.suggested_floor_delta}
-          />
+        <TargetPriceStrip
+          size="sm"
+          spot={target.spot}
+          floor={target.floor_price}
+          suggested={target.suggested_floor}
+          suggestedDelta={target.suggested_floor_delta}
+        />
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 4 }}>
+          愿接=推荐价,不可手改
         </div>
-        <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-          改愿接{' '}
-          <input type="number" step="any" style={inputStyle} value={form.floor_price}
-            onChange={e => setForm(f => ({ ...f, floor_price: e.target.value }))}
-            title="愿接最高价:真被指派时最多愿付;Put strike≤此价;不是止损" />
-        </label>
       </td>
       <td style={{ padding: '8px 10px' }}>
         <select value={form.stance} style={inputStyle}
-          title="只收租=接货当预警、更早腾仓；允许接货=floor 是愿接股东价，临期 ITM 走准备接货"
+          title="只收租=接货当预警、更早腾仓；允许接货=愿接(推荐价)为股东价，临期 ITM 走准备接货"
           onChange={e => setForm(f => ({ ...f, stance: e.target.value }))}>
           <option value="acquire">允许接货</option>
           <option value="income">只收租</option>

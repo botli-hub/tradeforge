@@ -67,58 +67,35 @@ export function StatusDot({ ok, label }: { ok: boolean | null; label: string }) 
   )
 }
 
-function fmtSuggestedFloor(t: {
-  suggested_floor?: number | string | null
-  suggested_floor_delta?: number | string | null
-}) {
-  const price = t.suggested_floor == null || t.suggested_floor === ''
-    ? NaN
-    : Number(t.suggested_floor)
-  if (!Number.isFinite(price) || price <= 0) return null
-  const dRaw = t.suggested_floor_delta
-  const d = dRaw == null || dRaw === '' ? null : Number(dRaw)
-  const dOk = d != null && Number.isFinite(d)
-  const dTxt = !dOk ? ''
-    : d > 0 ? ` (+${fmt(d, Math.abs(d) < 1 ? 2 : 1)})`
-      : d < 0 ? ` (${fmt(d, Math.abs(d) < 1 ? 2 : 1)})`
-        : ' (±0)'
-  return { price, deltaTxt: dTxt, delta: dOk ? d : null }
-}
 
-/** 现价 · 愿接 · 参考 — 全站统一 */
+/** 现价 · 愿接(推荐价) — 全站统一;不再展示可手改 floor / 双轨参考 */
 export function TargetPriceStrip({
   spot,
   floor,
   suggested,
-  suggestedDelta,
+  suggestedDelta: _suggestedDelta,
   size = 'md',
 }: {
   spot?: number | null
+  /** @deprecated 愿接=推荐价;传入 floor 仅作 fallback */
   floor?: number | null
   suggested?: number | null
   suggestedDelta?: number | null
   size?: 'sm' | 'md' | 'lg'
 }) {
-  const sf = fmtSuggestedFloor({
-    suggested_floor: suggested,
-    suggested_floor_delta: suggestedDelta ?? (
-      suggested != null && floor != null ? Number(suggested) - Number(floor) : null
-    ),
-  })
-  const refClass = sf?.delta == null ? 'ps-ref-flat'
-    : Math.abs(sf.delta) < 0.5 ? 'ps-ref-flat'
-      : sf.delta > 0 ? 'ps-ref-up' : 'ps-ref-down'
+  // 愿接唯一源=推荐价;无推荐时回退缓存 floor
+  const willing = (suggested != null && Number.isFinite(Number(suggested)) && Number(suggested) > 0)
+    ? Number(suggested)
+    : (floor != null && Number.isFinite(Number(floor)) && Number(floor) > 0 ? Number(floor) : null)
   const sz = size === 'sm' ? 'compact' : size === 'lg' ? 'lg' : ''
   return (
-    <span className={`price-strip ${sz}`.trim()} title="现价=日K收盘 · 愿接=你的最高接货价 · 参考=市场结构建议">
+    <span className={`price-strip ${sz}`.trim()} title="现价=日K收盘 · 愿接=推荐价(市场结构,不可手改)">
       <span className="ps-item">
         现价 <b>${spot != null && Number.isFinite(Number(spot)) ? fmt(Number(spot)) : '--'}</b>
       </span>
-      <span className="ps-item">
-        愿接 <b>${floor != null && Number.isFinite(Number(floor)) ? fmt(Number(floor)) : '--'}</b>
-      </span>
-      <span className={`ps-item ${refClass}`}>
-        参考 <b>{sf ? `$${fmt(sf.price)}${sf.deltaTxt}` : '--'}</b>
+      <span className="ps-item ps-ref-flat">
+        愿接 <b>${willing != null ? fmt(willing) : '--'}</b>
+        <span style={{ opacity: 0.7, marginLeft: 4, fontSize: '0.9em' }}>推荐价</span>
       </span>
     </span>
   )

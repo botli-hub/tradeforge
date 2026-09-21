@@ -84,6 +84,13 @@ def check_books(conn):
         target = next((t for t in targets if t["symbol"] == c["symbol"]), {})
         if c.get("open_option_type") == "PUT":
             floor = target.get("floor_price")
+            try:
+                from app.core.wheel_floor import resolve_willing_price
+                floor = resolve_willing_price(
+                    c["symbol"], None, None, floor,
+                )
+            except Exception:
+                pass
             if floor is None or c["open_strike"] > floor:
                 result["violations"].append(f"{c['symbol']} 未设置愿接价或 Put 超愿接价")
             if target.get("stance") == "income":
@@ -113,7 +120,13 @@ def candidate_risk(nav, opportunity, targets, config):
     if not executable_quote(opportunity, max_spread_pct=max_spread):
         errors.append('报价不可执行')
     if side == 'PUT':
-        if target.get('floor_price') is None or strike > float(target['floor_price']):
+        floor = target.get('floor_price')
+        try:
+            from app.core.wheel_floor import resolve_willing_price
+            floor = resolve_willing_price(sym, None, None, floor)
+        except Exception:
+            pass
+        if floor is None or strike > float(floor):
             errors.append('Put 超愿接价或愿接价未设置')
         if target.get('stance') == 'income' or not target.get('enabled', True):
             errors.append('标的禁止新 Put')

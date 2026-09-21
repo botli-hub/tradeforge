@@ -585,7 +585,7 @@ export interface WheelTarget {
   floor_price: number
   /** 现价(本地日K最后收盘) */
   spot?: number | null
-  /** 智能参考愿接价(市场结构,不自动写库) */
+  /** 推荐愿接价(与 floor_price 对齐;愿接唯一源) */
   suggested_floor?: number | null
   /** suggested_floor - floor_price */
   suggested_floor_delta?: number | null
@@ -1262,7 +1262,7 @@ export async function getWheelCandidates() {
   return request<LeapsCandidate[]>('/api/wheel/targets/candidates')
 }
 
-export async function addWheelTarget(body: Partial<WheelTarget> & { symbol: string; floor_price: number }) {
+export async function addWheelTarget(body: Partial<WheelTarget> & { symbol: string; floor_price?: number }) {
   return request<WheelTarget>('/api/wheel/targets', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

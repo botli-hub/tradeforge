@@ -133,26 +133,19 @@ export default function WheelOptimizePanel() {
     }
   }
 
-  async function applyFloor(symbol: string) {
+  async function refreshFloor(symbol: string) {
     try {
       const f = await getWheelFloorSuggest(symbol)
       if (!f.suggested_floor) {
-        setMsg(`${symbol}: 无市场结构参考愿接价`)
+        setMsg(`${symbol}: 无法计算推荐愿接价`)
         return
       }
-      const cur = f.current_floor != null ? `当前 $${f.current_floor}` : '当前未设'
-      const ok = window.confirm(
-        `${symbol} 市场结构参考愿接价 $${f.suggested_floor}\n`
-        + `${cur}${f.spot != null ? ` · 现价 $${f.spot}` : ''}\n\n`
-        + `${f.rationale || '仅供参考,非「正确floor」'}\n\n`
-        + `确认写入愿接最高价? (Put strike 必须 ≤ 此价)`,
+      // 愿接=推荐价:仅刷新展示,后端 list/scan 已自动对齐写回;不可手改
+      setMsg(
+        `${symbol} 愿接(推荐价) $${f.suggested_floor}`
+        + (f.spot != null ? ` · 现价 $${f.spot}` : '')
+        + (f.synced ? ' · 已同步缓存' : ''),
       )
-      if (!ok) return
-      await updateWheelTarget(symbol, {
-        floor_price: f.suggested_floor,
-        floor_change_source: 'smart',
-      })
-      setMsg(`${symbol} 愿接价已更新为 $${f.suggested_floor}(参考应用)`)
       load()
     } catch (e: any) {
       setMsg(e.message)
@@ -394,7 +387,7 @@ export default function WheelOptimizePanel() {
               <tr style={{ color: 'var(--text-secondary)', textAlign: 'left' }}>
                 <th>标的</th><th>分</th><th>建议</th><th>激进度</th>
                 <th title="现价(本地日K)">现价</th>
-                <th title="市场结构参考愿接价">参考愿接</th>
+                <th title="愿接=推荐价(市场结构,不可手改)">愿接(推荐价)</th>
                 <th>标签</th><th>操作</th>
               </tr>
             </thead>
@@ -427,26 +420,24 @@ export default function WheelOptimizePanel() {
                       {r.metrics?.spot != null ? `$${fmt(r.metrics.spot)}` : '--'}
                     </td>
                     <td style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}
-                      title="智能参考愿接价(不自动写库)">
+                      title="愿接=推荐价(市场结构,不可手改)">
                       {r.metrics?.suggested_floor != null
                         ? `$${fmt(r.metrics.suggested_floor)}`
                         : '--'}
-                      {r.metrics?.floor_price != null && r.metrics?.suggested_floor != null && (
-                        <span style={{ opacity: 0.7 }}> / 现设 ${fmt(r.metrics.floor_price)}</span>
-                      )}
+                      
                     </td>
                     <td style={{ color: 'var(--text-secondary)', maxWidth: 160 }}>{(r.tags || []).join(' · ')}</td>
                     <td>
                       <button className="btn" style={{ fontSize: 12, padding: '1px 6px' }}
                         title="市场结构参考,需确认后写入"
-                        onClick={() => applyFloor(r.symbol)}>参考愿接价</button>
+                        onClick={() => refreshFloor(r.symbol)}>刷新推荐愿接</button>
                     </td>
                   </tr>
                   {admissionExpand === r.symbol && (
                     <tr>
                       <td colSpan={8} style={{ padding: '6px 8px 10px', background: 'var(--bg-secondary)', fontSize: 13 }}>
                         <div style={{ marginBottom: 4, color: 'var(--text-secondary)' }}>
-                          主分=趋势/波动/IV/历史/数据 · floor 仅轻提示 · 点标的展开
+                          主分=趋势/波动/IV/历史/数据 · 愿接=推荐价 · 点标的展开
                         </div>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                           {(r.factor_detail?.length
@@ -467,7 +458,7 @@ export default function WheelOptimizePanel() {
                         </div>
                         <div style={{ marginTop: 6, opacity: 0.9 }}>
                           现价 ${r.metrics?.spot != null ? fmt(r.metrics.spot) : '--'}
-                          {' · 愿接 $'}{r.metrics?.floor_price ?? '--'}
+                          {' · 愿接(推荐) $'}{(r.metrics?.suggested_floor ?? r.metrics?.floor_price) ?? '--'}
                           {r.metrics?.suggested_floor != null && ` · 智能参考 $${fmt(r.metrics.suggested_floor)}`}
                           {r.metrics?.floor_spot_ratio != null && ` · floor/spot=${r.metrics.floor_spot_ratio}`}
                         </div>
@@ -483,9 +474,9 @@ export default function WheelOptimizePanel() {
 
       {/* 愿接价变更日志 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>愿接价变更记录</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>愿接(推荐价)同步记录</div>
         {floorLog.length === 0 ? (
-          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无记录(修改/应用参考愿接价后出现)</div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>暂无记录(刷新推荐愿接后出现)</div>
         ) : (
           <div style={{ maxHeight: 140, overflow: 'auto', fontSize: 13 }}>
             {floorLog.map((x: any) => (
