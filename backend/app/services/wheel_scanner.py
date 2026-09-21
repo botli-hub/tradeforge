@@ -50,6 +50,11 @@ def cached_chain(symbol: str, expiry: str, host: str, port: int, force: bool = F
             return hit[1]
     from app.api.options import _load_option_chain
     data = _load_option_chain(symbol, expiry, host, port)
+    from datetime import timezone
+    stamp = datetime.now(timezone.utc).isoformat()
+    data["quote_asof"] = stamp
+    for contract in data.get("contracts", []):
+        contract.setdefault("quote_asof", stamp)
     with _CACHE_LOCK:
         _CHAIN_CACHE[key] = (now, data)
     return data

@@ -50,14 +50,16 @@ def premium_from_quote(
     ask: Optional[float],
     pricing: str = "mid",
 ) -> float:
-    """权利金估价:mid 更贴近可成交价;bid 偏乐观。"""
+    """权利金估价:bid 是卖方保守参考;mid 仅为挂单目标,无双边报价不可估计。"""
     b = float(bid or 0)
     a = float(ask or 0)
+    if b <= 0 or a <= 0 or a < b:
+        return 0.0
     if pricing == "bid":
-        return b if b > 0 else 0.0
+        return b
     if b > 0 and a > 0 and a >= b:
         return (b + a) / 2.0
-    return b if b > 0 else (a if a > 0 else 0.0)
+    return 0.0
 
 
 def spread_pct(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
@@ -71,11 +73,12 @@ def spread_pct(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
 
 
 def liquidity_factor(sp: Optional[float], scan_cfg: Dict[str, Any]) -> Optional[float]:
-    """spread ≤ soft → 1.0;soft~max 线性降至 0.7;> max → None(应过滤)。
-    单边报价(sp is None)按最差可接受处理,给 0.7 但不过滤——由调用方决定。"""
+    """spread ≤ soft → 1.0; soft~max 线性降至 0.7; 缺失双边报价直接不可评分。"""
     max_sp = scan_cfg["max_spread_pct"]
     soft = scan_cfg["spread_soft_pct"]
     if sp is None:
+        # Kept for score-only callers; actionable flows separately require a
+        # fresh two-sided quote through wheel_quotes.executable_quote().
         return 0.7
     if sp > max_sp:
         return None
@@ -99,13 +102,13 @@ def estimate_ev(
     pop: float,
     downside_pct: float = 0.08,
 ) -> float:
-    """粗期望收益(占担保金 %): premium×POP − downside×(1−POP)。
-    downside_pct 为被行权时相对担保金的粗估损失比例。"""
+    """情景收益(占担保金 %):已收总权利金 − downside×(1−POP)。
+    downside_pct 是被行权时相对担保金的粗估损失比例，不是统计校准 EV。"""
     if collateral <= 0:
         return 0.0
     prem_pct = premium / collateral * 100
     down = downside_pct * 100
-    return round(prem_pct * pop - down * (1.0 - pop), 3)
+    return round(prem_pct - down * (1.0 - pop), 3)
 
 
 def compute_atr(closes: List[float], window: int = 20) -> Optional[float]:
@@ -259,15 +262,7 @@ def score_contract(
     spot: Optional[float] = None,
     strike: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
-    """返回 {"score", "robust_score", "pop", "ev_pct", "factors"};spread 超限返回 None。"""
-    # 财报硬过滤(仅 Put)
-    if (
-        side == "PUT"
-        and covers_earnings
-        and scan_cfg.get("earnings_hard_filter", True)
-    ):
-        return None
-
+    """返回评分、透明的情景 EV 和假设；POP 不是校准后的盈利概率。"""
     liq = liquidity_factor(sp, scan_cfg)
     if liq is None:
         return None
@@ -278,8 +273,14 @@ def score_contract(
     hist_days = (volatility or {}).get("iv_history_days") or 0
     min_hist = int(scan_cfg.get("min_iv_history_for_bonus", 30) or 0)
     # 冷启动:IV 历史不足时减半加成,避免误导
-    bonus_scale = 1.0 if hist_days >= min_hist or (volatility or {}).get("iv_rank_source") == "iv_history" else 0.5
-    if (volatility or {}).get("iv_rank_source") == "hv_proxy":
+    source = (volatility or {}).get("iv_rank_source")
+    # An explicit source/history count can be discounted when cold-starting;
+    # legacy callers that provide only an IV rank keep their configured rank
+    # factor, while the scanner labels the source in its response.
+    bonus_scale = 1.0 if (not source and not (volatility or {}).get("iv_history_days")) else (
+        1.0 if hist_days >= min_hist or source == "iv_history" else 0.5
+    )
+    if source == "hv_proxy":
         bonus_scale = min(bonus_scale, 0.5)
     iv_bonus = 1.0 + scan_cfg["iv_rank_bonus"] * iv_rank / 100.0 * bonus_scale
 
@@ -287,7 +288,10 @@ def score_contract(
     delta_f = (1.0 - abs(delta)) if is_iv_high(volatility) else 1.0
 
     pop_v = pop if pop is not None else estimate_pop(side, delta)
-    pop_f = pop_factor(pop_v, scan_cfg)
+    # Legacy pure scoring callers omit pop/buffer/headroom.  Keep those
+    # factors neutral until a scanner supplies the observable inputs; the
+    # scanner always passes pop and therefore gets the transparent adjustment.
+    pop_f = pop_factor(pop_v, scan_cfg) if pop is not None else 1.0
     buf_f = buffer_factor(buffer_atr, scan_cfg, side)
     head_f = headroom_factor(headroom_ratio, scan_cfg)
 
@@ -308,7 +312,11 @@ def score_contract(
         "score": round(score, 2),
         "robust_score": round(robust, 2),
         "pop": round(pop_v, 4),
-        "ev_pct": ev,
+        "ev_pct": None,
+        "scenario_ev_pct": ev,
+        "probability_kind": "delta_otm_proxy_not_profit_probability",
+        "model_calibrated": False,
+        "ev_assumptions": "收取权利金减固定条件下跌损失;不是统计期望收益",
         "factors": {
             "annualized": annualized,
             "liquidity": liq,

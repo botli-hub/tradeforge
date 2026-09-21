@@ -747,7 +747,10 @@ def decide_position(
         "action_hint": hint,
         "secondary_hint": secondary_hint,
         "action_priority": priority,
-        "decision_confidence": confidence,
+        "decision_confidence": confidence,  # deprecated alias of rule_match_score
+        "rule_match_score": confidence,
+        "model_calibrated": False,
+        "confidence_kind": "rule_match_not_probability",
         "prefer_card": prefer_card,
         "decision_branch": branch,
         "quant_thresholds": quant_used,

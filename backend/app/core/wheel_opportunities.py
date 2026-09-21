@@ -266,28 +266,26 @@ def _portfolio_put_stress(cfg: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
     from app.core.wheel_portfolio import portfolio_overview
 
     pcfg = cfg.get("wheel_portfolio", {}) or {}
-    pos = cfg.get("wheel_position", {}) or {}
     overview = portfolio_overview(
         total_equity=float(pcfg["total_equity"]) if pcfg.get("total_equity") else None,
         max_portfolio_pct=float(pcfg.get("max_portfolio_pct", 0.80)),
         max_symbol_pct=float(pcfg.get("max_symbol_pct", 0.25)),
     )
-    stress = float(overview.get("assignment_stress") or 0)
-    committed = float(overview.get("total_committed") or 0)
-    equity = overview.get("equity")
-    # 与前端 stressBlocksNewPuts 均衡档 1.5x 对齐;可用配置覆盖
-    ratio = float(pos.get("stress_put_block_ratio", 1.5) or 1.5)
-    base = max(committed, float(equity or 0) * 0.3) if equity else committed
-    stress_block = bool(stress > 0 and base > 0 and stress >= base * ratio)
+    reserve = float((pcfg.get("cash_reserve") or 0))
+    cash_gap = max(
+        float(overview.get("assignment_cash_shortfall") or 0),
+        float(overview.get("csp_collateral") or 0) + reserve - float(overview.get("cash") or 0),
+    )
+    invalid = not overview.get("ok") or overview.get("valuation_incomplete") or overview.get("reconciliation_required")
     over_pf = bool(overview.get("over_portfolio"))
-    blocked = stress_block or over_pf
+    blocked = bool(cash_gap > 0 or over_pf or invalid)
     meta = {
         "portfolio_put_blocked": blocked,
-        "assignment_stress": stress,
+        "assignment_stress": overview.get("assignment_stress"),
+        "assignment_cash_shortfall": cash_gap,
         "utilization_pct": overview.get("utilization_pct"),
-        "over_portfolio": over_pf,
-        "stress_block": stress_block,
-        "equity": equity,
+        "over_portfolio": over_pf, "stress_block": cash_gap > 0,
+        "data_incomplete": bool(invalid), "equity": overview.get("equity"),
     }
     return blocked, meta
 
@@ -657,6 +655,26 @@ def build_opportunities(
             "rank_boost": 0,
         }
 
+    from app.core.wheel_quotes import executable_quote
+    from app.core.wheel_risk import candidate_risk
+    from app.core.wheel_nav import compute_account_nav
+    from app.data import wheel_repository as book_repo
+    risk_nav = compute_account_nav(float((cfg.get("wheel_portfolio") or {}).get("total_equity") or 0))
+    risk_targets = book_repo.get_targets()
+    for item in merged.values():
+        quote = pool_by_code.get(_norm_code(item.get("contract_code"))) or {}
+        for field in ("bid", "ask", "quote_asof", "quote_delayed", "spread_pct"):
+            item[field] = quote.get(field)
+        if not executable_quote(item, max_spread_pct=float(scan_cfg.get("max_spread_pct", 8) or 8)):
+            item["actionable"] = False
+            item["grade"] = "watch"
+            item.setdefault("flags", []).append("报价缺失/过期/点差过宽")
+        item["post_trade_risk"] = candidate_risk(risk_nav, item, risk_targets, cfg)
+        if not item["post_trade_risk"]["ok"]:
+            item["actionable"] = False
+            item["grade"] = "blocked"
+            item.setdefault("flags", []).extend(item["post_trade_risk"]["violations"])
+        item["signal_evidence"] = "unvalidated_timing_hypothesis"
     items = [_fill_from_code(x) for x in merged.values()]
     for x in items:
         attach_trade_tier(x)

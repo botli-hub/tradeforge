@@ -1060,9 +1060,18 @@ class SimWheelEngine:
             )
             return {"ok": False, "reason": "size_cap", "fingerprint": fp}
 
-        premium = _f(alert.get("bid") or alert.get("premium") or alert.get("trigger_price"), 0)
+        # EMA/touch trigger_price is an underlying/contract-chart level, not
+        # an executable option premium.  Keep the paper ledger fail-closed
+        # when a dated bid (or explicit premium fixture) is absent.
+        premium = _f(alert.get("bid") or alert.get("premium"), 0)
         if premium <= 0:
-            premium = max(0.05, strike * 0.01)  # 纸面兜底权利金
+            self.repo.add_event(
+                cycle_id=None, symbol=symbol, event_type="skipped_missing_quote",
+                fingerprint=fp, detail={"side": "PUT", "reason": "bid_or_premium_required"},
+                created_at=_now_iso(now),
+            )
+            return {"ok": False, "reason": "missing_quote", "fingerprint": fp,
+                    "prior_actions": close_actions}
 
         dte = int(alert.get("dte") or self.cfg.get("dte_default") or 30)
         exp = alert.get("expiry")
@@ -1236,9 +1245,15 @@ class SimWheelEngine:
                 }
             return {"ok": False, "reason": "no_qty", "fingerprint": fp}
 
-        premium = _f(alert.get("bid") or alert.get("premium") or alert.get("trigger_price"), 0)
+        premium = _f(alert.get("bid") or alert.get("premium"), 0)
         if premium <= 0:
-            premium = max(0.05, strike * 0.008)
+            self.repo.add_event(
+                cycle_id=None, symbol=symbol, event_type="skipped_missing_quote",
+                fingerprint=fp, detail={"side": "CALL", "reason": "bid_or_premium_required"},
+                created_at=_now_iso(now),
+            )
+            return {"ok": False, "reason": "missing_quote", "fingerprint": fp,
+                    "prior_actions": close_actions}
         dte = int(alert.get("dte") or self.cfg.get("dte_default") or 30)
         exp = alert.get("expiry") or (now.date() + timedelta(days=dte)).isoformat()
         prem_net = round(qty * premium * size, 4)

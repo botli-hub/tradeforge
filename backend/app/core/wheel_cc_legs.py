@@ -142,6 +142,7 @@ def cycle_open_cc_legs(cycle: Dict[str, Any]) -> List[Dict[str, Any]]:
 def overlay_leg_on_cycle(cycle: Dict[str, Any], leg: Dict[str, Any]) -> Dict[str, Any]:
     """把某一 CC 腿铺到 cycle.open_* 上,供体检/看板沿用单腿字段."""
     d = dict(cycle)
+    d["status"] = "CC_OPEN"
     d["open_contract_code"] = leg.get("contract_code") or d.get("open_contract_code")
     d["open_option_type"] = "CALL"
     d["open_strike"] = leg.get("strike")
@@ -167,12 +168,11 @@ def expand_open_option_rows(cycles: Iterable[Dict[str, Any]]) -> List[Dict[str, 
         if status == "CSP_OPEN":
             if c.get("open_contract_code") or c.get("open_strike"):
                 rows.append(dict(c))
-            continue
-        if status != "CC_OPEN":
+        if status not in ("CSP_OPEN", "CC_OPEN"):
             continue
         legs = cycle_open_cc_legs(c)
         if not legs:
-            if c.get("open_contract_code") or c.get("open_strike"):
+            if status == "CC_OPEN" and (c.get("open_contract_code") or c.get("open_strike")):
                 rows.append(dict(c))
             continue
         for leg in legs:
@@ -264,6 +264,8 @@ def apply_sell_call(s: Dict[str, Any], t: Dict[str, Any]) -> None:
                 "该 Call 合约已在本轮在场(同代码或同 strike/到期日)。"
                 "请登记不同合约,或先平仓后再开;不把同合约张数叠到已有腿上"
             )
+    if qty <= 0 or qty != int(qty) or size <= 0:
+        raise CcLegError("合约数量和乘数必须为正整数")
     need = qty * size
     covered = covered_shares(legs)
     if covered + need > shares + 1e-6:
@@ -298,13 +300,15 @@ def apply_cc_close(s: Dict[str, Any], t: Dict[str, Any], *, kind: str) -> None:
     if close_qty <= 0:
         close_qty = _f(leg.get("qty"), 1.0) or 1.0
     leg_qty = _f(leg.get("qty"), 1.0) or 1.0
-    take = min(close_qty, leg_qty)
+    if close_qty > leg_qty + 1e-9 or close_qty != int(close_qty):
+        raise CcLegError("关闭数量超过在场数量或不是整数")
+    take = close_qty
     size = int(_f(t.get("contract_size") or leg.get("contract_size"), 100.0) or 100)
     fee = _f(t.get("fee"))
     price = _f(t.get("price"))
 
     if kind == "close":
-        s["total_premium"] = _f(s.get("total_premium")) - take * price * size
+        s["total_premium"] = _f(s.get("total_premium")) - take * price * size - fee
         s["total_fees"] = _f(s.get("total_fees")) + fee
     elif kind == "expire":
         s["total_fees"] = _f(s.get("total_fees")) + fee

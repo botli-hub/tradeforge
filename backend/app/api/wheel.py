@@ -1,5 +1,6 @@
 """Wheel 策略 REST API"""
 import logging
+import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -275,6 +276,8 @@ def list_trades(cycle_id: Optional[str] = None, symbol: Optional[str] = None, li
 
 
 class TradeIn(BaseModel):
+    execution_id: Optional[str] = None
+    mode: str = "recorded"
     symbol: str
     trade_type: str
     contract_code: Optional[str] = None
@@ -292,19 +295,6 @@ class TradeIn(BaseModel):
 
 @router.post("/trades")
 def record_trade(body: TradeIn):
-    # 卖 Put 前校验标的资金上限(max_capital > 0 时生效)
-    if body.trade_type == "SELL_PUT" and body.strike:
-        target = repo.get_target(body.symbol.strip().upper())
-        if target and (target.get("max_capital") or 0) > 0:
-            usage = repo.get_capital_usage()["per_symbol"].get(body.symbol.strip().upper(), {})
-            committed = usage.get("csp_collateral", 0) + usage.get("holding_cost", 0)
-            new_collateral = body.strike * (body.qty or 1) * (body.contract_size or 100)
-            if committed + new_collateral > target["max_capital"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"超出 {body.symbol} 资金上限:已占用 {committed:.0f} + 本单担保 {new_collateral:.0f} "
-                           f"> 上限 {target['max_capital']:.0f}。可在标的设置调高上限(0=不限)",
-                )
     # 卖出开仓且未填合约代码时,按 strike+到期日 自动补全
     contract_code = body.contract_code
     if (not contract_code and body.trade_type in ("SELL_PUT", "SELL_CALL")
@@ -318,6 +308,7 @@ def record_trade(body: TradeIn):
             qty=body.qty, price=body.price, fee=body.fee,
             contract_size=body.contract_size, note=body.note, traded_at=body.traded_at,
             cycle_id=body.cycle_id, new_cycle=body.new_cycle,
+            execution_id=body.execution_id or str(uuid.uuid4()), mode=body.mode,
         )
         # 指派后附下一步(CC / 成本基础)
         if body.trade_type == "ASSIGNED" or (cycle and cycle.get("status") == "HOLDING"
@@ -514,6 +505,7 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         get_scan_cfg, spread_pct, score_contract, trend_profile, is_iv_high,
         premium_from_quote, estimate_pop, sort_key_for_mode, buffer_atr_multiple,
     )
+    from app.core.wheel_quotes import executable_quote
     from app.core.wheel_portfolio import headroom_ratio_for_symbol
     scan_cfg = get_scan_cfg(_wheel_cfg())
     pricing = scan_cfg.get("premium_pricing", "mid")
@@ -544,6 +536,12 @@ def _suggest(symbol: str, side: str, host: str, port: int,
             message=f"正在扫描 {symbol} · 到期 {exp_label} · 拉取期权链…",
         )
         chain = _load_option_chain(symbol, exp, host, port)
+        # The chain fetch is the quote timestamp when the adapter does not
+        # provide one.  Every actionable path still requires both sides of a
+        # live quote; a bid-only/ask-only row is a watch item, never a fill.
+        quote_asof = chain.get("quote_asof") or datetime.now().astimezone().isoformat()
+        for _contract in chain.get("contracts") or []:
+            _contract.setdefault("quote_asof", quote_asof)
         spot = chain["spot_price"]
         last_chain_contracts = chain["contracts"]
         chain_snapshots.append({"expiry": exp, "dte": dte, "contracts": chain["contracts"]})
@@ -570,8 +568,11 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 continue
             bid = c.get("bid") or 0
             ask = c.get("ask")
+            if not executable_quote({**c, "bid": bid, "ask": ask, "quote_asof": c.get("quote_asof", quote_asof)},
+                                    max_spread_pct=float(scan_cfg.get("max_spread_pct", 8) or 8)):
+                continue
             prem = premium_from_quote(bid, ask, pricing)
-            if prem <= 0 and bid <= 0:
+            if prem <= 0:
                 continue
             # 流动性:bid-ask spread 过宽的合约实际成交会吃掉大量收益,直接过滤
             sp = spread_pct(bid, ask)
@@ -614,6 +615,9 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 "expiry": exp, "dte": dte, "strike": strike,
                 "delta": round(d, 4), "delta_source": c.get("delta_source", "futu"),
                 "bid": bid, "ask": ask,
+                "quote_asof": c.get("quote_asof") or chain.get("quote_asof"),
+                "annualized_bid": _annualized(bid, collateral, dte),
+                "annualized_mid_target": ann,
                 "premium_used": round(prem, 4),
                 "premium_pricing": pricing,
                 "iv": c.get("iv"), "open_interest": c.get("open_interest"),
@@ -675,6 +679,10 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         s["score"] = scored["score"]
         s["robust_score"] = scored.get("robust_score")
         s["ev_pct"] = scored.get("ev_pct")
+        s["scenario_ev_pct"] = scored.get("scenario_ev_pct")
+        s["probability_kind"] = scored.get("probability_kind")
+        s["model_calibrated"] = scored.get("model_calibrated", False)
+        s["ev_assumptions"] = scored.get("ev_assumptions")
         s["pop"] = scored.get("pop", s.get("pop"))
         s["score_factors"] = scored["factors"]
         # skew 陡峭时近 delta put 降权标记
@@ -791,12 +799,18 @@ def _portfolio_context_for_manage(
             or (util is not None and float(util) >= tight_util)
         )
         stress = float(overview.get("assignment_stress") or 0)
-        committed = float(overview.get("total_committed") or 0)
         equity = overview.get("equity")
-        ratio = float(pos_cfg.get("stress_put_block_ratio", 1.5) or 1.5)
-        base = max(committed, float(equity or 0) * 0.3) if equity else committed
-        stress_block = bool(stress > 0 and base > 0 and stress >= base * ratio)
-        put_blocked = bool(stress_block or over_pf)
+        reserve = float(pcfg.get("cash_reserve") or 0)
+        cash_gap = max(
+            float(overview.get("assignment_cash_shortfall") or 0),
+            stress + reserve - float(overview.get("cash") or 0),
+        )
+        data_invalid = bool(
+            not overview.get("ok")
+            or overview.get("valuation_incomplete")
+            or overview.get("reconciliation_required")
+        )
+        put_blocked = bool(cash_gap > 0 or over_pf or data_invalid)
         headroom_by: Dict[str, Optional[float]] = {}
         committed_by: Dict[str, float] = {}
         max_cap_by: Dict[str, Optional[float]] = {}
@@ -821,6 +835,9 @@ def _portfolio_context_for_manage(
             "starting_cash": overview.get("starting_cash"),
             "equity_source": overview.get("equity_source"),
             "assignment_stress": stress,
+            "assignment_cash_shortfall": round(cash_gap, 2),
+            "valuation_incomplete": bool(overview.get("valuation_incomplete")),
+            "reconciliation_required": bool(overview.get("reconciliation_required")),
             "headroom_by_symbol": headroom_by,
             "committed_by_symbol": committed_by,
             "max_capital_by_symbol": max_cap_by,
@@ -841,6 +858,9 @@ def _portfolio_context_for_manage(
             "starting_cash": None,
             "equity_source": None,
             "assignment_stress": None,
+            "assignment_cash_shortfall": None,
+            "valuation_incomplete": True,
+            "reconciliation_required": False,
             "headroom_by_symbol": {},
             "committed_by_symbol": {},
             "max_capital_by_symbol": {},
@@ -854,7 +874,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     OpenD 失败时返回缓存并标 stale=True(弱网降级)。
     """
     import futu
-    from datetime import date as _date
+    from datetime import date as _date, timezone
     from app.core.leaps_monitor import _throttle, _to_futu_symbol
     from app.core.wheel_today import save_positions_cache, load_positions_cache, try_buying_power
 
@@ -926,6 +946,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             data["stale"] = True
             data["stale_age_minutes"] = cached.get("age_minutes")
             data["stale_reason"] = str(e)
+            data["items"] = [dict(it, stale=True) for it in (data.get("items") or [])]
             # 组合上下文仍用最新
             data["portfolio_context"] = {
                 k: v for k, v in portfolio_ctx.items()
@@ -934,6 +955,7 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             return data
         raise
 
+    quote_asof = datetime.now(timezone.utc).isoformat()
     live_spots: Dict[str, float] = {}
     live_marks: Dict[str, float] = {}
     for code, q in quotes.items():
@@ -1030,6 +1052,8 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "expiry": c.get("open_expiry"), "dte": dte,
             "open_price": open_price, "current_price": cur, "buyback_ask": buyback,
             "buyback_bid": bid or None,
+            "bid": bid or None, "ask": q.get("ask") or None,
+            "quote_asof": quote_asof, "quote_delayed": False,
             "profit_pct": profit_pct, "spot": spot, "itm": itm,
             "delta": q.get("delta") or 0,
             "theta": q.get("theta") or 0,
@@ -1183,9 +1207,7 @@ def roll_options(
                 if ret == futu.RET_OK and snap is not None and not snap.empty:
                     row = snap.iloc[0]
                     buyback_bid = float(row.get("bid_price", 0) or 0)
-                    buyback_ask = float(row.get("ask_price", 0) or row.get("last_price", 0) or 0)
-                    if buyback_ask <= 0:
-                        buyback_ask = buyback_bid
+                    buyback_ask = float(row.get("ask_price", 0) or 0)
                     cur_delta = abs(float(row.get("option_delta", 0) or 0))
                 else:
                     warnings.append(f"当前合约快照失败({code}),买回价请手动填写")
@@ -1638,6 +1660,8 @@ def quote_contract(
                         "last": c.get("last_price") or c.get("last"),
                         "delta": c.get("delta"),
                         "spot_price": chain.get("spot_price"),
+                        "quote_asof": c.get("quote_asof") or chain.get("quote_asof"),
+                        "quote_delayed": bool(c.get("quote_delayed") or chain.get("quote_delayed")),
                     }
         raise HTTPException(status_code=404, detail="期权链中未找到该合约")
     try:
@@ -1659,6 +1683,8 @@ def quote_contract(
                 "last": c.get("last_price") or c.get("last"),
                 "delta": c.get("delta"),
                 "spot_price": chain.get("spot_price"),
+                "quote_asof": c.get("quote_asof") or chain.get("quote_asof"),
+                "quote_delayed": bool(c.get("quote_delayed") or chain.get("quote_delayed")),
             }
     raise HTTPException(status_code=404, detail="到期日链中未找到该合约")
 
@@ -1757,7 +1783,7 @@ def suggest_call(symbol: str = Query(...), host: str = Query("127.0.0.1"), port:
 
 @router.get("/portfolio")
 def portfolio(
-    equity: Optional[float] = Query(None, description="组合净值,空则用配置或 max_capital 之和"),
+    equity: Optional[float] = Query(None, description="组合起始现金/权益,空则用 Wheel 组合配置"),
 ):
     from app.core.wheel_portfolio import portfolio_overview
     pcfg = _wheel_cfg().get("wheel_portfolio", {}) or {}
@@ -1822,6 +1848,8 @@ def post_assign_list():
 
 
 class ExecuteDraftIn(BaseModel):
+    execution_id: Optional[str] = None
+    mode: str = "recorded"
     kind: str = "manage"  # manage | open
     action: Optional[str] = "auto"
     item: Optional[Dict[str, Any]] = None  # 体检 item 或机会
@@ -1865,6 +1893,7 @@ def execute_apply(body: ExecuteDraftIn):
         raise HTTPException(status_code=400, detail=draft.get("error") or "草稿失败")
     if body.apply is False:
         return {"draft": draft, "applied": False}
+    draft.update(execution_id=body.execution_id or str(uuid.uuid4()), mode=body.mode)
     try:
         result = apply_draft(draft)
         return {"draft": draft, "applied": True, **result}
@@ -2009,6 +2038,7 @@ def reconcile_api(
 
 
 class DraftApplyIn(BaseModel):
+    execution_id: Optional[str] = None
     symbol: str
     trade_type: str
     contract_code: Optional[str] = None
@@ -2026,12 +2056,17 @@ class DraftApplyIn(BaseModel):
 def apply_reconcile_draft(body: DraftApplyIn):
     from app.core.wheel_reconcile import apply_draft
     try:
-        return apply_draft(body.model_dump())
+        payload = body.model_dump()
+        payload["execution_id"] = body.execution_id or str(uuid.uuid4())
+        return apply_draft(payload)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 class RollDraftIn(BaseModel):
+    execution_id: Optional[str] = None
+    mode: str = "recorded"
+    close_contract_code: Optional[str] = None
     cycle_id: str
     buyback_price: float
     sell_contract_code: str
@@ -2047,29 +2082,11 @@ class RollDraftIn(BaseModel):
 @router.post("/roll/register")
 def register_roll(body: RollDraftIn):
     """一键登记 Roll 两腿:买回平仓 + 卖出新约(同一 cycle)。"""
-    cycle = repo.get_cycle(body.cycle_id)
-    if not cycle or cycle["status"] not in ("CSP_OPEN", "CC_OPEN"):
-        raise HTTPException(status_code=400, detail="周期无在场合约")
-    side = cycle["open_option_type"]
-    symbol = cycle["symbol"]
-    close_type = "BUY_PUT_CLOSE" if side == "PUT" else "BUY_CALL_CLOSE"
-    open_type = "SELL_PUT" if side == "PUT" else "SELL_CALL"
+    from app.core.wheel_execute import register_roll_draft
     try:
-        repo.record_trade(
-            symbol=symbol, trade_type=close_type, cycle_id=body.cycle_id,
-            contract_code=cycle.get("open_contract_code"),
-            strike=cycle.get("open_strike"), expiry=cycle.get("open_expiry"),
-            qty=body.qty, price=body.buyback_price, fee=body.fee_close,
-            contract_size=body.contract_size, note="Roll 平仓腿",
-        )
-        c2 = repo.record_trade(
-            symbol=symbol, trade_type=open_type, cycle_id=body.cycle_id,
-            contract_code=body.sell_contract_code,
-            strike=body.sell_strike, expiry=body.sell_expiry,
-            qty=body.qty, price=body.sell_price, fee=body.fee_open,
-            contract_size=body.contract_size, note="Roll 开仓腿",
-        )
-        return c2
+        payload = body.model_dump()
+        payload["execution_id"] = body.execution_id or str(uuid.uuid4())
+        return register_roll_draft(payload)["cycle"]
     except WheelError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -2083,6 +2100,19 @@ class BacktestIn(BaseModel):
 def wheel_backtest(body: BacktestIn):
     from app.core.wheel_backtest import run_wheel_backtest
     return run_wheel_backtest(body.symbol.strip().upper(), body.params)
+
+
+class TimingResearchIn(BaseModel):
+    bars: List[Dict[str, Any]]
+    quotes: List[Dict[str, Any]]
+    params: Optional[Dict[str, Any]] = None
+    ema_period: int = 50
+
+
+@router.post("/backtest/timing-compare")
+def timing_research(body: TimingResearchIn):
+    from app.core.wheel_backtest import compare_timing
+    return compare_timing(body.bars, body.quotes, body.params, body.ema_period)
 
 
 class CompareProfilesIn(BaseModel):

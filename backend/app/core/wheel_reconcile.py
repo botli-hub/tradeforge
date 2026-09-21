@@ -242,6 +242,7 @@ def apply_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
         if not draft.get(k):
             raise ValueError(f"draft 缺少 {k}")
     body = {
+        "execution_id": draft.get("execution_id"),
         "symbol": draft["symbol"],
         "trade_type": draft["trade_type"],
         "contract_code": draft.get("contract_code"),

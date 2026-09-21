@@ -3,7 +3,7 @@ import {
   getAppSettings, subscribeSettings, type AppSettings,
   getWheelTargets, getWheelCandidates, addWheelTarget, updateWheelTarget, deleteWheelTarget,
   getWheelFloorSuggest,
-  getWheelCycles, getWheelTrades, recordWheelTrade, updateWheelTrade, deleteWheelTrade,
+  getWheelCycles, getWheelTrades, recordWheelTrade, registerWheelRoll, updateWheelTrade, deleteWheelTrade,
   getWheelStats, getWheelSuggest, triggerWheelTimingScan, getWheelTimingSignals,
   getWheelScanStatus, getWheelTimingHistory, checkWheelOpenPositions, getWheelRollOptions,
   getWheelPoolScan, pushWheelPoolScan, WheelScanResult, WheelScanOpportunity, getBackendConfig,
@@ -1102,6 +1102,7 @@ function TradeModal({
   onSaved: () => void
 }) {
   const allowed = ALLOWED_TRADES[cycleStatus] || ['SELL_PUT']
+  const [executionId] = useState(() => crypto.randomUUID())
   const [form, setForm] = useState<TradeFormState>({
     symbol: initial.symbol,
     trade_type: (initial.trade_type as WheelTradeType) || allowed[0],
@@ -1119,7 +1120,7 @@ function TradeModal({
   const [err, setErr] = useState<string | null>(null)
 
   // CC_OPEN 多腿时平仓/到期/交货需指定合约;SELL_CALL 亦可在卖Call中再挂
-  const needLegPick = cycleStatus === 'CC_OPEN' && ['BUY_CALL_CLOSE', 'EXPIRE', 'CALLED_AWAY'].includes(form.trade_type)
+  const needLegPick = ['CSP_OPEN', 'CC_OPEN'].includes(cycleStatus) && ['BUY_CALL_CLOSE', 'EXPIRE', 'CALLED_AWAY'].includes(form.trade_type)
   const needContract = ['SELL_PUT', 'SELL_CALL'].includes(form.trade_type) || needLegPick
   const needPrice = !['EXPIRE', 'ASSIGNED', 'CALLED_AWAY'].includes(form.trade_type)
   const isShares = ['BUY_SHARES', 'SELL_SHARES'].includes(form.trade_type)
@@ -1148,6 +1149,7 @@ function TradeModal({
     try {
       const code = normalizeContractCode(form.contract_code, form.symbol) || form.contract_code || undefined
       await recordWheelTrade({
+        execution_id: executionId,
         symbol: form.symbol,
         trade_type: form.trade_type,
         contract_code: code,
@@ -1840,6 +1842,7 @@ export default function WheelPage() {
     setUndoTrade(null)
     try {
       await recordWheelTrade({
+        execution_id: `undo:${t.id}`,
         symbol: t.symbol, trade_type: t.trade_type,
         contract_code: t.contract_code || undefined,
         strike: t.strike ?? undefined, expiry: t.expiry || undefined,
@@ -3140,7 +3143,7 @@ export default function WheelPage() {
                               <Badge color={check.deep_itm ? 'red' : check.low_yield && !check.roll_21dte ? 'blue' : 'orange'}
                                 title={(check.reasons || []).join(';')}>
                                 👉 {check.action_hint}
-                                {check.decision_confidence != null ? ` · ${check.decision_confidence}%` : ''}
+                                {check.rule_match_score != null ? ` · 规则匹配 ${check.rule_match_score}/100` : ''}
                               </Badge>
                             )}
                             {status === 'HOLDING' && (c.uncovered_days ?? 0) >= 3 && (
@@ -4569,6 +4572,7 @@ function RollModal({ data, onClose, onSaved }: {
   const initCand = data.candidates.find(c => c.contract_code === defaultCode) || data.candidates[0]
   const [newPrice, setNewPrice] = useState(String(initCand?.bid ?? ''))
   const [fee, setFee] = useState('0')
+  const [executionId] = useState(() => crypto.randomUUID())
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -4595,25 +4599,22 @@ function RollModal({ data, onClose, onSaved }: {
     setSaving(true)
     setErr(null)
     try {
-      // 两腿:买回旧 + 卖出新,同一 cycle
-      await recordWheelTrade({
-        symbol: data.symbol,
-        trade_type: data.side === 'PUT' ? 'BUY_PUT_CLOSE' : 'BUY_CALL_CLOSE',
-        contract_code: data.current.contract_code,
-        price: bb, fee: f, contract_size: size,
-        cycle_id: data.cycle_id, note: 'Roll 买回',
-      })
-      await recordWheelTrade({
-        symbol: data.symbol,
-        trade_type: data.side === 'PUT' ? 'SELL_PUT' : 'SELL_CALL',
-        contract_code: cand.contract_code, strike: cand.strike, expiry: cand.expiry,
-        price: np, fee: f, contract_size: size,
-        cycle_id: data.cycle_id, note: 'Roll 卖出',
+      await registerWheelRoll({
+        execution_id: executionId,
+        cycle_id: data.cycle_id,
+        close_contract_code: data.current.contract_code,
+        buyback_price: bb,
+        sell_contract_code: cand.contract_code,
+        sell_strike: cand.strike,
+        sell_expiry: cand.expiry,
+        sell_price: np,
+        qty: data.current.qty || 1,
+        fee_close: f, fee_open: f, contract_size: size,
       })
       onSaved()
       onClose()
     } catch (e: any) {
-      setErr('Roll 登记失败(若买回已成功,请在台账检查后手动登记卖出腿):' + e.message)
+      setErr('Roll 登记失败，两腿均未新增（网络异常时可安全重试）:' + e.message)
     } finally {
       setSaving(false)
     }

@@ -51,10 +51,16 @@ def trade_cashflow(t: Dict[str, Any]) -> float:
 
 def _option_mark(cycle: Dict[str, Any], option_marks: Dict[str, float]) -> Optional[float]:
     code = str(cycle.get("open_contract_code") or "")
-    if code and code in option_marks:
-        m = _f(option_marks.get(code))
-        if m > 0:
-            return m
+    keys = [code]
+    if code.upper().startswith("US."):
+        keys.append(code[3:])
+    elif code:
+        keys.append("US." + code)
+    for key in keys:
+        if key and key in option_marks:
+            m = _f(option_marks.get(key))
+            if m >= 0:
+                return m
     last = _f(cycle.get("current_price") or cycle.get("open_price"))
     return last if last > 0 else None
 
@@ -93,6 +99,8 @@ def nav_from_books(
     stock_rows: List[Dict[str, Any]] = []
     option_rows: List[Dict[str, Any]] = []
     per_symbol: Dict[str, Dict[str, float]] = {}
+    valuation_incomplete = False
+    reconciliation_required = False
 
     def _row(sym: str) -> Dict[str, float]:
         return per_symbol.setdefault(sym, {
@@ -100,6 +108,7 @@ def nav_from_books(
         })
 
     for c in cycles:
+        reconciliation_required |= bool(c.get("reconciliation_required"))
         status = str(c.get("status") or "")
         if status == "CLOSED":
             continue
@@ -109,6 +118,7 @@ def nav_from_books(
         cost = _f(c.get("share_cost"))
         if shares > 0:
             px = _f(spots.get(sym))
+            valuation_incomplete |= not (px > 0)
             mark = px if px > 0 else cost
             mv = shares * mark
             stock_mv += mv
@@ -129,19 +139,29 @@ def nav_from_books(
             coll = _f(c.get("open_strike")) * qty * size
             csp_collateral += coll
             u["csp_collateral"] += coll
-        if status in ("CSP_OPEN", "CC_OPEN"):
-            qty = _f(c.get("open_qty"), 1.0) or 1.0
-            size = _f(c.get("open_contract_size") or c.get("contract_size"), 100.0) or 100.0
-            mark = _option_mark(c, option_marks)
+        from app.core.wheel_cc_legs import expand_open_option_rows
+        for leg in expand_open_option_rows([c]):
+            qty = _f(leg.get("open_qty"), 1.0) or 1.0
+            size = _f(leg.get("open_contract_size") or leg.get("contract_size"), 100.0) or 100.0
+            code = str(leg.get("open_contract_code") or "")
+            mark_keys = {code}
+            if code.upper().startswith("US."):
+                mark_keys.add(code[3:])
+            elif code:
+                mark_keys.add("US." + code)
+            fallback = not any(k in option_marks for k in mark_keys if k)
+            valuation_incomplete |= fallback
+            mark = _option_mark(leg, option_marks)
             if mark is None:
-                mark = _f(c.get("open_price"))
+                mark = _f(leg.get("open_price"))
             mtm = -mark * qty * size
             option_mtm += mtm
             u["option_mtm"] += mtm
             option_rows.append({
                 "symbol": sym,
-                "side": c.get("open_option_type"),
-                "contract_code": c.get("open_contract_code"),
+                "mark_fallback": fallback,
+                "side": leg.get("open_option_type"),
+                "contract_code": leg.get("open_contract_code"),
                 "qty": qty,
                 "mark": round(mark, 4) if mark else None,
                 "mtm": round(mtm, 2),
@@ -154,6 +174,8 @@ def nav_from_books(
     equity = cash + stock_mv + option_mtm
     total_committed = csp_collateral + stock_mv
     return {
+        "valuation_incomplete": valuation_incomplete,
+        "reconciliation_required": reconciliation_required,
         "starting_cash": round(float(starting_cash or 0), 2),
         "cash": round(cash, 2),
         "cash_delta": round(cash_delta, 2),
@@ -179,8 +201,8 @@ def load_nav_marks(symbols: Optional[Iterable[str]] = None) -> Tuple[Dict[str, f
     option_marks: Dict[str, float] = {}
     try:
         from app.core.wheel_today import load_positions_cache
-        cached = load_positions_cache(max_age_min=24 * 60)
-        items = ((cached or {}).get("data") or {}).get("items") or []
+        cached = load_positions_cache(max_age_min=5)
+        items = (((cached or {}).get("data") or {}).get("items") or []) if cached and cached.get("age_minutes", 999) <= 5 else []
         for it in items:
             sym = str(it.get("symbol") or "")
             sp = _f(it.get("spot"))

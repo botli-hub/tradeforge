@@ -788,12 +788,17 @@ def init_db():
         "ALTER TABLE wheel_cycles ADD COLUMN entry_score REAL",
         "ALTER TABLE wheel_cycles ADD COLUMN entry_meta TEXT",
         "ALTER TABLE wheel_cycles ADD COLUMN open_cc_legs TEXT",
+        "ALTER TABLE wheel_cycles ADD COLUMN accounting_json TEXT",
         "ALTER TABLE wheel_trades ADD COLUMN is_roll INTEGER DEFAULT 0",
     ]:
         try:
             cursor.execute(ddl)
         except Exception:
             pass
+
+    cursor.execute("""CREATE TABLE IF NOT EXISTS wheel_executions (
+        id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL)""")
 
     # Sim Wheel 纸面账(独立表;不碰 wheel_cycles)
     try:
@@ -805,3 +810,25 @@ def init_db():
     seed_demo_strategies(conn)
     conn.commit()
     conn.close()
+    migrate_wheel_books()
+
+
+def migrate_wheel_books():
+    """Replay old snapshots once. Preserve raw fills and flag invalid histories."""
+    from app.data.wheel_repository import _replay
+    conn = get_db()
+    try:
+        rows = conn.execute("SELECT id FROM wheel_cycles WHERE accounting_json IS NULL").fetchall()
+        for row in rows:
+            conn.execute("SAVEPOINT wheel_migration")
+            try:
+                _replay(conn, row["id"])
+                conn.execute("RELEASE wheel_migration")
+            except Exception as e:
+                conn.execute("ROLLBACK TO wheel_migration")
+                conn.execute("RELEASE wheel_migration")
+                conn.execute("UPDATE wheel_cycles SET accounting_json=? WHERE id=?",
+                    (json.dumps({"reconciliation_required": True, "reconciliation_error": str(e)}), row["id"]))
+        conn.commit()
+    finally:
+        conn.close()
