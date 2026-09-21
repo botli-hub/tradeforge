@@ -135,13 +135,20 @@ def _symbol_context(symbol: str) -> Dict[str, Any]:
     elif statuses:
         stage = statuses[0]
     holding = next((c for c in cycles if c["status"] == "HOLDING"), None)
+    # 愿接=推荐价(非手改缓存)
+    floor = t.get("floor_price")
+    try:
+        from app.core.wheel_floor import resolve_willing_price
+        floor = resolve_willing_price(symbol, None, None, t.get("floor_price")) or floor
+    except Exception:
+        pass
     return {
         "stage": stage,
         "headroom": round(headroom, 2) if headroom is not None else None,
         "max_capital": max_cap,
         "committed": round(committed, 2),
         "cost_basis": (holding or {}).get("cost_basis"),
-        "floor_price": t.get("floor_price"),
+        "floor_price": floor,
         "stance": t.get("stance") or "acquire",
         "enabled": bool(t.get("enabled", True)),
     }

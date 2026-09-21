@@ -234,7 +234,7 @@ export default function ManageDecisionModal({
               <div className="books-col-title">股东判断</div>
               <div>{books.owner?.holding_is_price_bet ? '续拿=股价还得朝你这边走' : '未把续拿当方向赌注'}</div>
               <div>指派价 ${fmt(books.owner?.assign_strike, 0)}</div>
-              <div>floor {books.owner?.floor_price != null ? `$${fmt(books.owner.floor_price)}` : '--'}</div>
+              <div>愿接(推荐价) {books.owner?.floor_price != null ? `$${fmt(books.owner.floor_price)}` : '--'}</div>
               <div>{books.owner?.stance === 'income' ? '只收租' : '允许接货'}</div>
               <div>{books.owner?.assign_means}</div>
             </div>
@@ -321,7 +321,7 @@ export default function ManageDecisionModal({
                   <div>① 愿按 strike ${mc.strike} {isPut ? '接货' : '交货'}吗?</div>
                   <div>② {isPut
                     ? (cl.floor_ok === false ? '愿接价未通过' : cl.floor_ok === true ? '在愿接价内' : '愿接价未设')
-                    : 'Call 看成本底线,与 floor 无关'}</div>
+                    : 'Call 看成本底线,与愿接无关'}</div>
                   <div>③ 集中度/下一步可接受吗?
                     {cl.post_holding_pct != null ? ` (约净值 ${cl.post_holding_pct}%)` : ''}
                   </div>
