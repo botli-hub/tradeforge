@@ -30,12 +30,8 @@ def draft_from_manage(
             action = "close"
         elif code in ("ROLL", "ROLL_ADJUST"):
             action = "roll"
-        elif code == "PREPARE_ASSIGN":
-            action = "assign"
-        elif code == "HOLD_THETA":
-            action = "expire"
         else:
-            action = "close" if item.get("profit_hit") else "expire"
+            return {"ok": False, "error": "请明确选择实际成交/指派/到期事件;建议不等于成交"}
 
     cycle_id = item.get("cycle_id")
     symbol = item.get("symbol")
@@ -43,9 +39,19 @@ def draft_from_manage(
     size = int(item.get("contract_size") or 100)
     strike = item.get("strike")
     expiry = item.get("expiry")
+    explicit_fill_price = buyback_price is not None
     px = buyback_price
     if px is None:
         px = item.get("buyback_ask") or item.get("current_price") or 0
+    # A displayed ask is only a hint unless it carries a fresh two-sided
+    # quote.  Keep it in the preview for context, but require the user to
+    # supply the actual fill before this draft can be posted to the ledger.
+    from app.core.wheel_quotes import executable_quote
+    quote_ok = executable_quote(item)
+    # Assignment/expiry are event confirmations and do not need an option
+    # buyback quote.  Only actions that post an option close fill require a
+    # user supplied price when the displayed quote is not executable.
+    requires_fill_price = action in ("close", "roll") and not explicit_fill_price and not quote_ok
 
     steps: List[Dict[str, Any]] = []
     title = ""
@@ -168,6 +174,9 @@ def draft_from_manage(
     else:
         return {"ok": False, "error": f"未知 action: {action}"}
 
+    if requires_fill_price and action in ("close", "roll"):
+        notes.append("⚠ 当前买回价不是新鲜双边可成交行情，登记前必须填写实际成交价")
+
     return {
         "ok": True,
         "kind": "manage",
@@ -178,6 +187,7 @@ def draft_from_manage(
         "steps": steps,
         "notes": notes,
         "source_action_code": code,
+        "requires_fill_price": requires_fill_price,
         "created_at": _now(),
     }
 
@@ -190,11 +200,14 @@ def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) 
     q = qty if qty is not None else float(opp.get("suggest_qty") or opp.get("qty") or 1)
     if q < 1:
         q = 1
-    px = opp.get("bid") or opp.get("mid") or opp.get("last") or 0
+    px = opp.get("bid") or 0
+    from app.core.wheel_quotes import executable_quote
+    requires_fill_price = not executable_quote(opp)
     steps = [{
         "trade_type": tt,
         "symbol": symbol,
-        "new_cycle": True,
+        "new_cycle": side == "PUT",
+        "cycle_id": opp.get("cycle_id") if side == "CALL" else None,
         "contract_code": opp.get("contract_code"),
         "strike": opp.get("strike"),
         "expiry": opp.get("expiry"),
@@ -212,6 +225,8 @@ def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) 
         notes.append("⚠ 可能超资金上限")
     if opp.get("high_corr_warn"):
         notes.append(f"⚠ 高相关: {opp.get('high_corr_warn')}")
+    if requires_fill_price:
+        notes.append("⚠ 当前报价不是新鲜双边可成交行情，登记前必须填写实际成交价")
     return {
         "ok": True,
         "kind": "open",
@@ -220,6 +235,7 @@ def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) 
         "symbol": symbol,
         "steps": steps,
         "notes": notes,
+        "requires_fill_price": requires_fill_price,
         "created_at": _now(),
     }
 
@@ -235,38 +251,14 @@ def apply_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
     steps = draft.get("steps") or []
     if not steps:
         raise WheelError("草稿无步骤")
-    cycle = None
-    for st in steps:
-        cycle = repo.record_trade(
-            symbol=st["symbol"],
-            trade_type=st["trade_type"],
-            contract_code=st.get("contract_code"),
-            strike=st.get("strike"),
-            expiry=st.get("expiry"),
-            qty=float(st.get("qty") or 1),
-            price=float(st.get("price") or 0),
-            fee=float(st.get("fee") or 0),
-            contract_size=int(st.get("contract_size") or 100),
-            note=st.get("note"),
-            cycle_id=st.get("cycle_id"),
-            new_cycle=bool(st.get("new_cycle")),
-        )
-        # 写 entry_score
-        if st.get("entry_score") is not None and cycle:
-            try:
-                from app.data.database import get_db, _now_iso
-                conn = get_db()
-                try:
-                    conn.execute(
-                        "UPDATE wheel_cycles SET entry_score = ? WHERE id = ?",
-                        (float(st["entry_score"]), cycle["id"]),
-                    )
-                    conn.commit()
-                    cycle["entry_score"] = float(st["entry_score"])
-                finally:
-                    conn.close()
-            except Exception:
-                pass
+    if draft.get("requires_fill_price"):
+        raise WheelError("报价不是新鲜双边可成交行情,请填实际成交价后再记账")
+    for step in steps:
+        if step.get("trade_type") in ("SELL_PUT", "SELL_CALL", "BUY_PUT_CLOSE", "BUY_CALL_CLOSE"):
+            if float(step.get("price") or 0) <= 0:
+                raise WheelError("期权成交价必须大于 0")
+    result = repo.record_trades(steps, execution_id=draft.get("execution_id"), mode=draft.get("mode", "recorded"))
+    cycle = result["cycle"]
 
     hint = None
     if cycle and cycle.get("status") == "HOLDING":
@@ -276,4 +268,55 @@ def apply_draft(draft: Dict[str, Any]) -> Dict[str, Any]:
         "cycle": cycle,
         "post_assign": hint,
         "applied_steps": len(steps),
+        "risk": result["risk"],
+        "execution_id": result["execution_id"],
     }
+
+
+def register_roll_draft(body):
+    """Resolve the selected leg, then record both fills in one transaction.
+
+    Partial Put rolls open a separate cycle so the original put and shares stay.
+    Retries resolve from stored payload rather than the now-changed position.
+    """
+    import json
+    from app.data import wheel_repository as repo
+    from app.data.database import get_db
+    request = dict(body)
+    execution_id = body.get("execution_id")
+    if not execution_id:
+        raise repo.WheelError("Roll 需要 execution_id")
+    conn = get_db()
+    try:
+        previous = conn.execute("SELECT result_json FROM wheel_executions WHERE id=?", (execution_id,)).fetchone()
+        if previous:
+            result = json.loads(previous["result_json"])
+            if result.get("roll_request") != request:
+                raise repo.WheelError("execution_id 已用于不同内容")
+            return result
+    finally:
+        conn.close()
+    c = repo.get_cycle(body["cycle_id"])
+    from app.core.wheel_cc_legs import expand_open_option_rows
+    rows = expand_open_option_rows([c] if c else [])
+    code = body.get("close_contract_code")
+    if code:
+        rows = [r for r in rows if (r.get("open_contract_code") or "").removeprefix("US.") == code.removeprefix("US.")]
+    if len(rows) != 1:
+        raise repo.WheelError("请选择唯一要 Roll 的在场合约")
+    leg = rows[0]
+    side = leg["open_option_type"]
+    close = dict(symbol=c["symbol"], cycle_id=c["id"],
+        trade_type="BUY_PUT_CLOSE" if side == "PUT" else "BUY_CALL_CLOSE",
+        contract_code=leg["open_contract_code"], strike=leg["open_strike"], expiry=leg["open_expiry"],
+        qty=body.get("qty", 1), contract_size=body.get("contract_size", 100),
+        price=body["buyback_price"], fee=body.get("fee_close", 0), note="Roll 平仓腿")
+    opening = dict(symbol=c["symbol"], cycle_id=c["id"],
+        trade_type="SELL_PUT" if side == "PUT" else "SELL_CALL",
+        contract_code=body["sell_contract_code"], strike=body["sell_strike"], expiry=body["sell_expiry"],
+        qty=close["qty"], contract_size=close["contract_size"], price=body["sell_price"],
+        fee=body.get("fee_open", 0), note="Roll 开仓腿")
+    if side == "PUT" and (close["qty"] < leg["open_qty"] or c.get("shares", 0) > 0):
+        opening.update(cycle_id=None, new_cycle=True)
+    return repo.record_trades([close, opening], execution_id=execution_id,
+        mode=body.get("mode", "recorded"), request_context={"roll_request": request})

@@ -1,3 +1,12 @@
+
+function withExecutionId(scope: string, body: Record<string, unknown>) {
+  if (body.execution_id || body.apply === false) return body
+  const key = 'wheel-intent:' + scope + ':' + JSON.stringify(body)
+  let id = sessionStorage.getItem(key)
+  if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(key, id) }
+  return { ...body, execution_id: id }
+}
+
 export const API_BASE = 'http://127.0.0.1:8000'
 const SETTINGS_KEY = 'tradeforge.settings'
 const SETTINGS_EVENT = 'tradeforge:settings-changed'
@@ -590,6 +599,9 @@ export interface WheelTarget {
   min_annualized: number
   min_open_interest: number
   enabled: boolean | number
+  /** income=只收租, acquire=允许接货 */
+  stance?: 'income' | 'acquire' | string | null
+  sell_above?: number | null
   active_cycles?: WheelCycle[]
   idle_days?: number | null
   volatility_brief?: {
@@ -625,6 +637,9 @@ export interface WheelCapital {
   holding_cost: number
   total_committed: number
   assignment_stress: number
+  assignment_cash_shortfall?: number
+  valuation_incomplete?: boolean
+  reconciliation_required?: boolean
 }
 
 export interface WheelStats {
@@ -664,12 +679,19 @@ export interface WheelSuggestion {
   volume: number
   contract_size: number
   annualized: number
+  annualized_bid?: number | null
+  annualized_mid_target?: number | null
   annualized_cash?: number
   annualized_margin?: number | null
   spread_pct?: number | null
   covers_earnings?: boolean
   pop?: number
   ev_pct?: number | null
+  scenario_ev_pct?: number | null
+  probability_kind?: string
+  model_calibrated?: boolean
+  ev_assumptions?: string
+  quote_asof?: string | null
   robust_score?: number
   buffer_atr?: number | null
   limit_price_hint?: number
@@ -760,6 +782,26 @@ export interface WheelOpenPositionItem {
   open_cc_leg_count?: number | null
   uncovered_shares?: number | null
   contract_code: string
+  bid?: number | null
+  ask?: number | null
+  quote_asof?: string | null
+  quote_delayed?: boolean
+  books?: {
+    seller?: {
+      premium_captured_pct?: number | null
+      remaining_premium_usd?: number | null
+      remaining_ann?: number | null
+      capital_tied?: number | null
+      freed_if_close?: number | null
+    }
+    owner?: {
+      holding_is_price_bet?: boolean
+      assign_strike?: number | null
+      floor_price?: number | null
+      stance?: string | null
+      assign_means?: string
+    }
+  } | null
   strike: number
   expiry: string | null
   dte: number | null
@@ -785,6 +827,8 @@ export interface WheelOpenPositionItem {
   prefer_card?: string | null
   /** 0–100:规则越硬、证据越足越高 */
   decision_confidence?: number | null
+  rule_match_score?: number | null
+  model_calibrated?: boolean
   thin_otm?: boolean
   otm_buffer_pct?: number | null
   /** CSP: strike 是否高于接货底线 */
@@ -880,6 +924,9 @@ export interface WheelPortfolioContext {
   starting_cash?: number | null
   equity_source?: string
   assignment_stress?: number | null
+  assignment_cash_shortfall?: number | null
+  valuation_incomplete?: boolean
+  reconciliation_required?: boolean
   capital_tight_util_pct?: number
 }
 
@@ -1022,6 +1069,7 @@ export interface WheelRollOptions {
     contract_code: string
     strike: number
     expiry: string
+    qty?: number
     dte: number | null
     open_price: number
     buyback_ask: number
@@ -1253,6 +1301,8 @@ export async function getWheelTrades(params?: { cycle_id?: string; symbol?: stri
 }
 
 export async function recordWheelTrade(body: {
+  execution_id?: string
+  mode?: 'recorded' | 'planned'
   symbol: string
   trade_type: WheelTradeType
   contract_code?: string
@@ -1270,7 +1320,7 @@ export async function recordWheelTrade(body: {
   return request<WheelCycle>('/api/wheel/trades', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withExecutionId('recordWheelTrade', body)),
   })
 }
 
@@ -1398,6 +1448,9 @@ export interface WheelOpportunity {
   dte?: number | null
   delta?: number | null
   bid?: number | null
+  ask?: number | null
+  quote_asof?: string | null
+  quote_delayed?: boolean
   premium_used?: number | null
   spread_pct?: number | null
   annualized?: number | null
@@ -1408,6 +1461,7 @@ export interface WheelOpportunity {
   trend?: string | null
   covers_earnings?: boolean
   exceeds_capital?: boolean
+  post_trade_risk?: { ok?: boolean; violations?: string[]; assignment_cash_shortfall?: number }
   flags?: string[]
   timing?: {
     ema_type?: string | null
@@ -1454,6 +1508,9 @@ export interface WheelOpportunitiesResult {
   portfolio?: {
     portfolio_put_blocked?: boolean
     assignment_stress?: number
+    assignment_cash_shortfall?: number
+    valuation_incomplete?: boolean
+    reconciliation_required?: boolean
     utilization_pct?: number | null
     over_portfolio?: boolean
     stress_block?: boolean
@@ -1653,6 +1710,9 @@ export async function getWheelPortfolio(equity?: number) {
     }[]
     violations: unknown[]
     assignment_stress: number
+    assignment_cash_shortfall?: number
+    valuation_incomplete?: boolean
+    reconciliation_required?: boolean
   }>(`/api/wheel/portfolio${qs}`)
 }
 
@@ -1741,11 +1801,14 @@ export async function applyWheelReconcileDraft(body: Record<string, unknown>) {
   return request('/api/wheel/reconcile/apply-draft', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withExecutionId('applyWheelReconcileDraft', body)),
   })
 }
 
 export async function registerWheelRoll(body: {
+  close_contract_code?: string
+  execution_id?: string
+  mode?: 'recorded' | 'planned'
   cycle_id: string
   buyback_price: number
   sell_contract_code: string
@@ -1760,7 +1823,7 @@ export async function registerWheelRoll(body: {
   return request<WheelCycle>('/api/wheel/roll/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withExecutionId('registerWheelRoll', body)),
   })
 }
 
@@ -1779,6 +1842,20 @@ export async function runWheelBacktest(symbol: string, params?: Record<string, u
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, params }),
+  })
+}
+
+/** 对同一份带日期期权报价分别跑基准与 EMA 触线执行；无历史报价时后端会拒绝。 */
+export async function compareWheelTiming(
+  bars: Record<string, unknown>[],
+  quotes: Record<string, unknown>[],
+  params?: Record<string, unknown>,
+  ema_period = 50,
+) {
+  return request<Record<string, unknown>>('/api/wheel/backtest/timing-compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bars, quotes, params, ema_period }),
   })
 }
 
@@ -1868,6 +1945,9 @@ export type WheelTodayBoard = {
     equity_source?: string
     capital_tight?: boolean
     portfolio_put_blocked?: boolean
+    assignment_cash_shortfall?: number | null
+    valuation_incomplete?: boolean
+    reconciliation_required?: boolean
     buying_power?: number | null
   }
   positions_error?: string | null
@@ -1944,6 +2024,8 @@ export async function getWheelExitStats() {
 }
 
 export async function executeWheelDraft(body: {
+  execution_id?: string
+  mode?: 'recorded' | 'planned'
   kind?: 'manage' | 'open'
   action?: string
   item?: Record<string, unknown>
@@ -1962,7 +2044,7 @@ export async function executeWheelDraft(body: {
   }>('/api/wheel/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withExecutionId('executeWheelDraft', body)),
   })
 }
 

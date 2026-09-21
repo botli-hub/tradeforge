@@ -14,29 +14,20 @@ def portfolio_overview(
 ) -> Dict[str, Any]:
     """权益 = 现金 + 持股市值 + 期权盯市。
 
-    起始现金优先级:
-      1) 入参 / 设置 total_equity > 0
-      2) 启用标的 max_capital 之和 > 0
-      3) 0(仍按成交+市值算,可能为负)
+    起始现金只接受显式入参或设置中的 total_equity；标的上限不是现金余额。
     """
     from app.data import wheel_repository as repo
     from app.core.wheel_nav import compute_account_nav
 
-    usage = repo.get_capital_usage()
     targets = repo.get_targets()
     enabled = [t for t in targets if t.get("enabled")]
 
-    caps_sum = sum(float(t.get("max_capital") or 0) for t in enabled)
     notes: List[str] = []
     starting = 0.0
     starting_source = "zero"
     if total_equity is not None and float(total_equity) > 0:
         starting = float(total_equity)
         starting_source = "config"
-    elif caps_sum > 0:
-        starting = float(caps_sum)
-        starting_source = "max_capital_sum"
-        notes.append("起始现金参考=各启用标的 max_capital 之和(未单独配置)")
     else:
         notes.append(
             "未配置起始现金且标的 max_capital 均为 0:权益只随已登记成交和市值走。"
@@ -45,7 +36,7 @@ def portfolio_overview(
 
     nav = compute_account_nav(starting, spots=spots, option_marks=option_marks)
     equity = nav["equity"]
-    has_equity = True
+    has_equity = starting > 0 and equity > 0
     live_n = sum(1 for _ in (nav.get("per_symbol") or {}))
     if starting <= 0 and not nav.get("cash_delta") and live_n == 0 and equity == 0:
         has_equity = False
@@ -120,7 +111,10 @@ def portfolio_overview(
         "idle_pct": idle_pct,
         "per_symbol": symbol_rows,
         "violations": over_symbol,
-        "assignment_stress": usage.get("assignment_stress"),
+        "assignment_stress": nav["csp_collateral"],
+        "assignment_cash_shortfall": round(max(0, nav["csp_collateral"] - nav["cash"]), 2),
+        "valuation_incomplete": nav.get("valuation_incomplete", False),
+        "reconciliation_required": nav.get("reconciliation_required", False),
         "notes": notes,
         "ok": has_equity,
         "nav_formula": "cash + stock_mv + option_mtm",
@@ -175,78 +169,44 @@ def correlation_matrix(symbols: Optional[List[str]] = None) -> Dict[str, Any]:
     return {"symbols": symbols, "pairs": pairs[:50], "high_corr": high}
 
 
-def stress_test(
-    shocks: Optional[List[float]] = None,
-    total_equity: Optional[float] = None,
-) -> Dict[str, Any]:
-    """对在场 CSP:标的下跌 shock 后 ITM 数量与接货资金。"""
+def stress_test(shocks=None, total_equity=None):
+    """Terminal common-shock payoff; cash coverage separate from equity losses."""
     from app.data import wheel_repository as repo
-    from app.core.volatility import get_daily_closes
-
-    shocks = shocks or [-0.10, -0.20]
-    cycles = [
-        c for c in repo.get_cycles(include_closed=False)
-        if c["status"] == "CSP_OPEN" and c.get("open_strike")
-    ]
-    holdings = [
-        c for c in repo.get_cycles(include_closed=False)
-        if (c.get("shares") or 0) > 0
-    ]
-
-    spots: Dict[str, float] = {}
-    for c in cycles + holdings:
-        sym = c["symbol"]
-        if sym not in spots:
-            cl = get_daily_closes(sym, limit=5)
-            spots[sym] = cl[-1] if cl else 0.0
-
-    usage = repo.get_capital_usage()
-    base_holding = usage.get("holding_cost") or 0
+    from app.core.wheel_nav import compute_account_nav
+    from app.core.wheel_cc_legs import expand_open_option_rows
+    cycles = repo.get_cycles(include_closed=False)
+    nav = compute_account_nav(float(total_equity or 0))
+    spots = nav.get("spots_used") or {}
+    missing = sorted({c["symbol"] for c in cycles if c["status"] != "IDLE" and not spots.get(c["symbol"])})
     scenarios = []
-    for sh in shocks:
-        assign_cost = 0.0
-        itm_list = []
-        for c in cycles:
-            spot = spots.get(c["symbol"]) or 0
-            shocked = spot * (1 + sh)
-            strike = c["open_strike"] or 0
-            qty = c.get("open_qty") or 1
-            size = c.get("open_contract_size") or 100
-            if shocked < strike:
-                cost = strike * qty * size
-                assign_cost += cost
-                itm_list.append({
-                    "symbol": c["symbol"],
-                    "cycle_id": c["id"],
-                    "strike": strike,
-                    "spot_shocked": round(shocked, 2),
-                    "assign_cost": round(cost, 2),
-                })
-        holding_mtm = 0.0
-        for c in holdings:
-            spot = spots.get(c["symbol"]) or 0
-            holding_mtm += (c.get("shares") or 0) * spot * (1 + sh)
-
-        total_need = assign_cost + base_holding
-        scenarios.append({
-            "shock_pct": round(sh * 100, 1),
-            "csp_itm_count": len(itm_list),
-            "assign_capital_needed": round(assign_cost, 2),
-            "holding_mtm": round(holding_mtm, 2),
-            "total_capital_if_assigned": round(total_need, 2),
-            "itm_positions": itm_list,
-        })
-
-    ov = portfolio_overview(total_equity=total_equity)
-    equity = ov.get("equity")
-
-    return {
-        "spots_used": {k: round(v, 2) for k, v in spots.items()},
-        "open_csp_count": len(cycles),
-        "equity_ref": round(equity, 2) if equity else None,
-        "scenarios": scenarios,
-        "note": "spot 取本地日K收盘;实际请结合实时报价。同时 assign 为极端情景。",
-    }
+    for shock in shocks or [-.2, -.4]:
+        if not -1 <= shock <= 0:
+            raise ValueError("shock 必须在 [-1,0]")
+        holding_mv = sum((c.get("shares") or 0) * spots.get(c["symbol"], 0) * (1 + shock) for c in cycles)
+        need, intrinsic, assigned_mv = 0., 0., 0.
+        positions = []
+        for leg in expand_open_option_rows(cycles):
+            sym = leg["symbol"]
+            px, k = spots.get(sym, 0) * (1 + shock), float(leg.get("open_strike") or 0)
+            units = float(leg.get("open_qty") or 0) * float(leg.get("open_contract_size") or 100)
+            if k <= 0 or units <= 0:
+                continue
+            put = leg["open_option_type"] == "PUT"
+            intrinsic += max(k-px if put else px-k,0)*units
+            if put and px < k:
+                need += k*units; assigned_mv += px*units
+                positions.append({"symbol":sym,"cycle_id":leg["id"],"strike":k,"spot_shocked":px,"assign_cost":k*units})
+        stressed = nav["cash"]+holding_mv-intrinsic
+        scenarios.append({"shock_pct":shock*100,"csp_itm_count":len(positions),
+            "assign_capital_needed":round(need,2),"assignment_cash_shortfall":round(max(0,need-nav["cash"]),2),
+            "post_assignment_cash":round(nav["cash"]-need,2),"holding_mtm":round(holding_mv,2),
+            "total_capital_if_assigned":round(holding_mv+assigned_mv,2),
+            "stressed_equity":round(stressed,2) if not missing else None,
+            "equity_loss":round(nav["equity"]-stressed,2) if not missing else None,
+            "itm_positions":positions})
+    return {"ok":not missing,"spots_used":spots,"missing_spots":missing,
+        "open_csp_count":sum(c["status"]=="CSP_OPEN" for c in cycles),"equity_ref":nav["equity"],
+        "scenarios":scenarios,"note":"同一价格冲击下的终端支付情景（期权按内在价值）；非到期前 IV/时间价值压力预测。现金缺口与权益损失分列。"}
 
 
 def headroom_ratio_for_symbol(symbol: str) -> Optional[float]:

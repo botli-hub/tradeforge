@@ -425,20 +425,16 @@ def build_today(
 
 
 def _is_executable_opp(p: Dict[str, Any], summary: Dict[str, Any]) -> bool:
-    if p.get("actionable") is False:
+    if p.get("actionable") is False or p.get("tradeable") is False:
+        return False
+    if p.get("risk_block") or p.get("blocked") or p.get("valuation_incomplete"):
         return False
     if summary.get("portfolio_put_blocked") and (p.get("side") or "").upper() == "PUT":
         return False
     if p.get("exceeds_capital"):
         return False
-    sp = p.get("spread_pct")
-    if sp is not None:
-        try:
-            if float(sp) > 8:
-                return False
-        except (TypeError, ValueError):
-            pass
-    return True
+    from app.core.wheel_quotes import executable_quote
+    return executable_quote(p, max_spread_pct=float(summary.get("max_spread_pct") or 8))
 
 
 def _headline(must, post_q, primary, capital, stale, iv_regime=None, capital_release=None, holding_cc_hot=None) -> str:

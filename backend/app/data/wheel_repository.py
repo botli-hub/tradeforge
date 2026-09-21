@@ -73,6 +73,25 @@ def get_target(symbol: str) -> Optional[Dict[str, Any]]:
 
 def upsert_target(data: Dict[str, Any]):
     now = _now_iso()
+    # Keep the persistence helper usable from migrations/tests and from callers
+    # that only know the symbol and floor.  The API model supplies the same
+    # defaults, but the repository must not rely on that boundary.
+    values = {
+        "symbol": str(data.get("symbol") or "").strip().upper(),
+        "name": data.get("name") or data.get("symbol") or "",
+        "market": data.get("market") or "US",
+        "floor_price": data.get("floor_price", 0),
+        "max_capital": data.get("max_capital", 0),
+        "delta_min": data.get("delta_min", 0.15),
+        "delta_max": data.get("delta_max", 0.30),
+        "dte_min": data.get("dte_min", 10),
+        "dte_max": data.get("dte_max", 55),
+        "min_annualized": data.get("min_annualized", 15.0),
+        "min_open_interest": data.get("min_open_interest", 100),
+        "enabled": 1 if data.get("enabled", True) else 0,
+    }
+    if not values["symbol"]:
+        raise WheelError("symbol 不能为空")
     conn = get_db()
     try:
         conn.execute(
@@ -91,7 +110,7 @@ def upsert_target(data: Dict[str, Any]):
                 min_open_interest = excluded.min_open_interest,
                 enabled = excluded.enabled, updated_at = excluded.updated_at
             """,
-            {**data, "now": now},
+            {**values, "now": now},
         )
         conn.commit()
     finally:
@@ -181,119 +200,17 @@ def _new_state() -> Dict[str, Any]:
 
 
 def _apply(s: Dict[str, Any], t: Dict[str, Any]):
-    """把一笔交易应用到状态上;非法则抛 WheelError"""
-    tt = t["trade_type"]
-    if tt not in TRADE_TYPES:
-        raise WheelError(f"未知交易类型: {tt}")
-    if s["status"] == "CLOSED":
-        raise WheelError("这个轮子已经结束结算,不能再登记交易;要开新一轮请用「+新开轮子」")
-
-    qty = t.get("qty") or 1
-    price = t.get("price") or 0
-    fee = t.get("fee") or 0
-    size = t.get("contract_size") or 100
-    strike = t.get("strike")
-    expiry = t.get("expiry")
-
-    def need(status: str):
-        if s["status"] != status:
-            raise WheelError(
-                f"当前轮子处于「{STATUS_LABELS_ZH.get(s['status'], s['status'])}」,"
-                f"不能登记「{TRADE_LABELS_ZH.get(tt, tt)}」"
-                f"——该操作需要轮子处于「{STATUS_LABELS_ZH.get(status, status)}」状态")
-
-    def clear_open():
-        s.update(open_contract_code=None, open_option_type=None, open_strike=None,
-                 open_expiry=None, open_qty=0.0, open_price=0.0)
-        s["open_cc_legs"] = []
-
-    if tt == "BUY_SHARES":
-        need("IDLE")
-        if not price or price <= 0:
-            raise WheelError("BUY_SHARES 需要 price(每股成本)")
-        if not qty or qty <= 0:
-            raise WheelError("BUY_SHARES 需要 qty(股数)")
-        s["shares"] = qty
-        s["share_cost"] = price
-        s["total_fees"] += fee
-        s["status"] = "HOLDING"
-
-    elif tt == "SELL_PUT":
-        need("IDLE")
-        if not strike or not expiry:
-            raise WheelError("SELL_PUT 需要 strike 和 expiry")
-        s["total_premium"] += qty * price * size - fee
-        s["total_fees"] += fee
-        s.update(status="CSP_OPEN", open_contract_code=t.get("contract_code"),
-                 open_option_type="PUT", open_strike=strike, open_expiry=expiry,
-                 open_qty=qty, open_price=price, open_contract_size=size)
-
-    elif tt == "BUY_PUT_CLOSE":
-        need("CSP_OPEN")
-        s["total_premium"] -= qty * price * (size or s["open_contract_size"])
-        s["total_fees"] += fee
-        clear_open()
-        s["status"] = "IDLE"
-
-    elif tt == "EXPIRE":
-        if s["status"] == "CSP_OPEN":
-            s["status"] = "IDLE"
-            clear_open()
-        elif s["status"] == "CC_OPEN":
-            try:
-                apply_cc_close(s, t, kind="expire")
-            except CcLegError as e:
-                raise WheelError(str(e)) from e
-        else:
-            raise WheelError("「到期作废」需要有在场合约(轮子处于「卖Put中」或「卖Call中」)")
-
-    elif tt == "ASSIGNED":
-        need("CSP_OPEN")
-        eff_strike = strike or s["open_strike"]
-        if not eff_strike:
-            raise WheelError("ASSIGNED 需要 strike(接货价)")
-        eff_qty = qty or s["open_qty"] or 1
-        eff_size = size or s["open_contract_size"] or 100
-        s["shares"] = eff_qty * eff_size
-        s["share_cost"] = eff_strike
-        s["total_fees"] += fee
-        clear_open()
-        s["status"] = "HOLDING"
-
-    elif tt == "SELL_CALL":
-        # HOLDING 或 CC_OPEN(仍有未覆盖股份)均可再挂不同 Call
-        try:
-            apply_sell_call(s, t)
-        except CcLegError as e:
-            raise WheelError(str(e)) from e
-
-    elif tt == "BUY_CALL_CLOSE":
-        try:
-            apply_cc_close(s, t, kind="close")
-        except CcLegError as e:
-            raise WheelError(str(e)) from e
-
-    elif tt == "CALLED_AWAY":
-        try:
-            apply_cc_close(s, t, kind="called_away")
-        except CcLegError as e:
-            raise WheelError(str(e)) from e
-
-    elif tt == "SELL_SHARES":
-        need("HOLDING")
-        if not price:
-            raise WheelError("SELL_SHARES 需要 price(每股卖出价)")
-        s["realized_pnl"] = round(
-            (price - s["share_cost"]) * s["shares"] + s["total_premium"] - fee, 4)
-        s["total_fees"] += fee
-        s["status"] = "CLOSED"
-        s["closed_at"] = t.get("traded_at")
+    from app.core.wheel_ledger import apply_trade, LedgerError
+    try:
+        return apply_trade(s, t)
+    except LedgerError as e:
+        raise WheelError(str(e)) from e
 
 
 def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
     """按时间顺序重放周期的全部交易,写回 cycle 行。无交易返回 None。"""
     rows = conn.execute(
-        "SELECT * FROM wheel_trades WHERE cycle_id = ? ORDER BY traded_at, created_at",
+        "SELECT * FROM wheel_trades WHERE cycle_id = ? ORDER BY traded_at, created_at, rowid",
         (cycle_id,),
     ).fetchall()
     trades = [dict(r) for r in rows]
@@ -302,7 +219,11 @@ def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
     s = _new_state()
     for i, t in enumerate(trades):
         try:
-            _apply(s, t)
+            canonical = _apply(s, t)
+            # Persist inferred close identity once; NAV reads these same facts.
+            if canonical and any(t.get(k) != canonical.get(k) for k in ("strike", "expiry", "contract_code")):
+                conn.execute("UPDATE wheel_trades SET strike=?,expiry=?,contract_code=? WHERE id=?",
+                    (canonical.get("strike"),canonical.get("expiry"),canonical.get("contract_code"),t["id"]))
         except WheelError as e:
             # 常见踩坑:平仓/行权的成交时间早于开仓腿 → 重放时状态还是空仓
             later_open = next(
@@ -326,11 +247,11 @@ def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
         """UPDATE wheel_cycles SET status=?, shares=?, share_cost=?, total_premium=?,
            total_fees=?, realized_pnl=?, open_contract_code=?, open_option_type=?,
            open_strike=?, open_expiry=?, open_qty=?, open_price=?, open_contract_size=?,
-           open_cc_legs=?, started_at=?, closed_at=?, updated_at=? WHERE id=?""",
+           open_cc_legs=?, accounting_json=?, started_at=?, closed_at=?, updated_at=? WHERE id=?""",
         (s["status"], s["shares"], s["share_cost"], round(s["total_premium"], 4),
          round(s["total_fees"], 4), s["realized_pnl"], s["open_contract_code"],
          s["open_option_type"], s["open_strike"], s["open_expiry"], s["open_qty"],
-         s["open_price"], s["open_contract_size"], legs_json, started_at, s["closed_at"],
+         s["open_price"], s["open_contract_size"], legs_json, _json.dumps({k: s.get(k, 0) for k in ("stock_realized", "option_realized", "cash_balance")}), started_at, s["closed_at"],
          _now_iso(), cycle_id),
     )
     return s
@@ -339,6 +260,16 @@ def _replay(conn, cycle_id: str) -> Optional[Dict[str, Any]]:
 # ── cycles 查询 ───────────────────────────────────────────────────────────────
 
 def _enrich_cycle(c: Dict[str, Any]) -> Dict[str, Any]:
+    import json
+    raw_accounting = c.get("accounting_json")
+    if raw_accounting:
+        try:
+            accounting = json.loads(raw_accounting) if isinstance(raw_accounting, str) else raw_accounting
+            if isinstance(accounting, dict):
+                c.update(accounting)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            c["reconciliation_required"] = True
+            c["reconciliation_error"] = "accounting_json 无法解析"
     raw_legs = c.get("open_cc_legs")
     if isinstance(raw_legs, str):
         c["open_cc_legs"] = parse_open_cc_legs_json(raw_legs)
@@ -352,7 +283,12 @@ def _enrich_cycle(c: Dict[str, Any]) -> Dict[str, Any]:
     share_cost = c.get("share_cost") or 0
     premium = c.get("total_premium") or 0
     c["cost_basis"] = round(share_cost - premium / shares, 4) if shares > 0 else None
-    if c.get("status") == "CC_OPEN":
+    if shares > 0 and "cash_balance" in c:
+        # Remove outstanding Put cash premium from stock recovery reference.
+        pending_put = (c.get("open_price") or 0) * (c.get("open_qty") or 0) * (c.get("open_contract_size") or 100) if c.get("open_option_type") == "PUT" else 0
+        c["cost_basis"] = round((-c["cash_balance"] + pending_put) / shares, 4)
+    c["cost_basis_kind"] = "cycle_cash_recovery_not_tax_basis"
+    if c.get("open_cc_legs") or c.get("status") == "CC_OPEN":
         c["open_cc_leg_count"] = len(cycle_open_cc_legs(c))
         c["uncovered_shares"] = uncovered_shares_of(c)
     else:
@@ -471,6 +407,66 @@ def get_trades(cycle_id: Optional[str] = None, symbol: Optional[str] = None,
 # ── 登记 / 修改 / 删除交易 ─────────────────────────────────────────────────────
 
 def record_trade(
+    symbol: str, trade_type: str, contract_code=None, strike=None, expiry=None,
+    qty=1, price=0, fee=0, contract_size=100, note=None, traded_at=None,
+    cycle_id=None, new_cycle=False, execution_id=None, mode="recorded",
+):
+    step = dict(symbol=symbol, trade_type=trade_type, contract_code=contract_code,
+        strike=strike, expiry=expiry, qty=qty, price=price, fee=fee,
+        contract_size=contract_size, note=note, traded_at=traded_at,
+        cycle_id=cycle_id, new_cycle=new_cycle)
+    return record_trades([step], execution_id=execution_id, mode=mode)["cycle"]
+
+
+def record_trades(steps, *, execution_id=None, mode="recorded", request_context=None):
+    """Atomic batch; same id+payload returns same receipt, changed payload conflicts.
+
+    Recorded fills are truth even when over limits. Planned trades fail closed.
+    """
+    import hashlib
+    import json
+    if not steps or mode not in ("recorded", "planned"):
+        raise WheelError("无效交易批次或 mode")
+    digest_payload = {"mode": mode, "request": request_context or {"steps": steps}}
+    digest = hashlib.sha256(json.dumps(digest_payload, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if execution_id:
+            old = conn.execute("SELECT request_hash, result_json FROM wheel_executions WHERE id=?", (execution_id,)).fetchone()
+            if old:
+                if old["request_hash"] != digest:
+                    raise WheelError("execution_id 已用于不同内容,请核对成交")
+                return json.loads(old["result_json"])
+        cycle = None
+        allowed = {"symbol", "trade_type", "contract_code", "strike", "expiry", "qty", "price", "fee", "contract_size", "note", "traded_at", "cycle_id", "new_cycle"}
+        for raw in steps:
+            step = {k: v for k, v in raw.items() if k in allowed}
+            cycle = _record_trade(conn, **step)
+            if raw.get("entry_score") is not None:
+                conn.execute("UPDATE wheel_cycles SET entry_score=? WHERE id=?", (float(raw["entry_score"]), cycle["id"]))
+        from app.core.wheel_risk import check_books
+        risk = check_books(conn)
+        adds_risk = any(x.get("trade_type") in ("SELL_PUT", "SELL_CALL", "BUY_SHARES") for x in steps)
+        if mode == "planned" and adds_risk and not risk["ok"]:
+            raise WheelError("交易后风控未通过: " + "; ".join(risk["violations"]))
+        result = {"ok": True, "cycle": cycle, "applied_steps": len(steps), "risk": risk, "execution_id": execution_id}
+        if cycle:
+            cycle["risk_alerts"] = risk["violations"]
+        result.update(request_context or {})
+        if execution_id:
+            conn.execute("INSERT INTO wheel_executions(id,request_hash,result_json,created_at) VALUES(?,?,?,?)", (execution_id,digest,json.dumps(result,ensure_ascii=False),_now_iso()))
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _record_trade(
+    conn,
     symbol: str,
     trade_type: str,
     contract_code: Optional[str] = None,
@@ -485,67 +481,75 @@ def record_trade(
     cycle_id: Optional[str] = None,
     new_cycle: bool = False,
 ) -> Dict[str, Any]:
-    """登记一笔交易。cycle_id 指定操作哪个轮子;
-    SELL_PUT/BUY_SHARES + new_cycle=True 强制新开一个并行轮子。返回重放后的 cycle。"""
     if trade_type not in TRADE_TYPES:
         raise WheelError(f"未知交易类型: {trade_type}")
     symbol = symbol.strip().upper()
     traded_at = traded_at or _now_iso()
     now = _now_iso()
 
-    conn = get_db()
-    try:
-        # ── 定位/创建 cycle ────────────────────────────────────────────────
-        if cycle_id:
-            row = conn.execute("SELECT * FROM wheel_cycles WHERE id = ?", (cycle_id,)).fetchone()
-            if row is None:
-                raise WheelError("指定的周期不存在")
-            if row["symbol"] != symbol:
-                raise WheelError(f"周期属于 {row['symbol']},不是 {symbol}")
-        else:
-            actives = conn.execute(
-                "SELECT * FROM wheel_cycles WHERE symbol = ? AND status != 'CLOSED' ORDER BY started_at",
-                (symbol,),
-            ).fetchall()
-            if trade_type in ("SELL_PUT", "BUY_SHARES"):
-                idle = [r for r in actives if r["status"] == "IDLE"]
-                if new_cycle or not idle:
-                    cycle_id = str(uuid.uuid4())
-                    conn.execute(
-                        "INSERT INTO wheel_cycles (id, symbol, status, started_at, updated_at) VALUES (?, ?, 'IDLE', ?, ?)",
-                        (cycle_id, symbol, traded_at, now),
-                    )
-                else:
-                    cycle_id = idle[0]["id"]
-            else:
-                if len(actives) == 0:
-                    raise WheelError(f"{trade_type} 需要已有进行中的轮子")
-                if len(actives) > 1:
-                    raise WheelError("该标的有多个进行中的轮子,请指定 cycle_id")
-                cycle_id = actives[0]["id"]
-
-        # ── 插入交易并重放 ─────────────────────────────────────────────────
-        trade_id = str(uuid.uuid4())
-        conn.execute(
-            """INSERT INTO wheel_trades
-               (id, cycle_id, symbol, trade_type, contract_code, strike, expiry, qty, price, fee,
-                contract_size, note, traded_at, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (trade_id, cycle_id, symbol, trade_type, contract_code, strike, expiry,
-             qty, price, fee, contract_size, note, traded_at, now),
-        )
-        try:
-            _replay(conn, cycle_id)
-        except WheelError:
-            conn.rollback()
-            raise
-        conn.commit()
-
+    # ── 定位/创建 cycle ────────────────────────────────────────────────
+    if cycle_id:
         row = conn.execute("SELECT * FROM wheel_cycles WHERE id = ?", (cycle_id,)).fetchone()
-        return _enrich_cycle(dict(row))
-    finally:
-        conn.close()
+        if row is None:
+            raise WheelError("指定的周期不存在")
+        if row["symbol"] != symbol:
+            raise WheelError(f"周期属于 {row['symbol']},不是 {symbol}")
+    else:
+        actives = conn.execute(
+            "SELECT * FROM wheel_cycles WHERE symbol = ? AND status != 'CLOSED' ORDER BY started_at",
+            (symbol,),
+        ).fetchall()
+        if trade_type in ("SELL_PUT", "BUY_SHARES"):
+            idle = [r for r in actives if r["status"] == "IDLE"]
+            if new_cycle or not idle:
+                cycle_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO wheel_cycles (id, symbol, status, started_at, updated_at) VALUES (?, ?, 'IDLE', ?, ?)",
+                    (cycle_id, symbol, traded_at, now),
+                )
+            else:
+                cycle_id = idle[0]["id"]
+        else:
+            if len(actives) == 0:
+                raise WheelError(f"{trade_type} 需要已有进行中的轮子")
+            if len(actives) > 1:
+                raise WheelError("该标的有多个进行中的轮子,请指定 cycle_id")
+            cycle_id = actives[0]["id"]
 
+    from app.core.wheel_ledger import validate_trade, LedgerError
+    try:
+        canonical = validate_trade(dict(trade_type=trade_type, contract_code=contract_code,
+            strike=strike, expiry=expiry, qty=qty, price=price, fee=fee, contract_size=contract_size))
+    except LedgerError as e:
+        raise WheelError(str(e)) from e
+    # Resolve omitted close fields from the actual opening leg.
+    if trade_type not in ("SELL_PUT", "SELL_CALL", "BUY_SHARES"):
+        prior = conn.execute("SELECT * FROM wheel_trades WHERE cycle_id=? AND traded_at<=? ORDER BY traded_at, created_at, rowid", (cycle_id, traded_at)).fetchall()
+        state = _new_state()
+        for prev in prior:
+            _apply(state, dict(prev))
+        canonical = _apply(state, canonical)
+    contract_code, strike, expiry, qty, price, fee, contract_size = (
+        canonical.get(k) for k in ("contract_code", "strike", "expiry", "qty", "price", "fee", "contract_size"))
+
+    # ── 插入交易并重放 ─────────────────────────────────────────────────
+    trade_id = str(uuid.uuid4())
+    conn.execute(
+        """INSERT INTO wheel_trades
+           (id, cycle_id, symbol, trade_type, contract_code, strike, expiry, qty, price, fee,
+            contract_size, note, traded_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (trade_id, cycle_id, symbol, trade_type, contract_code, strike, expiry,
+         qty, price, fee, contract_size, note, traded_at, now),
+    )
+    try:
+        _replay(conn, cycle_id)
+    except WheelError:
+        conn.rollback()
+        raise
+
+    row = conn.execute("SELECT * FROM wheel_cycles WHERE id = ?", (cycle_id,)).fetchone()
+    return _enrich_cycle(dict(row))
 
 def update_trade(trade_id: str, **kwargs) -> Dict[str, Any]:
     """修改交易腿并重放所属周期;重放非法则整体回滚"""

@@ -144,7 +144,7 @@ export default function ManageDecisionModal({
       : !isCall && prefer === 'close' && !underwater
         ? '权利金目标已达成,买回可释放担保金周转。'
         : (mc.action_hint || (booksChoice ? '对照两本账后三选一,无默认推荐' : '按规则建议操作')))
-  const conf = mc.decision_confidence
+  const conf = mc.rule_match_score
   const doPrimary = () => {
     // 一键执行(非 Roll 需候选时走原路径)
     if (onQuickExecute && prefer !== 'roll') {
@@ -251,7 +251,7 @@ export default function ManageDecisionModal({
             {conf != null && (
               <span style={{ fontSize: 11, fontWeight: 600, marginLeft: 8, opacity: 0.85 }}
                 title="规则把握度,非胜率预测">
-                把握 {conf}%
+                规则匹配 {conf}/100（非胜率）
               </span>
             )}
           </div>

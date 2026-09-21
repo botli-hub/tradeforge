@@ -572,13 +572,13 @@ export default function WheelOptimizePanel() {
 
       {/* 回测 */}
       <div style={card}>
-        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>Wheel 规则回测(合成权利金近似)</div>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 14 }}>Wheel 情景模拟（HV 定价，未验证策略优势）</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
           <input value={btSymbol} onChange={e => setBtSymbol(e.target.value)}
             style={{ width: 100, padding: '4px 8px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text)' }}
             placeholder="AAPL" />
           <button className="btn" style={{ fontSize: 13 }} onClick={runBt} disabled={btLoading}>
-            {btLoading ? '回测中…' : '运行回测'}
+            {btLoading ? '回测中…' : '运行情景模拟'}
           </button>
         </div>
         {btResult && (
