@@ -18,11 +18,14 @@ from app.services.status_digest import (  # noqa: E402
     digest_clock,
     digest_zoneinfo,
     fetch_premium_totals,
+    format_opend_status_line,
     format_position_line,
     format_premium_totals_lines,
     format_sim_line,
     format_touch_line,
     get_status_digest_cfg,
+    probe_opend_status,
+    resolve_opend_endpoint,
     run_status_digest,
     _should_run_daily,
 )
@@ -266,9 +269,11 @@ def test_run_force_dry_run_no_send():
 
     import app.services.status_digest as sd
     orig = sd.collect_status_rows
+    orig_probe = sd.probe_opend_status
     sd.collect_status_rows = lambda cfg=None, **kw: {  # type: ignore
         "positions": [], "touches": [], "sim": []
     }
+    sd.probe_opend_status = lambda cfg=None, **kw: (True, "127.0.0.1", 11111)  # type: ignore
     try:
         out = run_status_digest(
             {"status_digest": {"enabled": False}},
@@ -278,11 +283,14 @@ def test_run_force_dry_run_no_send():
         )
     finally:
         sd.collect_status_rows = orig  # type: ignore
+        sd.probe_opend_status = orig_probe  # type: ignore
 
     assert out["ok"] is True
     assert out["reason"] == "dry_run"
     assert sent == []
     assert "状态摘要" in (out.get("preview") or "")
+    assert "OpenD ✅ 127.0.0.1:11111" in (out.get("preview") or "")
+    assert out.get("opend_ok") is True
 
 
 def test_run_force_sends_via_injected():
@@ -300,7 +308,9 @@ def test_run_force_sends_via_injected():
         return {"positions": [], "touches": [], "sim": []}
 
     orig = sd.collect_status_rows
+    orig_probe = sd.probe_opend_status
     sd.collect_status_rows = fake_collect  # type: ignore
+    sd.probe_opend_status = lambda cfg=None, **kw: (False, "127.0.0.1", 11111)  # type: ignore
     try:
         out = run_status_digest(
             {"status_digest": {"enabled": False}, "telegram": {}},
@@ -310,10 +320,13 @@ def test_run_force_sends_via_injected():
         )
     finally:
         sd.collect_status_rows = orig  # type: ignore
+        sd.probe_opend_status = orig_probe  # type: ignore
 
     assert out["sent_count"] == 1
     assert len(sent) == 1
     assert "暂无" in sent[0]
+    assert "OpenD ❌ 未连接(127.0.0.1:11111)" in sent[0]
+    assert out.get("opend_ok") is False
 
 
 def test_should_run_daily_hour():
@@ -430,6 +443,7 @@ def test_run_force_dry_run_includes_premium_lines():
 
     orig_collect = sd.collect_status_rows
     orig_fetch = sd.fetch_premium_totals
+    orig_probe = sd.probe_opend_status
     sd.collect_status_rows = lambda cfg=None, **kw: {  # type: ignore
         "positions": [], "touches": [], "sim": []
     }
@@ -437,6 +451,7 @@ def test_run_force_dry_run_includes_premium_lines():
         "premium_month": 12.0,
         "premium_total": 3400.5,
     }
+    sd.probe_opend_status = lambda cfg=None, **kw: (True, "10.0.0.2", 11111)  # type: ignore
     try:
         out = run_status_digest(
             {"status_digest": {"enabled": False}},
@@ -447,12 +462,15 @@ def test_run_force_dry_run_includes_premium_lines():
     finally:
         sd.collect_status_rows = orig_collect  # type: ignore
         sd.fetch_premium_totals = orig_fetch  # type: ignore
+        sd.probe_opend_status = orig_probe  # type: ignore
 
     preview = out.get("preview") or ""
     assert out["ok"] is True
     assert "本月权利金 $12.00" in preview
     assert "累计权利金 $3,400.50" in preview
+    assert "OpenD ✅ 10.0.0.2:11111" in preview
     assert out.get("premium") == {"premium_month": 12.0, "premium_total": 3400.5}
+    assert out.get("opend_ok") is True
 
 
 def test_collect_touches_filtered_to_enabled_targets():
@@ -592,3 +610,100 @@ def test_schedule_fires_at_0930_et_not_0800_shanghai():
     finally:
         if orig is not None:
             wrepo.get_kv = orig  # type: ignore
+
+def test_format_opend_status_line_ok_and_down():
+    assert format_opend_status_line(True, "127.0.0.1", 11111) == "OpenD ✅ 127.0.0.1:11111"
+    assert format_opend_status_line(False, "127.0.0.1", 11111) == "OpenD ❌ 未连接(127.0.0.1:11111)"
+    assert format_opend_status_line(False, "10.0.0.1", 22222) == "OpenD ❌ 未连接(10.0.0.1:22222)"
+
+
+def test_resolve_opend_endpoint_defaults_and_cfg():
+    assert resolve_opend_endpoint({}) == ("127.0.0.1", 11111)
+    assert resolve_opend_endpoint(None) == ("127.0.0.1", 11111)
+    assert resolve_opend_endpoint({"futu": {"host": "10.1.2.3", "port": 22222}}) == (
+        "10.1.2.3",
+        22222,
+    )
+
+
+def test_build_opend_line_under_title_alive_true():
+    text = build_status_digest_text(
+        {"positions": [], "touches": [], "sim": []},
+        now=datetime(2026, 9, 22, 8, 0, tzinfo=SH),
+        opend_ok=True,
+        opend_host="127.0.0.1",
+        opend_port=11111,
+    )
+    lines = text.splitlines()
+    assert lines[0].startswith("📊 TradeForge 状态摘要")
+    assert lines[1] == "OpenD ✅ 127.0.0.1:11111"
+    assert "本月权利金" in text
+    header_i = text.index("状态摘要")
+    opend_i = text.index("OpenD ✅")
+    month_i = text.index("本月权利金")
+    assert header_i < opend_i < month_i
+
+
+def test_build_opend_line_under_title_alive_false():
+    text = build_status_digest_text(
+        {"positions": [], "touches": [], "sim": []},
+        now=datetime(2026, 9, 22, 8, 0, tzinfo=SH),
+        opend_ok=False,
+        opend_host="127.0.0.1",
+        opend_port=11111,
+    )
+    assert "OpenD ❌ 未连接(127.0.0.1:11111)" in text
+    assert "OpenD ✅" not in text
+
+
+def test_probe_opend_status_uses_alive_fn_no_quotecontext(monkeypatch):
+    """探测只走 TCP alive_fn;不得拉 QuoteContext / open_quote_context。"""
+    calls = {"n": 0}
+
+    def fake_alive(host, port, timeout=0.4):
+        calls["n"] += 1
+        assert host == "192.168.1.9"
+        assert port == 33333
+        return False
+
+    import app.core.opend as opend
+
+    def boom_open(*a, **k):
+        raise AssertionError("must not open QuoteContext for digest probe")
+
+    monkeypatch.setattr(opend, "open_quote_context", boom_open)
+    ok, host, port = probe_opend_status(
+        {"futu": {"host": "192.168.1.9", "port": 33333}},
+        alive_fn=fake_alive,
+    )
+    assert ok is False and host == "192.168.1.9" and port == 33333
+    assert calls["n"] == 1
+
+
+def test_run_status_digest_opend_ok_false_in_preview(monkeypatch):
+    import app.services.status_digest as sd
+
+    monkeypatch.setattr(
+        sd,
+        "collect_status_rows",
+        lambda cfg=None, **kw: {"positions": [], "touches": [], "sim": []},
+    )
+    monkeypatch.setattr(
+        sd,
+        "fetch_premium_totals",
+        lambda get_stats_fn=None: {"premium_month": 0.0, "premium_total": 0.0},
+    )
+    monkeypatch.setattr(
+        sd,
+        "probe_opend_status",
+        lambda cfg=None, **kw: (False, "127.0.0.1", 11111),
+    )
+    out = run_status_digest(
+        {"status_digest": {"enabled": False}, "futu": {"host": "127.0.0.1", "port": 11111}},
+        force=True,
+        dry_run=True,
+        send_fn=lambda body, **kwargs: {"ok": True, "sent": False},
+    )
+    assert out["opend_ok"] is False
+    assert "OpenD ❌ 未连接(127.0.0.1:11111)" in (out.get("preview") or "")
+

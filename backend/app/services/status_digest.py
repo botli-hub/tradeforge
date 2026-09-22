@@ -210,6 +210,49 @@ def fetch_premium_totals(
         return {"premium_month": 0.0, "premium_total": 0.0}
 
 
+def resolve_opend_endpoint(cfg: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
+    """从 cfg.futu 取 OpenD host/port;缺省 127.0.0.1:11111。"""
+    futu = (cfg or {}).get("futu") or {}
+    if not isinstance(futu, dict):
+        futu = {}
+    host = str(futu.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        port = int(futu.get("port") if futu.get("port") is not None else 11111)
+    except (TypeError, ValueError):
+        port = 11111
+    return host, port
+
+
+def format_opend_status_line(
+    ok: bool,
+    host: str = "127.0.0.1",
+    port: int = 11111,
+) -> str:
+    """状态摘要标题下的 OpenD 一行。"""
+    endpoint = f"{host}:{int(port)}"
+    if ok:
+        return f"OpenD ✅ {endpoint}"
+    return f"OpenD ❌ 未连接({endpoint})"
+
+
+def probe_opend_status(
+    cfg: Optional[Dict[str, Any]] = None,
+    *,
+    alive_fn: Optional[Callable[..., bool]] = None,
+) -> Tuple[bool, str, int]:
+    """TCP 探测 OpenD;返回 (ok, host, port)。不打开 QuoteContext。"""
+    host, port = resolve_opend_endpoint(cfg)
+    if alive_fn is None:
+        from app.core.opend import is_opend_alive
+        alive_fn = is_opend_alive
+    try:
+        ok = bool(alive_fn(host, port))
+    except Exception as e:
+        logger.warning("status digest OpenD probe failed: %s", e)
+        ok = False
+    return ok, host, port
+
+
 def format_position_line(title: str, fields: Dict[str, Any]) -> str:
     fields = enrich_position_fields(fields)
     symbol = fields.get("symbol") or "?"
@@ -270,15 +313,23 @@ def build_status_digest_text(
     touch_limit: int = 10,
     premium_month: Optional[float] = None,
     premium_total: Optional[float] = None,
+    opend_ok: Optional[bool] = None,
+    opend_host: str = "127.0.0.1",
+    opend_port: int = 11111,
 ) -> str:
     """组装完整摘要文本(可能超过 4096;调用方再 chunk)。
 
     premium_month / premium_total: 实盘台账净权利金(与 get_stats 同口径);
     未传入时按 $0.00 展示,保证摘要结构稳定。
+
+    opend_ok: 若传入则在标题下插入 OpenD 状态行;None 时不插行(单测格式兼容)。
     """
     now = now or datetime.now(SHANGHAI)
     ts = now.strftime("%Y-%m-%d %H:%M CST")
-    lines: List[str] = [f"📊 TradeForge 状态摘要 · {ts}", ""]
+    lines: List[str] = [f"📊 TradeForge 状态摘要 · {ts}"]
+    if opend_ok is not None:
+        lines.append(format_opend_status_line(bool(opend_ok), opend_host, opend_port))
+    lines.append("")
     lines.extend(format_premium_totals_lines(premium_month, premium_total))
     lines.append("")
 
@@ -432,6 +483,7 @@ def run_status_digest(
         "chunks": 0,
         "preview": "",
         "messages": [],
+        "opend_ok": False,
     }
     try:
         if cfg is None:
@@ -451,11 +503,16 @@ def run_status_digest(
         rows = collect_status_rows(cfg)
         touch_limit = int(sd.get("touch_limit") or 10)
         premiums = fetch_premium_totals()
+        opend_ok, opend_host, opend_port = probe_opend_status(cfg)
+        out["opend_ok"] = opend_ok
         text = build_status_digest_text(
             rows,
             touch_limit=touch_limit,
             premium_month=premiums["premium_month"],
             premium_total=premiums["premium_total"],
+            opend_ok=opend_ok,
+            opend_host=opend_host,
+            opend_port=opend_port,
         )
         chunks = chunk_telegram_text(text)
         out["preview"] = chunks[0] if chunks else text
