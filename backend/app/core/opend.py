@@ -27,6 +27,23 @@ class OpenDUnavailable(RuntimeError):
     """OpenD 不可达或未启动"""
 
 
+# 状态摘要 / Roll 预检等轻量探测默认更短,失败快速返回
+OPEND_ALIVE_TIMEOUT = 0.4
+
+
+def is_opend_alive(
+    host: str = "127.0.0.1",
+    port: int = 11111,
+    timeout: float = OPEND_ALIVE_TIMEOUT,
+) -> bool:
+    """TCP 探测 OpenD 是否可达;不通返回 False,不抛异常、不创建 QuoteContext。"""
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def ensure_opend_reachable(
     host: str = "127.0.0.1",
     port: int = 11111,

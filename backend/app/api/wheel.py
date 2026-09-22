@@ -1209,15 +1209,9 @@ def roll_options(
     if code and "." not in code:
         code = f"US.{code}"
 
-    def _opend_alive(h: str, p: int, timeout: float = 0.4) -> bool:
-        import socket
-        try:
-            with socket.create_connection((h, int(p)), timeout=timeout):
-                return True
-        except OSError:
-            return False
+    from app.core.opend import is_opend_alive
 
-    opend_ok = _opend_alive(host, port)
+    opend_ok = is_opend_alive(host, port)
     if not opend_ok:
         warnings.append(
             f"OpenD 未连接({host}:{port})：无法拉期权链，仍给出决策建议；启动 OpenD 后点刷新可看 Roll 候选"
@@ -2301,6 +2295,7 @@ def push_status_digest(
         "skipped": out.get("skipped"),
         "reason": out.get("reason"),
         "counts": out.get("counts"),
+        "opend_ok": out.get("opend_ok"),
         "preview": out.get("preview"),
         "ok": out.get("ok"),
         "message": (

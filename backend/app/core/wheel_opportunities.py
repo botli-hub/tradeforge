@@ -327,13 +327,7 @@ def build_opportunities(
     else:
         score_threshold = 0.0  # 稍后用池内分布填充
 
-    def _opend_alive(h: str, p: int, timeout: float = 0.4) -> bool:
-        import socket
-        try:
-            with socket.create_connection((h, int(p)), timeout=timeout):
-                return True
-        except OSError:
-            return False
+    from app.core.opend import is_opend_alive
 
     pool_meta: Dict[str, Any] = {"scanned_at": None, "from_cache": False, "error": None}
     pool_opps: List[Dict[str, Any]] = []
@@ -349,7 +343,7 @@ def build_opportunities(
             "skipped": last.get("skipped") or [],
         }
     elif run_pool_if_empty or refresh_pool:
-        if not _opend_alive(host, port):
+        if not is_opend_alive(host, port):
             pool_meta["error"] = f"OpenD 未连接({host}:{port}),跳过全池扫描;仍合流触线时机"
             if last:
                 pool_opps = list(last.get("opportunities") or [])
