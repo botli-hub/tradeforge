@@ -661,6 +661,8 @@ def build_opportunities(
     from app.core.wheel_nav import compute_account_nav
     from app.data import wheel_repository as book_repo
     risk_nav = compute_account_nav(float((cfg.get("wheel_portfolio") or {}).get("total_equity") or 0))
+    from app.data.wheel_research_repository import observe_nav
+    risk_nav["drawdown"] = observe_nav(risk_nav)
     risk_targets = book_repo.get_targets()
     for item in merged.values():
         quote = pool_by_code.get(_norm_code(item.get("contract_code"))) or {}
@@ -676,6 +678,17 @@ def build_opportunities(
             item["grade"] = "blocked"
             item.setdefault("flags", []).extend(item["post_trade_risk"]["violations"])
         item["signal_evidence"] = "unvalidated_timing_hypothesis"
+        from app.core.wheel_research_analytics import evidence
+        item["evidence"] = evidence(item)
+    from app.data.wheel_research_repository import append_event
+    decision_event_id = append_event("opportunity_decision", {
+        "candidates": list(merged.values()),
+        "risk_config": cfg.get("wheel_risk_budget", {}),
+        "portfolio_config": cfg.get("wheel_portfolio", {}),
+        "nav": risk_nav,
+    })
+    for item in merged.values():
+        item["research_event_id"] = decision_event_id
     items = [_fill_from_code(x) for x in merged.values()]
     for x in items:
         attach_trade_tier(x)

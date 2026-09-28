@@ -87,7 +87,7 @@ def _bars(rows):
     return result
 
 
-def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period=50):
+def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period=50, signal_mode="legacy_upcross", entry_policy=None):
     p = BTParams(**{k:v for k,v in (params or {}).items() if k in BTParams.__dataclass_fields__})
     p.validate()
     bars = _bars(rows)
@@ -96,10 +96,12 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
     if p.skip_earnings:
         return {"ok": False, "error": "缺少历史财报日数据,不能宣称已过滤财报"}
     historical = quotes is not None
+    if ema_period not in (50, 200):
+        raise ValueError("EMA 周期仅支持 50/200")
     if timing_only and not historical:
         return {"ok": False, "error": "触线研究需要历史合约报价"}
     chain_by_day, touch_by_day = {}, {}
-    histories = {}
+    histories, identities = {}, {}
     for q in sorted(quotes or [], key=lambda x: str(x["date"])):
         day = date.fromisoformat(str(q["date"])[:10])
         side = str(q["side"]).upper()
@@ -109,6 +111,12 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
         if side not in ("PUT", "CALL") or not all(math.isfinite(v) for v in (bid, ask, strike, delta)) or bid < 0 or ask < bid or strike <= 0 or not 0 <= delta <= 1:
             raise ValueError("历史期权报价无效")
         code = str(q["contract_code"])
+        if not code.strip():
+            raise ValueError("合约代码不能为空")
+        identity = (side, strike, expiry)
+        if code in identities and identities[code] != identity:
+            raise ValueError(f"合约 {code} 的方向、执行价或到期日不一致")
+        identities[code] = identity
         if any(x["contract_code"] == code for x in chain_by_day.get(day, [])):
             raise ValueError("每合约每日只接受一个收盘快照")
         row = dict(q, side=side, bid=bid, ask=ask, strike=strike, expiry=expiry, delta=delta, contract_code=code)
@@ -122,7 +130,13 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
                 ema += 2 / (ema_period + 1) * (value - ema)
             if h[-1] < ema <= mid:
                 touch_by_day.setdefault(day, set()).add(code)
-        h.append(mid)
+        h.append(float(q.get("close", mid)))
+        if signal_mode == "ema_touch_v1":
+            from app.core.wheel_signal import daily_touch
+            # Missing OHLC is explicitly a quote-mid proxy, never invented OHLC.
+            touch_by_day.setdefault(day, set()).discard(code)
+            if daily_touch(h, q.get("high", mid), bid, ema_period):
+                touch_by_day.setdefault(day, set()).add(code)
     cash, shares, cost = p.initial_capital, 0, 0.0
     leg = None
     curve, trades = [], []
@@ -133,9 +147,13 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
     assigned_at = None
     recovery_days = []
     idle_days = 0
-    previous_day = None
+    previous_day = bars[p.warmup_bars - 1]["date"]
+    signal_count = sum(len(touch_by_day.get(b["date"], ())) for b in bars[p.warmup_bars-1:-1])
     def book(day, kind, flow, **details):
-        trades.append({"date": day.isoformat(), "type": kind, "cashflow": round(flow, 8), **details})
+        identity = {k: leg[k] for k in ("contract_code", "side", "strike") if leg and k in leg}
+        trades.append({"date": day.isoformat(), "type": kind, "cashflow": round(flow, 8),
+                       "contracts": p.contracts, "contract_size": p.contract_size,
+                       **identity, **details})
     for i in range(p.warmup_bars, len(bars)):
         day, spot = bars[i]["date"], bars[i]["close"]
         sigma = _hv_from_closes([x["close"] for x in bars[:i+1]])
@@ -185,13 +203,21 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
             chosen = None
             if historical:
                 valid = [q for q in day_chain if q["side"] == side and q["bid"] > 0 and q["expiry"] > day
-                         and q["expiry"] in {x["date"] for x in bars[i+1:]}
                          and abs((q["expiry"]-day).days-p.dte) <= 7
                          and abs(q["delta"]-p.delta) <= .05
                          and (side != "PUT" or q["strike"] <= spot*p.floor_pct)
                          and (side != "CALL" or q["strike"] >= cost)]
+                if entry_policy is not None:
+                    previous_quotes = {q["contract_code"]: q for q in chain_by_day.get(previous_day, [])}
+                    valid = [q for q in valid if q["contract_code"] in previous_quotes
+                             and entry_policy(previous_day, previous_quotes[q["contract_code"]])]
                 if timing_only:
                     valid = [q for q in valid if q["contract_code"] in touch_by_day.get(previous_day, set())]
+                # Rank only executable candidates; an unaffordable or low-yield
+                # nearest-delta quote must not hide another eligible contract.
+                valid = [q for q in valid
+                         if (q["bid"] * qty - fee) / (q["strike"] * qty) * 365 / (q["expiry"] - day).days * 100 >= p.min_annualized
+                         and (cash >= q["strike"] * qty + fee if side == "PUT" else shares >= qty and cash >= fee)]
                 if valid:
                     chosen = min(valid, key=lambda q: (abs(q["delta"]-p.delta), q["contract_code"]))
                     chosen = dict(chosen, premium=chosen["bid"])
@@ -212,7 +238,8 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
                 if funded and ann >= p.min_annualized:
                     flow = prem*qty-fee
                     cash += flow; premium_net += flow; leg = chosen
-                    book(day,"SELL_"+side,flow,strike=strike,premium=prem,expiry=chosen["expiry"].isoformat())
+                    book(day,"SELL_"+side,flow,strike=strike,premium=prem,expiry=chosen["expiry"].isoformat(),
+                         signal_date=previous_day.isoformat() if timing_only else None)
         liability = mark(leg)*qty if leg else 0
         curve.append({"date":day.isoformat(),"equity":cash+shares*spot-liability,
                       "cash":cash,"stock_mv":shares*spot,"option_liability":liability})
@@ -243,6 +270,10 @@ def run_on_bars(rows, params=None, *, quotes=None, timing_only=False, ema_period
         "unrecovered_assignment":assigned_at is not None,
         "evidence_level":"historical_daily_quotes" if historical else "synthetic_scenario",
         "validated_edge":False,"timing_only":timing_only,
+        "signal_count":signal_count if historical else 0,
+        "opened_trade_count":sum(t["type"] in ("SELL_PUT", "SELL_CALL") for t in trades),
+        "ema_period":ema_period if historical else None,
+        "signal_definition":signal_mode if historical else None,
         "note":"含期权负债、费用、滑点/买卖价差；无提前行权/分红/税费。历史对照仅日线 EMA，不能外推 1h 触线。" if historical else "HV 欧式定价情景模拟，含完整盯市；非历史期权回测，不用于证明策略优势或最优参数。"}
 
 
@@ -274,11 +305,13 @@ def compare_timing(rows, quotes, params=None, ema_period=50):
     if ema_period not in (50,200):
         return {"ok":False,"error":"EMA 周期仅支持 50/200"}
     try:
-        base=run_on_bars(rows,params,quotes=quotes)
-        timing=run_on_bars(rows,params,quotes=quotes,timing_only=True,ema_period=ema_period)
+        base=run_on_bars(rows,params,quotes=quotes,signal_mode="ema_touch_v1")
+        timing=run_on_bars(rows,params,quotes=quotes,timing_only=True,ema_period=ema_period,signal_mode="ema_touch_v1")
     except (ValueError,TypeError,KeyError) as e:
         return {"ok":False,"error":str(e),"validated_edge":False}
     valid=bool(base.get("ok") and timing.get("ok"))
     return {"ok":valid,"baseline":base,"timing":timing,"validated_edge":False,
+        "error":(base.get("error") or timing.get("error")) if not valid else None,
+        "warnings":(["触线样本中没有开仓；收益差不能用于判断触线策略优劣。"] if valid and not timing["opened_trade_count"] else []),
         "total_return_difference_pp":round(timing["total_return_pct"]-base["total_return_pct"],4) if valid else None,
         "assumptions":"同样本/参数/资金/费用；收盘信号最早下一日执行。日线 EMA 对照不验证 1h 策略，须另做样本外检验。"}

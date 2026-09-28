@@ -43,7 +43,11 @@ def test_draft_open_put():
     assert d["steps"][0]["qty"] == 2
 
 
-def test_post_assign_cost_basis():
+def test_post_assign_cost_basis(tmp_path, monkeypatch):
+    from app.data import database as db, leaps_repository
+    monkeypatch.setattr(db, 'DB_PATH', tmp_path / 'post-assign.db')
+    db.init_db()
+    monkeypatch.setattr(leaps_repository, 'get_latest_call_touch', lambda *a, **k: None)
     cycle = {
         "id": "c1", "symbol": "ARM", "status": "HOLDING",
         "shares": 100, "share_cost": 95, "total_premium": 200,
@@ -53,7 +57,8 @@ def test_post_assign_cost_basis():
     assert abs(cb - (95 - 2.0)) < 0.01  # 200/100=2
     hint = post_assign_hint(cycle)
     assert hint["cc_contracts"] == 1
-    assert hint["next_step"] == "SELL_CALL"
+    # Assignment establishes shares; a fresh touch is still required for CC.
+    assert hint["next_step"] == "WAIT_CC_TIMING"
 
 
 def test_position_scenario():

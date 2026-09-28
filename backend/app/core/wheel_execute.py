@@ -318,5 +318,7 @@ def register_roll_draft(body):
         fee=body.get("fee_open", 0), note="Roll 开仓腿")
     if side == "PUT" and (close["qty"] < leg["open_qty"] or c.get("shares", 0) > 0):
         opening.update(cycle_id=None, new_cycle=True)
+    from app.core.wheel_research_analytics import roll_review
+    analysis = roll_review(leg.get("open_price"), close, opening)
     return repo.record_trades([close, opening], execution_id=execution_id,
-        mode=body.get("mode", "recorded"), request_context={"roll_request": request})
+        mode=body.get("mode", "recorded"), request_context={"roll_request": request, "roll_analysis": analysis})

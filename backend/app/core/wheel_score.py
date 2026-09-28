@@ -1,6 +1,6 @@
 """Wheel 合约综合打分
 
-score = annualized(现金担保口径, 默认 mid 计)
+score = annualized(现金担保口径, 默认 bid 计)
         × liquidity_factor(bid-ask spread 惩罚)
         × trend_factor(EMA50/EMA200 趋势,仅卖 Put 惩罚逆势)
         × earnings_factor(到期前覆盖财报则惩罚/硬过滤)
@@ -28,7 +28,7 @@ DEFAULT_SCAN_CFG: Dict[str, Any] = {
     "chain_cache_ttl_sec": 900,  # 期权链缓存
     "auto_push_minutes": 0,      # 定时扫描推送间隔(分钟),0=关闭
     "telegram_top_n": 5,         # TG 推送条数
-    "premium_pricing": "mid",    # bid | mid — 权利金估价
+    "premium_pricing": "bid",    # bid | mid — 权利金估价
     "pop_weight": 0.35,          # POP 对分数的加成权重
     "buffer_atr_min": 0.8,       # put 缓冲至少 0.8×ATR 才不惩罚
     "buffer_weight": 0.25,       # 缓冲不足时惩罚力度

@@ -196,6 +196,13 @@ export default function ManageDecisionModal({
           <button type="button" className="btn btn-sm" onClick={onDismiss}>关闭</button>
         </div>
 
+        {mc.forward_review && <div className="manage-primary warn" style={{marginBottom: 10}}>
+          <b>按今天的条件重新评估</b>
+          <p>今天是否仍会开仓：{mc.forward_review.would_open_today === true ? '符合当前规则' : mc.forward_review.would_open_today === false ? '不符合' : '信息不足'}</p>
+          <p>{mc.forward_review.reasons?.join('；')}</p>
+          <p>{mc.forward_review.cost_basis_role}</p>
+          <small>{mc.forward_review.roll_rule}</small>
+        </div>}
         {paths && <PathsCompare paths={paths} />}
 
         {(mc.premium_uncalibrated || mc.premium?.calibrated === false) && (
