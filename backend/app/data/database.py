@@ -807,6 +807,8 @@ def init_db():
     except Exception:
         pass
 
+    from app.data.wheel_research_repository import ensure_tables
+    ensure_tables(conn)
     seed_demo_strategies(conn)
     conn.commit()
     conn.close()

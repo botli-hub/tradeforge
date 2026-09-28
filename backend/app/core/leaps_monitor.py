@@ -806,11 +806,20 @@ class LeapsMonitor:
                     closes, float(trigger_price),
                     ema50_min=self.ema50_min, ema200_min=self.ema200_min,
                     allow_partial_ema=self.allow_partial_ema,
-                    level_map=level_map, compute_ema=_compute_ema,
+                    level_map=level_map,
                     bid=bid_q, ask=ask_q, volume=vol_q,
                     require_tradeable_quote=True,
                     confirm_with_bid=True,
                 )
+                from app.data.wheel_research_repository import append_event
+                from app.core.wheel_signal import SIGNAL_VERSION
+                append_event("timing", {"contract_code": code, "timeframe": tf,
+                    "signal_version": SIGNAL_VERSION, "trigger_price": trigger_price,
+                    "bid": bid_q, "ask": ask_q, "volume": vol_q,
+                    "closes": [float(v) for v in closes], "hit": hit,
+                    "reason": None if hit else "insufficient_bars_or_bid_unconfirmed_touch",
+                    "ema50_min": self.ema50_min, "ema200_min": self.ema200_min,
+                    "allow_partial_ema": self.allow_partial_ema}, symbol)
                 if hit is None:
                     if n_bars < self.ema50_min:
                         rep["bars_insufficient"] += 1

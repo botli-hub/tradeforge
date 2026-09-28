@@ -163,7 +163,10 @@ def nav_from_books(
                 "side": leg.get("open_option_type"),
                 "contract_code": leg.get("open_contract_code"),
                 "qty": qty,
-                "mark": round(mark, 4) if mark else None,
+                "mark": round(mark, 4) if mark is not None else None,
+                "strike": leg.get("open_strike"),
+                "expiry": leg.get("open_expiry"),
+                "contract_size": size,
                 "mtm": round(mtm, 2),
             })
 
@@ -176,6 +179,7 @@ def nav_from_books(
     return {
         "valuation_incomplete": valuation_incomplete,
         "reconciliation_required": reconciliation_required,
+        "spots_used": dict(spots),
         "starting_cash": round(float(starting_cash or 0), 2),
         "cash": round(cash, 2),
         "cash_delta": round(cash_delta, 2),
@@ -217,17 +221,21 @@ def load_nav_marks(symbols: Optional[Iterable[str]] = None) -> Tuple[Dict[str, f
 
     need = {str(s) for s in (symbols or []) if s} - set(spots)
     if need:
+        # Never turn an arbitrarily old cached close into a fresh risk mark.
+        from datetime import date
+        from app.data.database import get_db
+        conn = get_db()
         try:
-            from app.core.volatility import get_daily_closes
             for sym in need:
-                try:
-                    cl = get_daily_closes(sym, limit=5)
-                    if cl and float(cl[-1]) > 0:
-                        spots[sym] = float(cl[-1])
-                except Exception:
-                    continue
+                row = conn.execute("SELECT ts,close FROM kline_bars WHERE symbol=? AND timeframe='1d' ORDER BY ts DESC LIMIT 1", (sym,)).fetchone()
+                if row:
+                    age = (date.today()-date.fromisoformat(str(row['ts'])[:10])).days
+                    if 0 <= age <= 4 and _f(row['close']) > 0:
+                        spots[sym] = float(row['close'])
         except Exception as e:
             logger.debug("nav marks closes: %s", e)
+        finally:
+            conn.close()
     return spots, option_marks
 
 

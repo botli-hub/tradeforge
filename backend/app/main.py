@@ -37,6 +37,8 @@ async def startup():
     threading.Thread(target=_startup_backfill_check, args=(scheduler,), daemon=True).start()
     # Wheel 开仓时机后台扫描
     threading.Thread(target=_wheel_timing_loop, daemon=True).start()
+    from app.services.wheel_research_capture import archive_loop
+    threading.Thread(target=archive_loop, daemon=True).start()
     # 每日 IV 快照(加速 IV Rank 历史积累)
     threading.Thread(target=_iv_snapshot_loop, daemon=True).start()
     # 每周一 Telegram 周报

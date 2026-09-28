@@ -45,4 +45,6 @@ def decide_position(item, min_annualized, profit_target, pos_cfg=None):
         )
     except Exception:
         pass
+    from app.core.wheel_research_analytics import review_position
+    result["forward_review"] = review_position(item, result)
     return result

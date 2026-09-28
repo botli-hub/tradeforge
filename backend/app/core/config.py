@@ -148,7 +148,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_push_minutes": 0,
         "telegram_top_n": 5,  # TG 开仓机会条数
         "earnings_hard_filter": True,
-        "premium_pricing": "mid",
+        "premium_pricing": "bid",
         "pop_weight": 0.35,
         "buffer_atr_min": 0.8,
         "buffer_weight": 0.25,

@@ -759,6 +759,7 @@ export interface WheelSuggestResponse {
   headroom_ratio?: number | null
   floor_suggest?: {
     suggested_floor: number
+    synced?: boolean
     current_floor?: number
     rationale?: string
   } | null
@@ -827,6 +828,15 @@ export interface WheelOpenPositionItem {
   prefer_card?: string | null
   /** 0–100:规则越硬、证据越足越高 */
   decision_confidence?: number | null
+  forward_review?: {
+    would_open_today?: boolean | null
+    reasons?: string[]
+    remaining_premium_at_risk?: number | null
+    assignment_cash?: number | null
+    review_required?: boolean
+    cost_basis_role?: string
+    roll_rule?: string
+  }
   rule_match_score?: number | null
   model_calibrated?: boolean
   thin_otm?: boolean
@@ -1747,6 +1757,7 @@ export async function getWheelAdmission(symbol?: string) {
 export async function getWheelFloorSuggest(symbol: string) {
   return request<{
     suggested_floor: number
+    synced?: boolean
     current_floor?: number
     spot?: number
     rationale?: string
@@ -2185,3 +2196,12 @@ export async function postSimTick(body: { spots: Record<string, number>; marks?:
     body: JSON.stringify(body),
   })
 }
+
+export const getWheelResearch = () => request<any>('/api/wheel/research/overview')
+export const saveWheelRiskSettings = (body: Record<string, unknown>) => request<any>('/api/wheel/research/settings', { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) })
+export const compareWheelResearch = (body: Record<string, unknown>) => request<any>('/api/wheel/research/compare', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) })
+export const recordWheelExecutionQuality = (body: Record<string, unknown>) => request<any>('/api/wheel/research/executions', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) })
+export const getWheelResearchEvent = (id: string) => request<any>(`/api/wheel/research/events/${encodeURIComponent(id)}`)
+
+export const captureWheelResearch = () => request<any>('/api/wheel/research/capture', {method:'POST'})
+export const getWheelCaptureStatus = () => request<any>('/api/wheel/research/capture/status')

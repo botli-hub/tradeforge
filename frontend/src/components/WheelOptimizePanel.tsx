@@ -1,3 +1,4 @@
+import WheelResearchPanel from './WheelResearchPanel'
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import {
   getAppSettings,
@@ -14,7 +15,6 @@ import {
   pushWheelPositionAlerts,
   getWheelFloorSuggest,
   getWheelFloorLog,
-  updateWheelTarget,
 } from '../services/api'
 
 const C = { green: '#4ade80', orange: '#fb923c', red: '#f87171', blue: '#38bdf8', purple: '#a78bfa' }
@@ -560,6 +560,8 @@ export default function WheelOptimizePanel() {
           )}
         </div>
       )}
+
+      <WheelResearchPanel />
 
       {/* 回测 */}
       <div style={card}>

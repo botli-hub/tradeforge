@@ -526,6 +526,7 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     div_warn = dividend_warn(symbol, int(pos_cfg.get("dividend_warn_days", 14)))
     headroom_ratio = headroom_ratio_for_symbol(symbol) if side == "PUT" else None
 
+    audit_candidates = []
     suggestions: List[Dict[str, Any]] = []
     spot = None
     last_chain_contracts: List[Dict[str, Any]] = []
@@ -553,7 +554,7 @@ def _suggest(symbol: str, side: str, host: str, port: int,
             _contract.setdefault("quote_asof", quote_asof)
         spot = chain["spot_price"]
         last_chain_contracts = chain["contracts"]
-        chain_snapshots.append({"expiry": exp, "dte": dte, "contracts": chain["contracts"]})
+        chain_snapshots.append({"expiry": exp, "dte": dte, "contracts": chain["contracts"], "snapshot_id": chain.get("research_snapshot_id")})
         # 本到期日该方向合约总数（筛选前）
         side_contracts = [c for c in chain["contracts"] if c.get("option_type") == side]
         total_side = len(side_contracts)
@@ -570,22 +571,29 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                     contract_i=ci, contract_n=total_side,
                     message=f"正在扫描 {symbol} · 到期 {exp_label} · {ci}/{total_side}",
                 )
+            audit = {"contract": dict(c), "expiry": exp, "spot": spot, "status": "rejected", "reason": None}
+            audit_candidates.append(audit)
             d = abs(c.get("delta") or 0)
             if d < delta_min or d > delta_max:
+                audit["reason"] = "delta_outside_window"
                 continue
             if (c.get("open_interest") or 0) < min_oi:
+                audit["reason"] = "open_interest"
                 continue
             bid = c.get("bid") or 0
             ask = c.get("ask")
             if not executable_quote({**c, "bid": bid, "ask": ask, "quote_asof": c.get("quote_asof", quote_asof)},
                                     max_spread_pct=float(scan_cfg.get("max_spread_pct", 8) or 8)):
+                audit["reason"] = "quote_not_executable"
                 continue
             prem = premium_from_quote(bid, ask, pricing)
             if prem <= 0:
+                audit["reason"] = "missing_premium"
                 continue
             # 流动性:bid-ask spread 过宽的合约实际成交会吃掉大量收益,直接过滤
             sp = spread_pct(bid, ask)
             if sp is not None and sp > scan_cfg["max_spread_pct"]:
+                audit["reason"] = "spread"
                 continue
             strike = c["strike"]
             size = c.get("contract_size") or 100
@@ -596,16 +604,19 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 and covers_earnings
                 and scan_cfg.get("earnings_hard_filter", True)
             ):
+                audit["reason"] = "earnings"
                 filtered_earnings += 1
                 continue
             if side == "PUT":
                 if strike > floor:
+                    audit["reason"] = "willing_price"
                     continue
                 collateral = strike
                 if_assigned_cost = round(strike - prem, 4)
                 extra = {"assigned_cost": if_assigned_cost}
             else:
                 if cost_basis is not None and strike < cost_basis:
+                    audit["reason"] = "call_below_cost"
                     continue
                 collateral = cost_basis or strike
                 shares = (cycle or {}).get("shares") or 0
@@ -615,10 +626,12 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 extra = {"if_called_total": if_called}
             ann = _annualized(prem, collateral, dte)
             if ann < (target.get("min_annualized") or 0):
+                audit["reason"] = "annualized"
                 continue
             # 保证金口径年化(仅 PUT;决策仍以现金担保年化为主)
             ann_margin = _annualized(prem, strike * margin_ratio, dte) if side == "PUT" else None
             pop = estimate_pop(side, d)
+            audit.update(status="eligible", reason=None)
             suggestions.append({
                 "contract_code": c["option_symbol"],
                 "expiry": exp, "dte": dte, "strike": strike,
@@ -698,6 +711,8 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         if side == "PUT" and skew and (skew.get("put_skew") or 0) > 8 and s["delta"] > 0.22:
             s["score"] = round((s["score"] or 0) * 0.9, 2)
             s["score_factors"]["skew_penalty"] = 0.9
+        from app.core.wheel_research_analytics import evidence
+        s["evidence"] = evidence(s)
         kept.append(s)
     suggestions = kept
     mode = scan_cfg.get("sort_mode", "score")
@@ -739,7 +754,15 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     except Exception as e:
         logger.warning("floor/call suggest 失败: %s", e)
 
+    from app.data.wheel_research_repository import append_event
+    audit_id = append_event("selection", {
+        "side": side, "candidates": audit_candidates, "selected": suggestions,
+        "config": {"scan": scan_cfg, "target": target, "floor": floor},
+        "expiries_scanned": selected_exps, "expiries_skipped": skipped_exps,
+        "source_snapshot_ids": [x.get("snapshot_id") for x in chain_snapshots],
+    }, symbol)
     return {
+        "research_event_id": audit_id,
         "symbol": symbol, "side": side, "spot_price": spot,
         "cost_basis": cost_basis,
         "filters": {"delta": [delta_min, delta_max], "dte": [dte_min, dte_max],
@@ -2130,7 +2153,8 @@ def register_roll(body: RollDraftIn):
     try:
         payload = body.model_dump()
         payload["execution_id"] = body.execution_id or str(uuid.uuid4())
-        return register_roll_draft(payload)["cycle"]
+        result = register_roll_draft(payload)
+        return {**result["cycle"], "roll_analysis": result.get("roll_analysis")}
     except WheelError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -2347,3 +2371,7 @@ def del_event_block(block_id: int):
         return {"ok": True}
     finally:
         conn.close()
+
+
+from app.api.wheel_research import router as research_router
+router.include_router(research_router, prefix="/research", tags=["wheel-research"])

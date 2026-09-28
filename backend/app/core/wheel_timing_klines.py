@@ -203,9 +203,7 @@ def ema_touch(
 
     if level_map is None:
         level_map = {"EMA50": "PRIMARY", "EMA200": "SECONDARY"}
-    if compute_ema is None:
-        def compute_ema(series, period):  # type: ignore[misc]
-            return series.ewm(span=period, adjust=False).mean()
+    from app.core.wheel_signal import ema_value
 
     use_bid_only = False
     if volume is not None:
@@ -236,7 +234,7 @@ def ema_touch(
         partial = n_bars < period
         if partial and not allow_partial_ema:
             return None
-        val = float(compute_ema(closes, period).iloc[-1])
+        val = float(compute_ema(closes, period).iloc[-1]) if compute_ema else ema_value(closes, period)
         if px >= val:
             return {
                 "signal_level": level_map[key],

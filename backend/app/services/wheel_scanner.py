@@ -55,6 +55,12 @@ def cached_chain(symbol: str, expiry: str, host: str, port: int, force: bool = F
     data["quote_asof"] = stamp
     for contract in data.get("contracts", []):
         contract.setdefault("quote_asof", stamp)
+    from app.data.wheel_research_repository import append_event
+    data["research_snapshot_id"] = append_event("chain", {
+        "expiry": expiry, "spot_price": data.get("spot_price"), "quote_asof": stamp,
+        "contracts": data.get("contracts", []), "source": "futu",
+        "coverage": "queried_expiry_only_not_full_historical_universe",
+    }, symbol)
     with _CACHE_LOCK:
         _CHAIN_CACHE[key] = (now, data)
     return data

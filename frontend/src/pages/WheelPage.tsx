@@ -3856,7 +3856,7 @@ export default function WheelPage() {
         <div className="tab-panel">
           <div className="banner info" style={{ marginBottom: 12 }}>
             <span style={{ flex: 1 }}>
-              组合资金、压力测试、相关、准入、对账与回测 — 适合周复盘/调仓，不参与盘中开仓主路径。
+              组合资金、压力预算、收益归因与研究；启用风险预算后，会参与机会筛选与计划开仓检查。
             </span>
             <button type="button" className="btn btn-sm btn-secondary" onClick={() => setTab('home')}>回今日</button>
           </div>
@@ -4362,6 +4362,7 @@ export default function WheelPage() {
                             ? `年化 ${s.score_factors.annualized} × 流动性 ${s.score_factors.liquidity} × 趋势 ${s.score_factors.trend} × 财报 ${s.score_factors.earnings} × IV ${s.score_factors.iv_bonus} × delta ${s.score_factors.delta_pref}`
                             : undefined}>
                           {s.score != null ? fmt(s.score, 1) : '—'}
+                          <small style={{display:'block',fontWeight:400,color:'var(--text-secondary)'}} title="规则排序分；delta 仅为虚值概率近似，不是盈利概率；优势未经样本外验证">经验规则 · 待验证</small>
                         </td>
                         <td style={{ padding: '7px 8px' }}>{s.open_interest}</td>
                         <td style={{ padding: '7px 8px', whiteSpace: 'nowrap' }}>
@@ -4569,8 +4570,12 @@ function RollModal({ data, onClose, onSaved }: {
 
   const cand = data.candidates.find(c => c.contract_code === selected)
   const size = data.current.contract_size || 100
+  const rollQty = data.current.qty || 1
+  const rollFee = Number(fee) || 0
   const netCredit = cand && buyback && newPrice
-    ? ((parseFloat(newPrice) - parseFloat(buyback)) * size).toFixed(0) : null
+    ? ((Number(newPrice) - Number(buyback)) * size * rollQty - 2 * rollFee).toFixed(2) : null
+  const oldLegPnl = buyback && data.current.open_price != null
+    ? (data.current.open_price - Number(buyback)) * size * rollQty - rollFee : null
 
   const preferLabel: Record<string, string> = {
     roll_out: '优先 Roll out(换到期)',
@@ -4686,11 +4691,13 @@ function RollModal({ data, onClose, onSaved }: {
           <label>新卖价 <input type="number" style={inputStyle} value={newPrice} onChange={e => setNewPrice(e.target.value)} /></label>
           <label>手续费/腿 <input type="number" style={inputStyle} value={fee} onChange={e => setFee(e.target.value)} /></label>
           {netCredit != null && (
-            <span>本次 Roll 净{parseFloat(netCredit) >= 0 ? '收' : '付'} <b style={{ color: parseFloat(netCredit) >= 0 ? '#4ade80' : '#f87171' }}>${netCredit}</b>/张</span>
+            <span>本次 Roll 净{parseFloat(netCredit) >= 0 ? '收' : '付'} <b style={{ color: parseFloat(netCredit) >= 0 ? '#4ade80' : '#f87171' }}>${netCredit}</b>（共 {rollQty} 张，含两腿手续费）</span>
           )}
         </div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>
-          在富途完成两笔交易后,按实际成交价修改上方数值再点登记;将在同一轮内记两条腿(买回+卖出)
+          旧腿本次平仓损益：${fmt(oldLegPnl, 2)}（未分摊历史开仓手续费）。
+          {cand && <> 新腿{data.side === 'PUT' ? '接货义务' : '交付名义金额'}：${fmt(cand.strike * size * rollQty, 0)}，到期 {cand.expiry}。</>}
+          <br/>净收款不等于盈利，新腿仍需独立评估风险。在富途完成两笔交易后，按实际成交价登记。
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button className="btn" onClick={onClose}>取消</button>

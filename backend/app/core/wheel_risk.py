@@ -95,6 +95,14 @@ def check_books(conn):
                 result["violations"].append(f"{c['symbol']} 未设置愿接价或 Put 超愿接价")
             if target.get("stance") == "income":
                 result["violations"].append(f"{c['symbol']} 不愿接货")
+    from app.core.wheel_stress_model import risk_gate
+    row = conn.execute("SELECT MAX(equity) peak FROM wheel_nav_observations WHERE starting_cash=?", (nav["starting_cash"],)).fetchone()
+    peak = max(float(row["peak"] or 0), nav["starting_cash"])
+    drawdown = {"drawdown_pct": max(0, (peak-nav["equity"])/peak*100) if peak else None}
+    budget = risk_gate(nav, config, drawdown=drawdown)
+    result["risk_budget"] = budget
+    if budget["enabled"]:
+        result["violations"].extend(budget["violations"])
     result["ok"] = not result["violations"]
     return result
 
@@ -148,6 +156,11 @@ def candidate_risk(nav, opportunity, targets, config):
     projected['cash'] += bid*qty*size-fee
     projected['equity'] += (bid-ask)*qty*size-fee  # conservative immediately-close mark
     result = evaluate_books(projected,targets,config)
+    from app.core.wheel_stress_model import risk_gate
+    budget = risk_gate(nav, config, opportunity, drawdown=nav.get("drawdown"))
+    result['risk_budget'] = budget
+    if budget['enabled']:
+        errors.extend(budget['violations'])
     result['violations'] += errors
     result['ok'] = not result['violations']
     return result
