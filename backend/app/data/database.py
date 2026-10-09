@@ -807,6 +807,13 @@ def init_db():
     except Exception:
         pass
 
+    # 席位可执行卖期权信号队列 + ACK
+    try:
+        from app.data.exec_signal_repository import ensure_exec_signal_tables
+        ensure_exec_signal_tables(conn)
+    except Exception:
+        pass
+
     from app.data.wheel_research_repository import ensure_tables
     ensure_tables(conn)
     seed_demo_strategies(conn)
