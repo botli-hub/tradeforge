@@ -1,1 +1,1 @@
-PLACEHOLDER_WILL_NOT_SEND
+LOAD_FROM_FILE:/tmp/push_api.json
