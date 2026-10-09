@@ -1251,7 +1251,7 @@ export async function getWheelRollOptions(
   cycleId: string,
   host: string,
   port: number,
-  opts?: { allow_down_strike?: boolean; max_spread_pct?: number; qty?: number },
+  opts?: { allow_down_strike?: boolean; max_spread_pct?: number; qty?: number; close_contract_code?: string },
 ) {
   const qs = new URLSearchParams({
     cycle_id: cycleId,
@@ -1261,6 +1261,7 @@ export async function getWheelRollOptions(
   if (opts?.allow_down_strike) qs.set('allow_down_strike', 'true')
   if (opts?.max_spread_pct != null) qs.set('max_spread_pct', String(opts.max_spread_pct))
   if (opts?.qty != null) qs.set('qty', String(opts.qty))
+  if (opts?.close_contract_code) qs.set('close_contract_code', opts.close_contract_code)
   return request<WheelRollOptions>(`/api/wheel/roll-options?${qs}`)
 }
 

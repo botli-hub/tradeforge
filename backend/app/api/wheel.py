@@ -1205,6 +1205,9 @@ def roll_options(
     max_spread_pct: float = Query(10.0, description="点差超过则剔除"),
     min_oi: int = Query(0, description="最低 OI,0=不限"),
     qty: Optional[float] = Query(None, description="张数预览,默认用 cycle 持仓张数"),
+    close_contract_code: Optional[str] = Query(
+        None, description="多腿 CC 要 Roll 的合约;缺省用周期主腿 open_contract_code",
+    ),
 ):
     """Roll 决策台:场景结论 + 三卡片 + 多报价情景 + 效率/事件/限价。"""
     from datetime import date as _date
@@ -1218,13 +1221,20 @@ def roll_options(
     cycle = repo.get_cycle(cycle_id)
     if cycle is None or cycle["status"] not in ("CSP_OPEN", "CC_OPEN"):
         raise HTTPException(status_code=400, detail="该周期没有在场合约")
-    symbol, side = cycle["symbol"], cycle["open_option_type"]
-    code = (cycle.get("open_contract_code") or "").strip()
-    size = int(cycle.get("open_contract_size") or 100)
-    qty_f = float(qty) if qty is not None and qty > 0 else float(cycle.get("open_qty") or 1)
+    leg = wr.resolve_roll_leg(cycle, close_contract_code)
+    symbol = cycle["symbol"]
+    side = leg.get("open_option_type") or cycle.get("open_option_type")
+    code = (leg.get("open_contract_code") or "").strip()
+    size = int(leg.get("open_contract_size") or cycle.get("open_contract_size") or 100)
+    qty_f = float(qty) if qty is not None and qty > 0 else float(leg.get("open_qty") or cycle.get("open_qty") or 1)
     qty = max(qty_f, 0.01)
     target = repo.get_target(symbol) or {}
     warnings: List[str] = []
+    if close_contract_code:
+        want = str(close_contract_code).strip().removeprefix("US.")
+        got = (leg.get("open_contract_code") or "").removeprefix("US.")
+        if want and got != want:
+            warnings.append(f"未找到合约 {close_contract_code},Roll 仍用周期主腿")
     pos_cfg = _wheel_cfg().get("wheel_position", {}) or {}
     scan_cfg = (_wheel_cfg().get("wheel_scan") or {})
     max_spread_pct = float(max_spread_pct or scan_cfg.get("max_spread_pct") or 10)
@@ -1263,21 +1273,21 @@ def roll_options(
         warnings.append("未记录合约代码,买回价请手动填写")
 
     buyback = buyback_ask  # 默认平仓用 ask
-    open_price = float(cycle.get("open_price") or 0)
-    cur_dte = cycle.get("open_dte")
-    cur_strike = float(cycle.get("open_strike") or 0)
-    cur_expiry = str(cycle.get("open_expiry") or "")[:10]
+    open_price = float(leg.get("open_price") or cycle.get("open_price") or 0)
+    cur_dte = leg.get("open_dte")
+    if cur_dte is None:
+        cur_dte = cycle.get("open_dte")
+    cur_strike = float(leg.get("open_strike") or cycle.get("open_strike") or 0)
+    cur_expiry = str(leg.get("open_expiry") or cycle.get("open_expiry") or "")[:10]
     cost_basis = cycle.get("cost_basis")
     share_cost = cycle.get("share_cost")
     shares = float(cycle.get("shares") or 0) or (qty * size if side == "CALL" else 0)
 
-    # 浮盈
+    # 浮盈。剩余年化等持仓树算完再用 capital_employed,不在这里除以 strike。
     profit_pct = None
     if open_price > 0 and buyback_ask > 0:
         profit_pct = round((open_price - buyback_ask) / open_price * 100, 1)
     remaining_ann = None
-    if cur_strike > 0 and cur_dte and cur_dte > 0 and buyback_ask > 0:
-        remaining_ann = round(buyback_ask / cur_strike * 365 / cur_dte * 100, 2)
 
     # delta 带
     delta_lo = float(target.get("delta_min") or 0.15)
@@ -1518,15 +1528,36 @@ def roll_options(
     )))
 
     close_notional = float(buyback_ask or 0) * float(size or 100)
+    sell_above = None
+    if side == "CALL":
+        try:
+            from app.core.wheel_call_timing import get_target_sell_above
+            sell_above = get_target_sell_above(symbol)
+        except Exception:
+            sell_above = (target or {}).get("sell_above")
     scenario = wr.decide_roll_scenario(
         side=side, dte=cur_dte, profit_pct=profit_pct, itm=itm, deep_itm=deep_itm,
-        delta=cur_delta, remaining_ann=remaining_ann,
+        delta=cur_delta, remaining_ann=None,
         min_annualized=float(target.get("min_annualized") or 0),
         profit_target=float(pos_cfg.get("profit_target_pct") or 50),
         hard_roll_dte=int(pos_cfg.get("hard_roll_dte") or 21),
         close_notional=close_notional,
         pos_cfg=pos_cfg,
+        strike=cur_strike,
+        spot=spot_v,
+        floor_price=put_strike_cap if side == "PUT" else None,
+        stance=(target or {}).get("stance") or "acquire",
+        cost_basis=cost_basis,
+        share_cost=share_cost,
+        sell_above=sell_above,
+        open_price=open_price,
+        buyback_ask=buyback_ask,
+        qty=qty,
+        contract_size=size,
+        cycle_id=cycle.get("id"),
     )
+    remaining_ann = scenario.get("remaining_annualized")
+    deep_itm = bool(scenario.get("deep_itm"))
 
     decision = wr.build_decision_cards(
         candidates, side=side, cur_strike=cur_strike,
@@ -1571,6 +1602,8 @@ def roll_options(
             "prefer_card": decision.get("highlighted"),
             "profit_pct": profit_pct,
             "remaining_annualized": remaining_ann,
+            "capital_employed": scenario.get("capital_employed"),
+            "position_action": scenario.get("position_action"),
             "itm": itm,
             "deep_itm": deep_itm,
         },
@@ -1606,7 +1639,7 @@ def roll_options(
         },
         "current": {
             "contract_code": code,
-            "strike": cycle.get("open_strike"),
+            "strike": cur_strike,
             "expiry": cur_expiry,
             "dte": cur_dte,
             "open_price": open_price,
@@ -1619,6 +1652,7 @@ def roll_options(
             "shares": shares,
             "profit_pct": profit_pct,
             "remaining_annualized": remaining_ann,
+            "capital_employed": scenario.get("capital_employed"),
             "itm": itm,
         },
         "candidates": primary[:15],
