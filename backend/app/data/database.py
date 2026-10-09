@@ -783,6 +783,7 @@ def init_db():
 
     # 兼容旧库:wheel_targets 增补行业/标签;cycles 增补入场分
     for ddl in [
+        "ALTER TABLE wheel_targets ADD COLUMN floor_mode TEXT",
         "ALTER TABLE wheel_targets ADD COLUMN sector TEXT",
         "ALTER TABLE wheel_targets ADD COLUMN tags TEXT",
         "ALTER TABLE wheel_cycles ADD COLUMN entry_score REAL",
