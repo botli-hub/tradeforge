@@ -259,3 +259,11 @@ def ema_touch(
         if b < float(hit["ema_value"]):
             return None
     return hit
+
+
+def iv_rank_touch(iv_rank: Any, threshold: float = 50) -> bool:
+    """标的 ATM IV rank 达到门槛。不是逐合约 IV。"""
+    try:
+        return float(iv_rank) >= float(threshold)
+    except (TypeError, ValueError):
+        return False

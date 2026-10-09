@@ -145,21 +145,46 @@ def score_symbol(symbol: str) -> Dict[str, Any]:
     else:
         _add_factor("iv_rank", 0, "IV Rank", "无数据")
 
-    # 历史 wheel
-    if closed:
-        avg_pnl = realized / len(closed)
-        if avg_pnl > 0:
-            d = min(15, avg_pnl / 50)
-            score += d
-            _add_factor("history_pnl", round(d, 2), "历史轮子", f"均盈 ${avg_pnl:.0f}")
-        else:
-            d = -min(15, abs(avg_pnl) / 50)
-            score += d
-            _add_factor("history_pnl", round(d, 2), "历史轮子", f"均亏 ${avg_pnl:.0f}")
+    iv_hv = (vol or {}).get("iv_hv_ratio") if vol else None
+    try:
+        iv_hv = float(iv_hv) if iv_hv is not None else None
+    except (TypeError, ValueError):
+        iv_hv = None
+    if iv_hv is None:
+        _add_factor("iv_hv", 0, "IV/HV", "无数据")
+    elif iv_hv >= 1.2:
+        score += 6
+        _add_factor("iv_hv", 6, "IV/HV", f"IV/HV={iv_hv:.2f} 权利金偏贵")
+    elif iv_hv < 0.8:
+        score -= 4
+        _add_factor("iv_hv", -4, "IV/HV", f"IV/HV={iv_hv:.2f} 权利金偏便宜")
+    else:
+        _add_factor("iv_hv", 0, "IV/HV", f"IV/HV={iv_hv:.2f}")
+
+    from app.core.wheel_stress_model import DEFAULTS as _STRESS_DEFAULTS
+    if symbol.strip().upper() in set(_STRESS_DEFAULTS.get("leveraged_symbols") or []):
+        score -= 15
+        _add_factor("leveraged", -15, "杠杆ETF", "杠杆或反向 ETF 降权")
+        tags.append("杠杆ETF")
+
+    # 历史 wheel:至少 3 个已结束轮子,按占用资金归一,不用裸美元
+    if len(closed) >= 3:
+        capital = 0.0
+        try:
+            capital = float((target or {}).get("max_capital") or 0)
+        except (TypeError, ValueError):
+            capital = 0.0
+        base = capital if capital > 0 else 1.0
+        ret = realized / base
+        d = max(-15.0, min(15.0, ret * 100))
+        score += d
+        _add_factor("history_pnl", round(d, 2), "历史轮子", f"{len(closed)} 轮,收益/资金 {ret * 100:.1f}%")
+        if d < 0:
             tags.append("历史轮子偏亏")
     else:
-        _add_factor("history_pnl", 0, "历史轮子", "无已结束轮子")
-        tags.append("无已结束轮子")
+        _add_factor("history_pnl", 0, "历史轮子", f"已结束 {len(closed)} 个,不足 3 个不计入")
+        if not closed:
+            tags.append("无已结束轮子")
 
     # floor: 标签 + 极轻提示,禁止 floor>现价 重罚
     floor_px = (target or {}).get("floor_price")
