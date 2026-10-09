@@ -166,6 +166,8 @@ def _red_flags(
     iv_rank: Optional[float] = None,
     iv_low_threshold: float = 25.0,
     stance: Optional[str] = None,
+    earnings_unknown: bool = False,
+    dividend_unknown: bool = False,
 ) -> List[str]:
     flags = []
     st = str(stance or "").strip().lower()
@@ -184,6 +186,8 @@ def _red_flags(
         flags.append("组合压力高")
     if side == "PUT" and iv_rank is not None and iv_rank < iv_low_threshold:
         flags.append("IV低位")
+    if earnings_unknown or dividend_unknown:
+        flags.append("事件未知")
     return flags
 
 
@@ -204,7 +208,7 @@ def _grade_actionable(
     soft_all = [f for f in flags if f not in hard]
     # 不参与降档的软标签(仍出现在 flags 里给前端角标)
     soft_demote = [f for f in soft_all if f not in (
-        "已入愿接区·指派风险升", "低于接货底线", "IV低位",
+        "已入愿接区·指派风险升", "低于接货底线", "IV低位", "事件未知",
     )]
     if hard:
         return "blocked", False
@@ -408,6 +412,7 @@ def build_opportunities(
         below: bool,
         iv_rank: Optional[float] = None,
         symbol: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
         st = (ensure_ctx(symbol) or {}).get("stance") if symbol else None
         return _red_flags(
@@ -421,6 +426,8 @@ def build_opportunities(
             iv_rank=iv_rank,
             iv_low_threshold=iv_low_thr,
             stance=st,
+            earnings_unknown=bool(extra.get("earnings_unknown")) if extra else False,
+            dividend_unknown=bool(extra.get("dividend_unknown")) if extra else False,
         )
 
     # 1) timing history
@@ -441,6 +448,7 @@ def build_opportunities(
         ivr = h.get("iv_rank") if h.get("iv_rank") is not None else (pool_o or {}).get("iv_rank")
         flags = flags_for(
             side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr, symbol=symbol,
+            extra=pool_o,
         )
         score = (pool_o or {}).get("score")
         grade, actionable = _grade_actionable(
@@ -531,6 +539,7 @@ def build_opportunities(
         ivr = s.get("iv_rank") if s.get("iv_rank") is not None else (pool_o or {}).get("iv_rank")
         flags = flags_for(
             side=side, trend=trend, covers=covers, exceeds=exceeds, below=below, iv_rank=ivr, symbol=symbol,
+            extra=pool_o,
         )
         score = (pool_o or {}).get("score")
         grade, actionable = _grade_actionable(
@@ -599,6 +608,7 @@ def build_opportunities(
                     below=bool((m.get("timing") or {}).get("below_floor")),
                     iv_rank=m.get("iv_rank") if m.get("iv_rank") is not None else o.get("iv_rank"),
                     symbol=symbol,
+                    extra=o,
                 )
                 m["flags"] = flags
                 m["trend"] = o.get("trend")
@@ -620,6 +630,7 @@ def build_opportunities(
             below=False,
             iv_rank=o.get("iv_rank"),
             symbol=symbol,
+            extra=o,
         )
         score = o.get("score")
         grade, actionable = _grade_actionable(
