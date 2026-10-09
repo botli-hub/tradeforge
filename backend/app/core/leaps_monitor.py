@@ -324,6 +324,12 @@ class WheelTimingMonitor:
                 lrepo.upsert_timing_history(sig)
             except Exception as e:
                 logger.warning("时机历史写入失败(%s): %s", sig.contract_code, e)
+            # 席位可执行信号队列(仅 TSLL/SPCH;无 floor/DTE 闸;无 FT 下单)
+            try:
+                from app.core.exec_signals import maybe_emit_from_touch
+                maybe_emit_from_touch(sig)
+            except Exception as e:
+                logger.warning("exec-signal emit skip(%s): %s", getattr(sig, "contract_code", "?"), e)
         return signals
 
 
