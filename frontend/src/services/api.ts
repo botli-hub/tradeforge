@@ -1,1 +1,579 @@
-LOAD_FROM_FILE:/tmp/push_api.json
+
+function withExecutionId(scope: string, body: Record<string, unknown>) {
+  if (body.execution_id || body.apply === false) return body
+  const key = 'wheel-intent:' + scope + ':' + JSON.stringify(body)
+  let id = sessionStorage.getItem(key)
+  if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(key, id) }
+  return { ...body, execution_id: id }
+}
+
+export const API_BASE = 'http://127.0.0.1:8000'
+const SETTINGS_KEY = 'tradeforge.settings'
+const SETTINGS_EVENT = 'tradeforge:settings-changed'
+export type {
+  AdapterType,
+  AppSettings,
+  KlineBar,
+  OrderPayload,
+  OrderSide,
+  OrderType,
+  QuoteData,
+  SearchStockResult,
+  StockItem,
+  Plan2032Holding,
+  StrategySignal,
+  StrategySummary,
+  TradingEnv,
+  TradingOrder,
+} from './types'
+import type {
+  AppSettings,
+  KlineBar,
+  OrderPayload,
+  QuoteData,
+  SearchStockResult,
+  StockItem,
+  Plan2032Holding,
+  StrategySignal,
+  StrategySummary,
+  TradingOrder,
+} from './types'
+
+const DEFAULT_SETTINGS: AppSettings = {
+  initialCapital: 100000,
+  feeRate: 0.0003,
+  slippage: 0.001,
+  theme: 'dark',
+  uiStyle: 'default',
+  language: 'zh',
+  marketDataSource: 'finnhub',
+  marketHost: '127.0.0.1',
+  marketPort: 11111,
+  tradingAdapter: 'futu',
+  tradingEnv: 'SIM',
+  tradingHost: '127.0.0.1',
+  tradingPort: 11111,
+  defaultOrderQuantity: 100,
+  confirmSignals: true,
+  refreshIntervalSec: 0,
+}
+
+function parseJson<T>(text: string): T | null {
+  if (!text) return null
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    return null
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, init)
+  const text = await res.text()
+  const data = parseJson<any>(text)
+
+  if (!res.ok) {
+    const detail = data?.detail || data?.message || text || `请求失败: ${res.status}`
+    throw new Error(detail)
+  }
+
+  return (data ?? ({} as T)) as T
+}
+
+export function getAppSettings(): AppSettings {
+  const raw = localStorage.getItem(SETTINGS_KEY)
+  const parsed = raw ? parseJson<Partial<AppSettings>>(raw) : null
+  const merged = { ...DEFAULT_SETTINGS, ...(parsed || {}) }
+  // Migrate away from removed 'mock' adapter
+  if ((merged.marketDataSource as string) === 'mock') merged.marketDataSource = 'finnhub'
+  if ((merged.tradingAdapter as string) === 'mock') merged.tradingAdapter = 'futu'
+  return merged
+}
+
+export function saveAppSettings(next: Partial<AppSettings> | AppSettings): AppSettings {
+  const merged = {
+    ...getAppSettings(),
+    ...next,
+  }
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(merged))
+  window.dispatchEvent(new CustomEvent(SETTINGS_EVENT, { detail: merged }))
+  return merged
+}
+
+export function subscribeSettings(callback: (settings: AppSettings) => void) {
+  const handler = (event: Event) => {
+    const customEvent = event as CustomEvent<AppSettings>
+    callback(customEvent.detail || getAppSettings())
+  }
+  window.addEventListener(SETTINGS_EVENT, handler)
+  return () => window.removeEventListener(SETTINGS_EVENT, handler)
+}
+
+function buildMarketQuery(params: Record<string, string | number | undefined>) {
+  const qs = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      qs.set(key, String(value))
+    }
+  })
+  return qs.toString()
+}
+
+export async function getMarketStatus(settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<{ connected: boolean; adapter: string; host: string; port: number }>(`/api/market/status?${qs}`)
+}
+
+export async function searchStocks(q: string, settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    q,
+    adapter: settings.marketDataSource,
+  })
+  return request<SearchStockResult[]>(`/api/market/search?${qs}`)
+}
+
+export async function getQuote(symbol: string, settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbol,
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<QuoteData>(`/api/market/quote?${qs}`)
+}
+
+export async function getQuotes(symbols: string[], settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbols: symbols.join(','),
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<{ items: QuoteData[] }>(`/api/market/quotes?${qs}`)
+}
+
+export async function getKlines(symbol: string, timeframe: string = '1d', limit: number = 365, settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbol,
+    timeframe,
+    limit,
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<KlineBar[]>(`/api/market/klines?${qs}`)
+}
+
+export type ChanSignal = {
+  kind: string
+  label: string
+  ts: string
+  price: number
+  note: string
+}
+
+export type ChanHub = {
+  zg: number
+  zd: number
+  start_ts: string
+  end_ts: string
+  direction: string
+  bi_count: number
+}
+
+export type ChanStroke = {
+  direction: 'up' | 'down' | string
+  start_ts: string
+  end_ts: string
+  start_price: number
+  end_price: number
+  finished?: boolean
+}
+
+export type ChanAnalyze = {
+  symbol: string
+  timeframe: string
+  level_label: string
+  bar_count: number
+  merged_count: number
+  fenxing_count: number
+  bi_count: number
+  segment_count: number
+  trend: {
+    type: string
+    label: string
+    zhongshu_count: number
+    summary: string
+  }
+  zhongshu: ChanHub[]
+  bis: ChanStroke[]
+  segments: ChanStroke[]
+  signals: ChanSignal[]
+  klines: KlineBar[]
+  source?: string
+}
+
+export async function getChanAnalyze(
+  symbol: string,
+  timeframe: string = '1d',
+  limit: number = 400,
+  settings = getAppSettings(),
+) {
+  const qs = buildMarketQuery({
+    symbol,
+    timeframe,
+    limit,
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<ChanAnalyze>(`/api/chan/analyze?${qs}`)
+}
+
+export async function getOptionExpirations(symbol: string, settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbol,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<{ symbol: string; expirations: string[]; adapter: string }>(`/api/options/expirations?${qs}`)
+}
+
+export async function getOptionChain(symbol: string, expiry: string, settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbol,
+    expiry,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<any>(`/api/options/chain?${qs}`)
+}
+
+export async function getOptionPayoff(data: any) {
+  return request<any>(`/api/options/payoff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function connectTrading(settings = getAppSettings()) {
+  return request<{ status: string; adapter: string }>(`/api/trading/connect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      adapter: settings.tradingAdapter,
+      trd_env: settings.tradingEnv,
+      host: settings.tradingHost,
+      port: settings.tradingPort,
+    }),
+  })
+}
+
+export async function disconnectTrading() {
+  return request<{ status: string }>(`/api/trading/disconnect`, {
+    method: 'POST',
+  })
+}
+
+export async function placeOrder(payload: OrderPayload) {
+  return request<{ order_id: string; status: string }>(`/api/trading/order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getOrders() {
+  return request<TradingOrder[]>(`/api/trading/orders`)
+}
+
+export async function getStrategies() {
+  return request<StrategySummary[]>(`/api/strategies`)
+}
+
+export async function getStrategy(id: string) {
+  return request<StrategySummary>(`/api/strategies/${id}`)
+}
+
+export async function evaluateStrategySignal(strategyId: string, symbol: string, settings = getAppSettings()) {
+  const qs = buildMarketQuery({
+    symbol,
+    adapter: settings.marketDataSource,
+    host: settings.marketHost,
+    port: settings.marketPort,
+  })
+  return request<StrategySignal>(`/api/strategies/${strategyId}/signal?${qs}`)
+}
+
+export async function createStrategy(data: any) {
+  return request<any>(`/api/strategies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+}
+
+export async function updateStrategy(id: string, data: any) {
+  return request<any>(`/api/strategies/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+}
+
+export async function deleteStrategy(id: string) {
+  return request<any>(`/api/strategies/${id}`, {
+    method: 'DELETE'
+  })
+}
+
+export async function runBacktest(data: any) {
+  return request<any>(`/api/backtest/run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+}
+
+export async function getBacktestResult(id: string) {
+  return request<any>(`/api/backtest/${id}`)
+}
+
+export async function getBacktestTrades(id: string) {
+  return request<any>(`/api/backtest/${id}/trades`)
+}
+
+export async function getHistoryCoverage(symbol: string, timeframe: string, source?: string) {
+  const qs = buildMarketQuery({ symbol, timeframe, source })
+  return request<any>(`/api/history/coverage?${qs}`)
+}
+
+export async function getHistoryJobs(limit: number = 50) {
+  const qs = buildMarketQuery({ limit })
+  return request<any[]>(`/api/history/jobs?${qs}`)
+}
+
+export async function previewHistorySource(symbol: string, adapter?: string) {
+  const qs = buildMarketQuery({ symbol, adapter })
+  return request<{ symbol: string; source: string }>(`/api/history/preview-source?${qs}`)
+}
+
+export async function backfillHistory(data: {
+  symbol: string
+  timeframe: string
+  start_date: string
+  end_date: string
+  host?: string
+  port?: number
+  source?: string
+}) {
+  return request<any>(`/api/history/backfill`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function getHistorySubscriptions(enabledOnly: boolean = false) {
+  const qs = buildMarketQuery({ enabled_only: enabledOnly ? 'true' : undefined })
+  return request<any[]>(`/api/history/subscriptions${qs ? `?${qs}` : ''}`)
+}
+
+export async function addHistorySubscription(data: { symbol: string; name?: string; source_hint?: string; enabled?: boolean }) {
+  return request<any>(`/api/history/subscriptions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function setHistorySubscriptionEnabled(symbol: string, enabled: boolean) {
+  const qs = buildMarketQuery({ enabled: enabled ? 'true' : 'false' })
+  return request<any>(`/api/history/subscriptions/${encodeURIComponent(symbol)}/enable?${qs}`, {
+    method: 'POST',
+  })
+}
+
+export async function getHistorySchedulerStatus() {
+  return request<any>(`/api/history/scheduler/status`)
+}
+
+export async function runHistoryScheduler(settings = getAppSettings()) {
+  const qs = buildMarketQuery({ host: settings.marketHost, port: settings.marketPort })
+  return request<any>(`/api/history/scheduler/run?${qs}`, {
+    method: 'POST',
+  })
+}
+
+export async function getStocks(params?: { market?: string; enabled_only?: boolean; subscribed?: boolean }) {
+  const qs = buildMarketQuery({
+    market: params?.market,
+    enabled_only: params?.enabled_only ? 'true' : undefined,
+  })
+  return request<StockItem[]>(`/api/stocks${qs ? `?${qs}` : ''}`)
+}
+
+export async function addStock(data: { symbol: string; name: string; market: string }) {
+  return request<StockItem>(`/api/stocks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteStock(symbol: string) {
+  return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function setStockEnabled(symbol: string, enabled: boolean) {
+  return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}/enable?enabled=${enabled}`, {
+    method: 'POST',
+  })
+}
+
+export async function setStockSubscribed(symbol: string, subscribed: boolean) {
+  return request<{ ok: boolean }>(`/api/stocks/${encodeURIComponent(symbol)}/subscribe?subscribed=${subscribed}`, {
+    method: 'POST',
+  })
+}
+
+// -- LEAPS 信号监控 ------------------------------------------------------------
+
+export interface LeapsWatchlistItem {
+  symbol: string
+  name: string
+  floor_price: number
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface LeapsSuggestion {
+  contract_code: string
+  strike: number
+  expiry: string
+  premium: number
+  delta: number
+  annualized_yield: number
+  cost_basis: number
+  dte: number
+}
+
+export interface LeapsSignal {
+  id: string
+  symbol: string
+  contract_code: string
+  signal_level: 'PRIMARY' | 'SECONDARY' | 'WHEEL_PUT' | 'WHEEL_CALL'
+  trigger_price: number
+  ema_value: number
+  ema_type: string
+  iv_rank: number
+  underlying_price: number
+  floor_price: number
+  suggestions: LeapsSuggestion[]
+  is_intraday: boolean
+  created_at: string
+}
+
+export interface LeapsCooldown {
+  contract_code: string
+  symbol: string
+  cooldown_until: string
+  created_at: string
+  updated_at: string
+}
+
+export interface LeapsStatus {
+  watchlist_total: number
+  watchlist_enabled: number
+  recent_signals: LeapsSignal[]
+  active_cooldowns: number
+}
+
+export interface LeapsCandidate {
+  symbol: string
+  name: string
+  market: string
+  /** 股票池是否启用 */
+  enabled?: boolean
+  /** 是否已是 Wheel 标的 */
+  in_wheel?: boolean
+}
+
+export async function getLeapsWatchlist() {
+  return request<LeapsWatchlistItem[]>('/api/leaps/watchlist')
+}
+
+export async function getLeapsCandidates() {
+  return request<LeapsCandidate[]>('/api/leaps/watchlist/candidates')
+}
+
+export async function addLeapsWatchlistItem(body: {
+  symbol: string
+  name?: string
+  floor_price: number
+  enabled?: boolean
+}) {
+  return request<LeapsWatchlistItem>('/api/leaps/watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteLeapsWatchlistItem(symbol: string) {
+  return request<{ ok: boolean }>(`/api/leaps/watchlist/${encodeURIComponent(symbol)}`, {
+    method: 'DELETE',
+  })
+}
+
+// -- Wheel 策略 ----------------------------------------------------------------
+
+export type WheelCycleStatus = 'IDLE' | 'CSP_OPEN' | 'HOLDING' | 'CC_OPEN' | 'CLOSED'
+
+export type WheelTradeType =
+  | 'SELL_PUT' | 'BUY_PUT_CLOSE' | 'SELL_CALL' | 'BUY_CALL_CLOSE'
+  | 'EXPIRE' | 'ASSIGNED' | 'CALLED_AWAY' | 'SELL_SHARES' | 'BUY_SHARES'
+
+export interface WheelCycle {
+  id: string
+  symbol: string
+  status: WheelCycleStatus
+  shares: number
+  share_cost: number
+  total_premium: number
+  total_fees: number
+  realized_pnl: number | null
+  open_contract_code: string | null
+  open_option_type: 'PUT' | 'CALL' | null
+  open_strike: number | null
+  open_expiry: string | null
+  open_qty: number
+  open_price: number
+  open_contract_size: number
+  /** 在场 Covered Call 腿(台账推导);无则回退 open_contract_* */
+  open_cc_legs?: Array<{
+    contract_code?: string | null
+    strike?: number | null
+    expiry?: string | null
+    qty?: number
+    price?: number
+    contract_size?: number
+    option_type?: string
+  }> | null
+  open_cc_leg_count?: number
+  uncovered_shares?: number | null
+  started_at: string
+  closed_at: string | null
+  cost_basis: number | null
+  open_dte: number | null
+  duration_days: number | null
+  uncovered_days?: number | null
+}
