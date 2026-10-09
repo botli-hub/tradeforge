@@ -104,7 +104,7 @@ def risk_gate(nav, config, opportunity=None, drawdown=None, asof=None):
         if holding['symbol'].removeprefix('US.') in cfg['leveraged_symbols'] and not cfg['leveraged_allowed']:
             violations.append('杠杆标的未获风险预算准入')
     if opportunity:
-        o=opportunity;side=o.get('side','PUT');qty=o.get('qty',o.get('suggest_qty',1));size=o.get('contract_size',100)
+        o=opportunity;side=o.get('side','PUT');qty=o.get('suggest_qty', o.get('qty', 1));size=o.get('contract_size',100)
         code=o.get('contract_code') or 'candidate';symbol=o.get('symbol',''); bid=o.get('bid');ask=o.get('ask');strike=o.get('strike')
         if not all(isinstance(v,(int,float)) and math.isfinite(v) and v>0 for v in (bid,ask,strike,qty,size)) or ask<bid or int(qty)!=qty or int(size)!=size or side not in ('PUT','CALL'):
             violations.append('候选报价/数量无效')

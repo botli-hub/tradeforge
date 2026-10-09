@@ -8,7 +8,9 @@ score = annualized(现金担保口径, 默认 bid 计)
         × delta_factor(IV 高位时同等年化偏好低 delta)
         × pop_factor(虚值概率加成)
         × buffer_factor(相对 ATR 缓冲)
-        × headroom_factor(组合资金余量)
+        × headroom 只写入 factors,不再乘进 score(扫描层也不再加一次)
+
+        include_structure=True 时才乘入触及概率(POT)和 DTE 偏好。
 
 所有权重可在设置页 wheel_scan 段覆盖,分项明细随建议返回,前端可展示归因。
 """
@@ -35,6 +37,13 @@ DEFAULT_SCAN_CFG: Dict[str, Any] = {
     "headroom_boost": 0.15,      # 有资金余量时最高加成
     "min_iv_history_for_bonus": 30,  # IV 历史不足时不给满额 IV 加成
     "sort_mode": "score",        # score | robust(稳健:高POP+缓冲)
+    "pot_weight": 0.35,
+    "buffer_sigma_min": 1.0,
+    "skew_penalty_threshold": 8,
+    "skew_delta_min": 0.22,
+    "skew_score_mult": 0.9,
+    "iv_low_threshold": 25,
+    "opportunity_min_score": 0,
 }
 
 
@@ -112,12 +121,37 @@ def estimate_ev(
 
 
 def compute_atr(closes: List[float], window: int = 20) -> Optional[float]:
-    """用收盘价序列近似 ATR(无高低价时用 |Δclose| 均值)。"""
+    """收盘价 |Δclose| 均值。不是高低价 ATR;真 ATR 见 compute_true_atr。"""
     if len(closes) < window + 1:
         return None
     diffs = [abs(closes[i] - closes[i - 1]) for i in range(1, len(closes))]
     seg = diffs[-window:]
     if not seg:
+        return None
+    return sum(seg) / len(seg)
+
+
+def compute_true_atr(bars: List[Dict[str, Any]], window: int = 20) -> Optional[float]:
+    """Wilder 口径的真实波幅均值。缺 high/low/close 时返回 None,不回退到收盘近似。"""
+    if not bars or len(bars) < window + 1:
+        return None
+    trs: List[float] = []
+    prev_close: Optional[float] = None
+    for bar in bars:
+        try:
+            high = float(bar["high"])
+            low = float(bar["low"])
+            close = float(bar["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        trs.append(tr)
+        prev_close = close
+    seg = trs[-window:]
+    if len(seg) < window:
         return None
     return sum(seg) / len(seg)
 
@@ -261,6 +295,10 @@ def score_contract(
     stance: Optional[str] = None,
     spot: Optional[float] = None,
     strike: Optional[float] = None,
+    include_structure: bool = False,
+    buffer_sigma: Optional[float] = None,
+    dte: Optional[int] = None,
+    pot: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """返回评分、透明的情景 EV 和假设；POP 不是校准后的盈利概率。"""
     liq = liquidity_factor(sp, scan_cfg)
@@ -292,13 +330,29 @@ def score_contract(
     # factors neutral until a scanner supplies the observable inputs; the
     # scanner always passes pop and therefore gets the transparent adjustment.
     pop_f = pop_factor(pop_v, scan_cfg) if pop is not None else 1.0
-    buf_f = buffer_factor(buffer_atr, scan_cfg, side)
+    buf_cfg = scan_cfg
+    buf_input = buffer_atr
+    if buffer_sigma is not None:
+        buf_input = buffer_sigma
+        buf_cfg = dict(scan_cfg)
+        buf_cfg["buffer_atr_min"] = float(scan_cfg.get("buffer_sigma_min", 1.0) or 1.0)
+    buf_f = buffer_factor(buf_input, buf_cfg, side)
     head_f = headroom_factor(headroom_ratio, scan_cfg)
+    pot_f = 1.0
+    dte_f = 1.0
+    pot_v = None
+    if include_structure:
+        from app.core.wheel_sizing import dte_preference, estimate_pot
+        pot_v = pot if pot is not None else estimate_pot(delta)
+        w = float(scan_cfg.get("pot_weight", scan_cfg.get("pop_weight", 0.35)) or 0)
+        pot_f = round(1.0 + w * (0.5 - pot_v), 4)
+        dte_f = dte_preference(dte)
 
     stance_f, stance_flag = stance_assign_risk_factor(side, stance, delta, spot, strike)
-    score = annualized * liq * earn * tr * iv_bonus * delta_f * pop_f * buf_f * head_f * stance_f
+    # headroom 只报告,不乘进分数,避免和扫描层重复加权
+    score = annualized * liq * earn * tr * iv_bonus * delta_f * pop_f * buf_f * stance_f * pot_f * dte_f
     # 稳健分:更重视 POP 与缓冲,年化权重降低
-    robust = (annualized ** 0.5) * (pop_v * 100) * liq * earn * tr * buf_f * head_f * iv_bonus * stance_f
+    robust = (annualized ** 0.5) * (pop_v * 100) * liq * earn * tr * buf_f * iv_bonus * stance_f * pot_f * dte_f
 
     ev = None
     if premium is not None and collateral and collateral > 0:
@@ -328,6 +382,8 @@ def score_contract(
             "pop": round(pop_f, 3),
             "buffer": round(buf_f, 3),
             "headroom": round(head_f, 3),
+            "pot": round(pot_f, 3),
+            "dte_pref": round(dte_f, 3),
             "stance": round(stance_f, 3),
         },
         "stance_flag": stance_flag,

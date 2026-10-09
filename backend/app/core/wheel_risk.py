@@ -1,6 +1,53 @@
 """One post-trade risk calculation for previews and every registration path."""
 import json
+from datetime import date, timedelta
 from app.core.wheel_nav import nav_from_books
+
+
+def expiry_week_violations(nav, equity, week_pct):
+    """同一到期日名义超过权益比例才违规。缺键或 ≤0 表示关闭。"""
+    try:
+        pct = float(week_pct)
+    except (TypeError, ValueError):
+        return []
+    if pct <= 0 or not equity or equity <= 0:
+        return []
+    buckets = {}
+    for row in nav.get("option_rows") or []:
+        exp = str(row.get("expiry") or "")[:10]
+        if not exp:
+            continue
+        try:
+            notional = float(row.get("strike") or 0) * float(row.get("qty") or 0) * float(row.get("contract_size") or 100)
+        except (TypeError, ValueError):
+            continue
+        buckets[exp] = buckets.get(exp, 0.0) + notional
+    out = []
+    for exp, notional in buckets.items():
+        if notional > equity * pct + 0.005:
+            out.append(f"到期周 {exp} 名义 ${notional:.0f} 超权益 {pct * 100:.0f}%")
+    return out
+
+
+def weekly_put_cap_violation(new_puts_this_week, cap):
+    """cap ≤ 0 或缺失时不限制。"""
+    try:
+        limit = float(cap)
+        opened = int(new_puts_this_week or 0)
+    except (TypeError, ValueError):
+        return None
+    if limit <= 0 or opened <= limit:
+        return None
+    return f"本周新开 Put {opened} 已达上限 {limit:g}"
+
+
+def count_weekly_new_puts(conn):
+    start = (date.today() - timedelta(days=6)).isoformat()
+    row = conn.execute(
+        "SELECT COUNT(*) n FROM wheel_trades WHERE trade_type='SELL_PUT' AND traded_at >= ?",
+        (start,),
+    ).fetchone()
+    return int(row["n"] or 0) if row else 0
 
 
 def evaluate_books(nav, targets, config):
@@ -39,6 +86,8 @@ def evaluate_books(nav, targets, config):
         violations.append("持仓估值缺失/过期,须刷新后计划新交易")
     if nav.get("reconciliation_required"):
         violations.append("历史台账需核对")
+    if "max_expiry_week_pct" in pc:
+        violations.extend(expiry_week_violations(nav, equity, pc.get("max_expiry_week_pct")))
     return {"ok": not violations, "violations": violations,
         "assignment_cash_required": round(collateral, 2),
         "assignment_cash_shortfall": round(cash_gap, 2),
@@ -51,6 +100,8 @@ def check_books(conn):
     from app.data.wheel_repository import _enrich_cycle
     row = conn.execute("SELECT value FROM app_kv WHERE key='backend_config'").fetchone()
     config = json.loads(row["value"]) if row and row["value"] else {}
+    from app.core.config import DEFAULT_CONFIG, deep_merge
+    config = deep_merge(DEFAULT_CONFIG, config)
     starting = float((config.get("wheel_portfolio") or {}).get("total_equity", 0) or 0)
     trades = [dict(r) for r in conn.execute("SELECT * FROM wheel_trades")]
     cycles = [_enrich_cycle(dict(r)) for r in conn.execute("SELECT * FROM wheel_cycles")]
@@ -79,6 +130,13 @@ def check_books(conn):
                     marks[it["contract_code"]] = mark
     nav = nav_from_books(starting, trades, cycles, spots=spots, option_marks=marks)
     result = evaluate_books(nav, targets, config)
+    cap_msg = weekly_put_cap_violation(
+        count_weekly_new_puts(conn),
+        (config.get("wheel_portfolio") or {}).get("max_weekly_new_puts"),
+    )
+    if cap_msg:
+        result["violations"].append(cap_msg)
+        result["ok"] = False
     # Per-trade willingness is checked in addition to portfolio capacity.
     for c in cycles:
         target = next((t for t in targets if t["symbol"] == c["symbol"]), {})
@@ -114,7 +172,10 @@ def candidate_risk(nav, opportunity, targets, config):
     sym = opportunity.get('symbol')
     target = next((t for t in targets if t['symbol'] == sym), {})
     side = opportunity.get('side', 'PUT')
-    qty = float(opportunity.get('suggest_qty') or opportunity.get('qty') or 1)
+    raw_qty = opportunity.get('suggest_qty')
+    if raw_qty is None:
+        raw_qty = opportunity.get('qty') if opportunity.get('qty') is not None else 1
+    qty = float(raw_qty)
     size = float(opportunity.get('contract_size') or 100)
     strike = float(opportunity.get('strike') or 0)
     bid = float(opportunity.get('bid') or 0)
@@ -164,3 +225,36 @@ def candidate_risk(nav, opportunity, targets, config):
     result['violations'] += errors
     result['ok'] = not result['violations']
     return result
+
+
+def risk_calibration_hint(nav=None):
+    """压力损失和建议比例。不打开风险预算。"""
+    worst = None
+    equity = None
+    if nav:
+        try:
+            equity = float(nav.get("equity") or 0) or None
+        except (TypeError, ValueError):
+            equity = None
+        try:
+            from app.core.wheel_stress_model import stress_nav
+            stress = stress_nav(nav)
+            if stress.get("ok"):
+                worst = stress.get("worst_loss")
+        except Exception:
+            worst = None
+    suggested = {
+        "max_expiry_week_pct": 0.40,
+        "max_stress_loss_pct": 20.0,
+        "per_trade_loss_pct": 2.0,
+        "max_weekly_new_puts": 0,
+    }
+    if worst is not None and equity:
+        suggested["observed_stress_pct"] = round(float(worst) / equity * 100, 2)
+    return {
+        "enabled": False,
+        "worst_loss": worst,
+        "equity": equity,
+        "suggested": suggested,
+        "note": "建议比例,不自动打开 wheel_risk_budget",
+    }
