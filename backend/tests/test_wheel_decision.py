@@ -573,13 +573,17 @@ def test_call_low_yield_lifts_cover():
     assert r["decision_branch"] == "lift_cover"
 
 
-def test_put_delta_038_prepares_assign():
+def test_put_delta_040_is_tested_roll():
+    """Δ 0.40 且仅约 1% 价内:试探 ITM,先比较 Roll,不直接准备接货。"""
     r = decide_position(
         _item(itm=True, delta=0.40, spot=99, profit_pct=-10.0, dte=20, stance="acquire"),
         15, 50,
     )
-    assert r["deep_itm"]
-    assert r["action_code"] == "PREPARE_ASSIGN"
+    assert not r["deep_itm"]
+    assert r["tested_itm"]
+    assert r["action_code"] == "ROLL"
+    assert r["decision_branch"] == "tested_itm"
+    assert r["prefer_card"] == "roll_out"
 
 
 if __name__ == "__main__":
