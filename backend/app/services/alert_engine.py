@@ -135,6 +135,71 @@ def is_urgent_item(item: Dict[str, Any]) -> bool:
     return False
 
 
+def pnl_bucket(profit_pct: Any) -> str:
+    """浮盈分桶。缺失时固定为 pnl?,避免指纹抖动。"""
+    if profit_pct is None or profit_pct == "":
+        return "pnl?"
+    try:
+        p = float(profit_pct)
+    except (TypeError, ValueError):
+        return "pnl?"
+    if p >= 50:
+        return "pnl50+"
+    if p >= 20:
+        return "pnl20-50"
+    if p >= 0:
+        return "pnl0-20"
+    if p >= -20:
+        return "pnl-20-0"
+    return "pnl<-20"
+
+
+def system_health_alerts(
+    *,
+    opend_ok: Optional[bool] = None,
+    finnhub_ok: Optional[bool] = None,
+    quote_stale: Optional[bool] = None,
+    earnings_unknown: Optional[bool] = None,
+) -> List[Dict[str, str]]:
+    """运行状态告警。调用方传入已知事实,本函数不探测网络。"""
+    alerts: List[Dict[str, str]] = []
+    if opend_ok is False:
+        alerts.append({"code": "opend_down", "level": "error", "message": "OpenD 未连接,行情与期权链不可用"})
+    if quote_stale:
+        alerts.append({"code": "quote_stale", "level": "warn", "message": "持仓报价过期,体检结论可能失真"})
+    if finnhub_ok is False or earnings_unknown:
+        alerts.append({"code": "events_unknown", "level": "warn", "message": "财报或除息未知,不能当成没有事件"})
+    return alerts
+
+
+def expiry_day_checklist(item: Dict[str, Any]) -> List[str]:
+    """到期日人工核对清单。不自动下单。"""
+    dte = item.get("dte")
+    try:
+        due = dte is not None and int(dte) <= 0
+    except (TypeError, ValueError):
+        due = False
+    if not due and not item.get("expiring"):
+        return []
+    steps = [
+        "确认今天是否允许指派或被行权",
+        "核对愿接价 / 愿卖价仍覆盖该 strike",
+        "现金或持股是否够接货、交货",
+    ]
+    if str(item.get("side") or "").upper() == "CALL":
+        steps.append("核对除息与外在价值,避免为股息被提前行权")
+    return steps
+
+
+def recommended_monitoring_overlay() -> Dict[str, Any]:
+    """建议打开的监控预设。不改安装默认(告警间隔仍默认 0=关)。"""
+    return {
+        "wheel_position": {"alert_push_minutes": 15},
+        "wheel_scan": {"auto_push_minutes": 30},
+        "note": "建议值。默认安装仍关闭推送,需在设置页显式采用。",
+    }
+
+
 def position_fingerprint(item: Dict[str, Any]) -> str:
     """状态指纹: 同合约同动作同关键状态 → 去重; DTE 桶变化会重新提醒。"""
     code = item.get("contract_code") or item.get("cycle_id") or "?"
@@ -162,6 +227,7 @@ def position_fingerprint(item: Dict[str, Any]) -> str:
         str(action),
         pri_band,
         dte_bucket(item.get("dte")),
+        pnl_bucket(item.get("profit_pct")),
         ",".join(flags),
     ])
     return "pos:" + hashlib.sha1(raw.encode()).hexdigest()[:16]
