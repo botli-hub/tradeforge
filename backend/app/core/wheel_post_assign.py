@@ -55,6 +55,21 @@ def post_assign_hint(
         notes.append(f"{symbol} 已接货 {shares:g} 股")
     if cb is not None:
         notes.append(f"有效成本基础 ≈ ${cb:.2f}/股(含权利金摊薄)")
+    disposal = None
+    try:
+        from app.core.wheel_sizing import holding_disposal
+        from app.core.volatility import get_daily_closes
+        closes = get_daily_closes(symbol, limit=5)
+        spot = closes[-1] if closes else cycle.get("spot")
+        drop = 8
+        try:
+            from app.core.config import get_effective_config
+            drop = float((get_effective_config().get("wheel_position") or {}).get("holding_drop_pct") or 8)
+        except Exception:
+            drop = 8
+        disposal = holding_disposal(spot, cb, shares, drop)
+    except Exception:
+        disposal = None
     if contracts >= 1:
         notes.append(f"可再挂约 {contracts} 张 Covered Call(参考,非下单)")
     else:
@@ -136,6 +151,7 @@ def post_assign_hint(
         "cc_contracts": contracts,
         "call_anchors": anchors,
         "notes": notes,
+        "holding_disposal": disposal,
         "min_call_strike": timing.get("strike_floor") or anchors.get("suggest_strike_floor") or cb,
     }
     return attach_cc_timing(hint, timing)
