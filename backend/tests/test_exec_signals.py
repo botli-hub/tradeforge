@@ -193,6 +193,7 @@ class TestExecSignals(unittest.TestCase):
                 "contract_code": "US.SPCH261016C00012500",
                 "timeframe": "1d",
                 "ema_type": "EMA200",
+                "ema_value": 0.38,
             }
         )
         self.assertIsNotNone(touch)
@@ -201,6 +202,7 @@ class TestExecSignals(unittest.TestCase):
         self.assertEqual(touch["suggested_limit"], 0.42)
         self.assertEqual(touch["touch_ma"], "EMA200")
         self.assertEqual(touch["touch_timeframe"], "1d")
+        self.assertEqual(touch["touch_ma_value"], 0.38)
 
         opp = maybe_emit_from_opportunity(
             {
@@ -220,6 +222,7 @@ class TestExecSignals(unittest.TestCase):
         self.assertEqual(opp["suggested_limit"], 1.01)
         self.assertIsNone(opp["touch_ma"])
         self.assertIsNone(opp["touch_timeframe"])
+        self.assertIsNone(opp["touch_ma_value"])
         self.assertEqual(len(repo.list_pending()), 2)
 
     def test_http_pending_and_ack(self):
@@ -229,7 +232,7 @@ class TestExecSignals(unittest.TestCase):
         from app.data import exec_signal_repository as repo
 
         row = self._emit_tsll_put(
-            bid=0.99, timeframe="1h", ema_type="EMA200",
+            bid=0.99, timeframe="1h", ema_type="EMA200", ema_value=0.91,
         )
         app = FastAPI()
         app.include_router(router, prefix="/api/wheel")
@@ -244,8 +247,10 @@ class TestExecSignals(unittest.TestCase):
         self.assertEqual(item["suggested_limit"], item["bid"])
         self.assertEqual(item["touch_ma"], "EMA200")
         self.assertEqual(item["touch_timeframe"], "1h")
+        self.assertEqual(item["touch_ma_value"], 0.91)
         self.assertIn("touch_ma", item)
         self.assertIn("touch_timeframe", item)
+        self.assertIn("touch_ma_value", item)
 
         r2 = client.get("/api/wheel/exec-signals/pending", params={"symbols": "TSLL", "side": "Put"})
         self.assertEqual(r2.status_code, 200)
@@ -284,14 +289,17 @@ class TestExecSignals(unittest.TestCase):
                 "contract_code": "US.TSLL261121P00015000",
                 "timeframe": "60m",
                 "ema_type": "ema200",
+                "ema_value": 1.15,
             }
         )
         self.assertIsNotNone(touch)
         self.assertEqual(touch["touch_ma"], "EMA200")
         self.assertEqual(touch["touch_timeframe"], "1h")
+        self.assertEqual(touch["touch_ma_value"], 1.15)
         pending = repo.list_pending(symbols=["TSLL"])
         self.assertEqual(pending[0]["touch_ma"], "EMA200")
         self.assertEqual(pending[0]["touch_timeframe"], "1h")
+        self.assertEqual(pending[0]["touch_ma_value"], 1.15)
 
         suggest = maybe_emit_from_opportunity(
             {
@@ -309,6 +317,7 @@ class TestExecSignals(unittest.TestCase):
         self.assertEqual(suggest["source"], "suggest")
         self.assertIsNone(suggest["touch_ma"])
         self.assertIsNone(suggest["touch_timeframe"])
+        self.assertIsNone(suggest["touch_ma_value"])
 
         score = repo.emit_signal(
             symbol="TSLL",
@@ -323,6 +332,7 @@ class TestExecSignals(unittest.TestCase):
         )
         self.assertIsNone(score["touch_ma"])
         self.assertIsNone(score["touch_timeframe"])
+        self.assertIsNone(score["touch_ma_value"])
 
     def test_normalize_touch_helpers(self):
         from app.data.exec_signal_repository import (
