@@ -42,6 +42,7 @@ def ensure_exec_signal_tables(conn=None) -> None:
                 leaps_signal_id TEXT,
                 touch_ma TEXT,
                 touch_timeframe TEXT,
+                touch_ma_value REAL,
                 meta TEXT,
                 created_at TEXT NOT NULL
             )
@@ -71,6 +72,7 @@ def ensure_exec_signal_tables(conn=None) -> None:
         for ddl in (
             "ALTER TABLE wheel_exec_signals ADD COLUMN touch_ma TEXT",
             "ALTER TABLE wheel_exec_signals ADD COLUMN touch_timeframe TEXT",
+            "ALTER TABLE wheel_exec_signals ADD COLUMN touch_ma_value REAL",
         ):
             try:
                 conn.execute(ddl)
@@ -178,13 +180,20 @@ def row_to_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     src = row.get("source")
     touch_ma = row.get("touch_ma")
     touch_tf = row.get("touch_timeframe")
+    touch_ma_value = row.get("touch_ma_value")
     # 非 touch 源强制 null;旧行缺列时 get 为 None
     if src != "touch":
         touch_ma = None
         touch_tf = None
+        touch_ma_value = None
     else:
         touch_ma = normalize_touch_ma(touch_ma) if touch_ma is not None else None
         touch_tf = normalize_touch_timeframe(touch_tf) if touch_tf is not None else None
+        if touch_ma_value is not None:
+            try:
+                touch_ma_value = float(touch_ma_value)
+            except (TypeError, ValueError):
+                touch_ma_value = None
     return {
         "signal_id": row["signal_id"],
         "symbol": row["symbol"],
@@ -201,6 +210,7 @@ def row_to_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         "quote_asof": row.get("quote_asof"),
         "touch_ma": touch_ma,
         "touch_timeframe": touch_tf,
+        "touch_ma_value": touch_ma_value,
     }
 
 
@@ -220,6 +230,7 @@ def emit_signal(
     leaps_signal_id: Optional[str] = None,
     timeframe: str = "",
     ema_type: str = "",
+    ema_value: Optional[float] = None,
     signal_id: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -245,13 +256,19 @@ def emit_signal(
     bid_f = float(bid) if bid is not None else None
     ask_f = float(ask) if ask is not None else None
     suggested = bid_f  # suggested_limit = bid
-    # 仅 touch 源持久化触线均线/周期;其他源强制 NULL
+    # 仅 touch 源持久化触线均线/周期/均线值;其他源强制 NULL
+    # touch_ma_value = 监控器比对用的合约价 EMA(非正股),与 bid 同单位
     if src == "touch":
         touch_ma = normalize_touch_ma(ema_type)
         touch_tf = normalize_touch_timeframe(timeframe)
+        try:
+            touch_ma_value = float(ema_value) if ema_value is not None else None
+        except (TypeError, ValueError):
+            touch_ma_value = None
     else:
         touch_ma = None
         touch_tf = None
+        touch_ma_value = None
     # 幂等键用规范化后的触线字段
     sid = signal_id or make_signal_id(
         sym, side_n, float(strike), exp, src, day,
@@ -271,13 +288,14 @@ def emit_signal(
             INSERT INTO wheel_exec_signals (
                 signal_id, symbol, side, strike, expiry, suggested_limit,
                 emitted_at, source, qty, contract_code, bid, ask, quote_asof,
-                leaps_signal_id, touch_ma, touch_timeframe, meta, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                leaps_signal_id, touch_ma, touch_timeframe, touch_ma_value,
+                meta, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sid, sym, side_n, float(strike), exp, suggested,
                 now, src, int(qty or 1), contract_code, bid_f, ask_f,
-                quote_asof, leaps_signal_id, touch_ma, touch_tf,
+                quote_asof, leaps_signal_id, touch_ma, touch_tf, touch_ma_value,
                 json.dumps(meta, ensure_ascii=False) if meta else None,
                 _now_iso(),
             ),

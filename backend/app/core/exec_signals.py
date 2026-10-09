@@ -60,6 +60,7 @@ def maybe_emit_from_touch(
             leaps_signal_id=leaps_signal_id,
             timeframe=str(_get(sig, "timeframe") or ""),
             ema_type=str(_get(sig, "ema_type") or ""),
+            ema_value=_get(sig, "ema_value"),
         )
     except Exception as e:
         logger.warning("exec-signal emit from touch failed: %s", e)
@@ -102,4 +103,5 @@ def maybe_emit_from_opportunity(
         qty=1,
         timeframe=str((opp.get("timing") or {}).get("timeframe") or ""),
         ema_type=str((opp.get("timing") or {}).get("ema_type") or ""),
+        ema_value=(opp.get("timing") or {}).get("ema_value") if src == "touch" else None,
     )
