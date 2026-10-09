@@ -58,12 +58,34 @@ def cached_chain(symbol: str, expiry: str, host: str, port: int, force: bool = F
     from app.data.wheel_research_repository import append_event
     data["research_snapshot_id"] = append_event("chain", {
         "expiry": expiry, "spot_price": data.get("spot_price"), "quote_asof": stamp,
-        "contracts": data.get("contracts", []), "source": "futu",
+        "contracts": data.get("contracts", []),
+        "core_contracts": _core_contracts(data.get("contracts") or [], data.get("spot_price")),
+        "source": "futu",
         "coverage": "queried_expiry_only_not_full_historical_universe",
     }, symbol)
     with _CACHE_LOCK:
         _CHAIN_CACHE[key] = (now, data)
     return data
+
+
+def _core_contracts(contracts: List[Dict[str, Any]], spot: Any) -> List[Dict[str, Any]]:
+    """ATM ±20% 的链切片,给决策树重放留一份更小的归档。"""
+    try:
+        px = float(spot) if spot else 0.0
+    except (TypeError, ValueError):
+        px = 0.0
+    if px <= 0:
+        return list(contracts[:40])
+    lo, hi = px * 0.80, px * 1.20
+    core = []
+    for c in contracts:
+        try:
+            strike = float(c.get("strike") or 0)
+        except (TypeError, ValueError):
+            continue
+        if lo <= strike <= hi:
+            core.append(c)
+    return core or list(contracts[:40])
 
 
 def clear_cache():
@@ -203,10 +225,6 @@ def run_scan(host: str = "127.0.0.1", port: int = 11111,
                     adj_score = s.get("score") or 0
                     if exceeds:
                         adj_score *= 0.3
-                    elif headroom is not None and t.get("max_capital"):
-                        # 余量越大略加分(与 score 内 headroom_factor 叠加,扫描层再偏资金效率)
-                        hr = max(0.0, headroom / t["max_capital"])
-                        adj_score *= (1.0 + 0.1 * hr)
                     opportunities.append({
                         "symbol": symbol, "name": t.get("name"), "side": side,
                         "cycle_id": cycle_id,

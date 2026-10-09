@@ -159,9 +159,26 @@ def decide_position(
     if spot > 0 and strike > 0:
         moneyness = (strike - spot) / spot if side == "PUT" else (spot - strike) / spot
     moneyness_pct = moneyness * 100
-    deep_itm = bool(itm and (delta > deep_itm_delta or moneyness_pct > deep_moneyness_pct))
+    assign_delta = float(q.get("assign_delta", 0.50))
+    tested_delta_min = float(q.get("tested_delta_min", 0.38))
+    em_raw = item.get("expected_move_pct")
+    try:
+        em_pct = float(em_raw) if em_raw is not None else None
+    except (TypeError, ValueError):
+        em_pct = None
+    deep_cut_pct = deep_moneyness_pct
+    if str(side or "").upper() == "PUT" and em_pct is not None and em_pct > 0:
+        deep_cut_pct = max(deep_moneyness_pct, em_pct)
+    if str(side or "").upper() == "CALL":
+        deep_itm = bool(itm and (delta > deep_itm_delta_call or moneyness_pct > deep_moneyness_pct))
+        tested_itm = False
+    else:
+        deep_itm = bool(itm and (delta >= assign_delta or moneyness_pct > deep_cut_pct))
+        tested_itm = bool(
+            itm and not deep_itm and tested_delta_min <= delta < assign_delta
+        )
     shallow_itm = bool(
-        itm and not deep_itm
+        itm and not deep_itm and not tested_itm
         and (moneyness_pct <= shallow_itm_pct and delta <= shallow_delta_max)
     )
     early_assign = bool(
@@ -172,6 +189,37 @@ def decide_position(
             or (not itm and div_window and delta >= ea_otm)
         )
     )
+    div_amount = item.get("dividend_amount")
+    try:
+        div_amount_f = float(div_amount) if div_amount is not None else None
+    except (TypeError, ValueError):
+        div_amount_f = None
+    extrinsic_raw = item.get("extrinsic")
+    try:
+        extrinsic_f = float(extrinsic_raw) if extrinsic_raw is not None else None
+    except (TypeError, ValueError):
+        extrinsic_f = None
+    if extrinsic_f is None and close_px and spot and strike:
+        if str(side or "").upper() == "CALL":
+            intrinsic = max(0.0, float(spot) - float(strike))
+        else:
+            intrinsic = max(0.0, float(strike) - float(spot))
+        extrinsic_f = max(0.0, float(close_px) - intrinsic)
+    if (
+        str(side or "").upper() == "CALL"
+        and days_to_div is not None
+        and int(days_to_div) <= 1
+        and div_amount_f is not None
+        and div_amount_f > 0
+        and extrinsic_f is not None
+        and extrinsic_f < div_amount_f
+    ):
+        early_assign = True
+    put_early_assign = False
+    if str(side or "").upper() == "PUT" and strike and delta >= ea_deep:
+        ext_pct = float(q.get("put_early_assign_extrinsic_pct", 0.5))
+        if extrinsic_f is not None and extrinsic_f < ext_pct / 100.0 * float(strike):
+            put_early_assign = True
 
     buffer = otm_buffer_pct(side, float(spot or 0), float(strike or 0))
     thin_otm = bool(not itm and buffer is not None and 0 <= buffer < thin_otm_pct)
@@ -284,6 +332,10 @@ def decide_position(
         reasons.append(
             f"深ITM:Δ{delta:.2f}> {deep_itm_delta:g} 或价内{moneyness_pct:.1f}%> {deep_moneyness_pct:g}%"
         )
+    elif tested_itm:
+        reasons.append(
+            f"试探ITM:Δ{delta:.2f}∈[{tested_delta_min:g},{assign_delta:g}) 且价内未过深"
+        )
     elif shallow_itm:
         reasons.append(
             f"浅ITM:价内{moneyness_pct:.1f}%≤{shallow_itm_pct:g}% 且Δ{delta:.2f}≤{shallow_delta_max:g}"
@@ -299,6 +351,8 @@ def decide_position(
             )
         else:
             reasons.append(f"CC Δ≥{ea_deep:g} 深ITM,提前行权风险↑")
+    if put_early_assign:
+        reasons.append("Put 外在价值过低且 Δ≥0.8,提前行权可能(不改动作)")
     if needs_roll_near:
         reasons.append(f"DTE {dte} ≤ 硬处理窗 {hard_dte} 且未硬止盈")
     if low_yield:
@@ -392,6 +446,19 @@ def decide_position(
         code, priority = ACTION_ROLL_ADJUST, 2
         prefer_card = "adjust_strike"
         hint = "提前行权/除息风险:Roll或平仓"
+    # 3b 试探 ITM:未到接货 Δ,先比较 Roll。临期 ITM 已在上一支处理。
+    elif tested_itm and side == "PUT":
+        if st != STANCE_INCOME and not strike_above_floor:
+            branch = "tested_itm"
+            code, priority = ACTION_ROLL, 2
+            prefer_card = "roll_out"
+            hint = "试探ITM:先比较 Roll 与接货"
+            secondary_hint = "Δ 未到接货门槛,优先看远月权利金"
+        else:
+            branch = "tested_itm_adjust"
+            code, priority = ACTION_ROLL_ADJUST, 1
+            prefer_card = "adjust_strike"
+            hint = "试探ITM且超愿接或不愿接货:Roll 调 strike"
     # 4 效率:吃 θ(压过机械50%止盈)
     elif hold_for_theta:
         branch = "hold_theta"
@@ -635,6 +702,8 @@ def decide_position(
         equity=equity,
         symbol_max_capital=symbol_max_capital,
         symbol_committed=symbol_committed,
+        cash=item.get("cash"),
+        csp_collateral=item.get("csp_collateral"),
     )
     # PREPARE / 深 ITM 时 reasons 挂一条清单摘要
     if assign_checklist and code in (ACTION_PREPARE_ASSIGN, ACTION_ROLL_ADJUST) and (itm or deep_itm):
@@ -691,6 +760,8 @@ def decide_position(
         "iv_rich": bool(hold_meta.get("iv_rich")),
         "needs_roll_near": needs_roll_near,
         "shallow_itm": shallow_itm,
+        "tested_itm": tested_itm,
+        "put_early_assign": put_early_assign,
         "soft_profit_pct": soft_profit,
         "hard_roll_dte": hard_dte,
         "hold_theta_max_dte": hold_theta_max_dte,
@@ -731,7 +802,9 @@ def decide_position(
         "low_yield": low_yield,
         "roll_21dte": roll_21dte,
         "deep_itm": deep_itm,
+        "tested_itm": tested_itm,
         "shallow_itm": shallow_itm,
+        "put_early_assign_risk": put_early_assign,
         "early_assign_risk": early_assign,
         "thin_otm": thin_otm,
         "otm_buffer_pct": buffer,
@@ -752,6 +825,7 @@ def decide_position(
         "model_calibrated": False,
         "confidence_kind": "rule_match_not_probability",
         "prefer_card": prefer_card,
+        "also_compare": ["adjust_strike"] if code == ACTION_PREPARE_ASSIGN else None,
         "decision_branch": branch,
         "quant_thresholds": quant_used,
         "reasons": reasons,
