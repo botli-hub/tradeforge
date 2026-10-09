@@ -40,6 +40,8 @@ def ensure_exec_signal_tables(conn=None) -> None:
                 ask REAL,
                 quote_asof TEXT,
                 leaps_signal_id TEXT,
+                touch_ma TEXT,
+                touch_timeframe TEXT,
                 meta TEXT,
                 created_at TEXT NOT NULL
             )
@@ -65,6 +67,15 @@ def ensure_exec_signal_tables(conn=None) -> None:
             "CREATE INDEX IF NOT EXISTS idx_wheel_exec_acks_status "
             "ON wheel_exec_signal_acks(signal_id, status)"
         )
+        # 兼容 #54 已建库:补触线均线/周期列(旧行保持 NULL)
+        for ddl in (
+            "ALTER TABLE wheel_exec_signals ADD COLUMN touch_ma TEXT",
+            "ALTER TABLE wheel_exec_signals ADD COLUMN touch_timeframe TEXT",
+        ):
+            try:
+                conn.execute(ddl)
+            except Exception:
+                pass
         if owns:
             conn.commit()
     finally:
@@ -93,6 +104,41 @@ def normalize_symbol(symbol: Any) -> str:
 
 def is_allowed_symbol(symbol: Any) -> bool:
     return normalize_symbol(symbol) in ALLOWED_SYMBOLS
+
+
+def normalize_touch_ma(ema_type: Any) -> Optional[str]:
+    """→ EMA50 / EMA200; 无法识别返回 None。"""
+    if ema_type is None:
+        return None
+    u = str(ema_type).strip().upper().replace(" ", "")
+    if not u:
+        return None
+    if u in ("EMA50", "MA50", "50"):
+        return "EMA50"
+    if u in ("EMA200", "MA200", "200"):
+        return "EMA200"
+    if u.startswith("EMA") and u[3:].isdigit():
+        n = u[3:]
+        if n == "50":
+            return "EMA50"
+        if n == "200":
+            return "EMA200"
+    return None
+
+
+def normalize_touch_timeframe(timeframe: Any) -> Optional[str]:
+    """→ 1h / 1d; 无法识别返回 None。"""
+    if timeframe is None:
+        return None
+    s = str(timeframe).strip()
+    if not s:
+        return None
+    low = s.lower()
+    if low in ("1h", "60m", "k_60m", "hour", "hourly"):
+        return "1h"
+    if low in ("1d", "day", "daily", "k_day", "d"):
+        return "1d"
+    return None
 
 
 def make_signal_id(
@@ -129,6 +175,16 @@ def row_to_payload(row: Dict[str, Any]) -> Dict[str, Any]:
     suggested = row.get("suggested_limit")
     if suggested is None and bid is not None:
         suggested = bid
+    src = row.get("source")
+    touch_ma = row.get("touch_ma")
+    touch_tf = row.get("touch_timeframe")
+    # 非 touch 源强制 null;旧行缺列时 get 为 None
+    if src != "touch":
+        touch_ma = None
+        touch_tf = None
+    else:
+        touch_ma = normalize_touch_ma(touch_ma) if touch_ma is not None else None
+        touch_tf = normalize_touch_timeframe(touch_tf) if touch_tf is not None else None
     return {
         "signal_id": row["signal_id"],
         "symbol": row["symbol"],
@@ -137,12 +193,14 @@ def row_to_payload(row: Dict[str, Any]) -> Dict[str, Any]:
         "expiry": (str(row.get("expiry") or "")[:10] or None),
         "suggested_limit": suggested,
         "emitted_at": row.get("emitted_at"),
-        "source": row.get("source"),
+        "source": src,
         "qty": int(row.get("qty") or 1),
         "contract_code": row.get("contract_code"),
         "bid": bid,
         "ask": row.get("ask"),
         "quote_asof": row.get("quote_asof"),
+        "touch_ma": touch_ma,
+        "touch_timeframe": touch_tf,
     }
 
 
@@ -184,14 +242,23 @@ def emit_signal(
         src = src or "touch"
     now = emitted_at or _now_iso()
     day = str(now)[:10] or date.today().isoformat()
-    sid = signal_id or make_signal_id(
-        sym, side_n, float(strike), exp, src, day,
-        timeframe=timeframe, ema_type=ema_type,
-        contract_code=contract_code or "",
-    )
     bid_f = float(bid) if bid is not None else None
     ask_f = float(ask) if ask is not None else None
     suggested = bid_f  # suggested_limit = bid
+    # 仅 touch 源持久化触线均线/周期;其他源强制 NULL
+    if src == "touch":
+        touch_ma = normalize_touch_ma(ema_type)
+        touch_tf = normalize_touch_timeframe(timeframe)
+    else:
+        touch_ma = None
+        touch_tf = None
+    # 幂等键用规范化后的触线字段
+    sid = signal_id or make_signal_id(
+        sym, side_n, float(strike), exp, src, day,
+        timeframe=touch_tf or "",
+        ema_type=touch_ma or "",
+        contract_code=contract_code or "",
+    )
     conn = get_db()
     try:
         existing = conn.execute(
@@ -204,13 +271,13 @@ def emit_signal(
             INSERT INTO wheel_exec_signals (
                 signal_id, symbol, side, strike, expiry, suggested_limit,
                 emitted_at, source, qty, contract_code, bid, ask, quote_asof,
-                leaps_signal_id, meta, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                leaps_signal_id, touch_ma, touch_timeframe, meta, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sid, sym, side_n, float(strike), exp, suggested,
                 now, src, int(qty or 1), contract_code, bid_f, ask_f,
-                quote_asof, leaps_signal_id,
+                quote_asof, leaps_signal_id, touch_ma, touch_tf,
                 json.dumps(meta, ensure_ascii=False) if meta else None,
                 _now_iso(),
             ),
