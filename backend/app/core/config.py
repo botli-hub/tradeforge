@@ -90,6 +90,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "call_1h_ema_types": ["EMA200"],
         # 标的级并行扫描 workers(默认 4,硬顶 8);1=串行。OpenD 全局限频仍 ~3.2s。
         "scan_max_workers": 4,
+        # 推送/触线的 IVR 门槛;timing_signal_mode=ema 时不改现有触线
+        "push_min_iv_rank": 50,
+        "timing_signal_mode": "ema",  # ema | iv_rank
+        "call_max_uncovered_days": 5,
     },
     "wheel_position": {
         "profit_target_pct": 50, "margin_ratio": 0.25,
@@ -120,6 +124,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "event_dispose_enabled": True,
         "event_window_days": 7,   # T-7 进入窗口(含事件当日)
         "event_urgent_days": 2,   # T-2 加急(含事件当日)
+        # Put 深 ITM(准备接货)Δ;0.38–0.50 为试探 ITM,先比较 Roll
+        "assign_delta": 0.50,
+        # 0=在场愿接价冻结在入场,不因现价下跌自动收紧
+        "floor_reprice_pct": 0,
+        "put_early_assign_extrinsic_pct": 0.5,
+        "holding_drop_pct": 8,
+    },
+    "wheel_fees": {
+        "per_contract": 0.65,
+        "per_order_min": 0,
+        "assignment_fee": 0,
+        "regulatory_pct": 0,
+    },
+    "wheel_roll": {
+        "roll_require_credit": True,
+        "roll_max_debit_pct": 0.25,
+        "roll_max_count": 4,
     },
     # 推送策略(通知中心);与 wheel_position.notify_mode / alert_push 互补
     "wheel_alerts": {
@@ -158,12 +179,26 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "log_suggestions": True,
         # 机会流同标的同方向最多条数(旧默认 5 会挤掉好 strike)
         "opp_max_per_symbol_side": 10,
+        "opportunity_min_score": 0,
+        "iv_low_threshold": 25,
+        "skew_penalty_threshold": 8,
+        "skew_delta_min": 0.22,
+        "skew_score_mult": 0.9,
+        "pot_weight": 0.35,
+        "buffer_sigma_min": 1.0,
     },
     "wheel_portfolio": {
         "total_equity": 0,  # 起始现金;0=用 max_capital 之和.权益=现金+持股市值+期权盯市
         "max_portfolio_pct": 0.80,
         "max_symbol_pct": 0.25,
         "high_corr_threshold": 0.70,
+        "cash_reserve": 0,
+        "fee_per_contract": 0.65,
+        "max_sector_pct": 0.5,
+        "sector_by_symbol": {},
+        # 缺键=关闭。check_books 合并默认后,同一到期周名义不超过权益的 40%
+        "max_expiry_week_pct": 0.40,
+        "max_weekly_new_puts": 0,  # 0=不限制本周新开 Put
     },
     "wheel_profiles": {
         "active": "balanced",

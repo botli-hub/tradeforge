@@ -49,6 +49,7 @@ def call_timing_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float]:
         "acquire_cushion_pct": _f("call_acquire_cushion_pct", DEFAULT_ACQUIRE_CUSHION_PCT),
         "iv_lift_rank": _f("call_iv_lift_min_rank", DEFAULT_IV_LIFT_RANK),
         "max_spread_pct": _f("call_max_spread_pct", DEFAULT_MAX_SPREAD_PCT),
+        "max_uncovered_days": _f("call_max_uncovered_days", 5),
     }
 
 
@@ -271,10 +272,22 @@ def evaluate_cc_timing(
     hint = "待触线(1h EMA)"
     tag = "待触线"
 
+    bare_days = None
+    try:
+        if uncovered_days is not None:
+            bare_days = int(uncovered_days)
+    except (TypeError, ValueError):
+        bare_days = None
+    max_bare = int(tc.get("max_uncovered_days") or 5)
     if not touched:
         if st == STANCE_INCOME:
             hint = "只收租·等待 1h 触线"
             reasons.append("只收租:发现仍走触线,不因持股就挂")
+        elif bare_days is not None and bare_days >= max_bare:
+            grade = GRADE_READY
+            hint = f"允许接货·已裸奔{bare_days}天,可找 Call"
+            tag = "裸奔可挂"
+            reasons.append(f"未覆盖≥{max_bare}天,不强制等 1h 触线")
         else:
             hint = "允许接货·等待 1h 触线"
     else:
