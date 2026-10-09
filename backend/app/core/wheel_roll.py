@@ -74,6 +74,38 @@ def spread_pct(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
 
 # ── 决策树 ────────────────────────────────────────────────────────────────────
 
+def resolve_roll_leg(cycle: Dict[str, Any], close_contract_code: Optional[str] = None) -> Dict[str, Any]:
+    """Roll 台用的在场腿。
+
+    缺省用周期 open_* 主腿。传入 close_contract_code 时按登记接口同一规则
+    (代码去掉一个 US. 前缀)选中非主腿 CC。找不到则仍回主腿。
+    """
+    if not cycle:
+        return {}
+    code = str(close_contract_code or "").strip()
+    if not code:
+        return dict(cycle)
+    from app.core.wheel_cc_legs import expand_open_option_rows
+
+    norm = code.removeprefix("US.")
+    matched = [
+        r for r in expand_open_option_rows([cycle])
+        if (r.get("open_contract_code") or "").removeprefix("US.") == norm
+    ]
+    if len(matched) == 1:
+        return matched[0]
+    return dict(cycle)
+
+
+def _as_int(v: Any) -> Optional[int]:
+    if v is None or v == "":
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def decide_roll_scenario(
     *,
     side: str,
@@ -88,41 +120,160 @@ def decide_roll_scenario(
     hard_roll_dte: int = 21,
     close_notional: float = 0.0,
     pos_cfg: Optional[Dict[str, Any]] = None,
+    strike: Optional[float] = None,
+    spot: Optional[float] = None,
+    floor_price: Optional[float] = None,
+    stance: Optional[str] = None,
+    cost_basis: Optional[float] = None,
+    share_cost: Optional[float] = None,
+    sell_above: Optional[float] = None,
+    open_price: Optional[float] = None,
+    buyback_ask: Optional[float] = None,
+    current_price: Optional[float] = None,
+    qty: Optional[float] = None,
+    contract_size: Optional[float] = None,
+    cycle_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """返回 recommended_action + reason + priority 场景键。
+    """Roll 场景跟持仓树的 action_code,不再单独判深 ITM。
 
-    与 wheel_decision.eval_hold_for_theta 对齐,避免「持仓说吃θ、Roll 台说止盈」。
+    PREPARE_ASSIGN 不推荐调 strike。只收租或 strike 高于愿接价时,
+    树给出的 roll/close 才推荐调 strike。剩余年化用树的 capital_employed。
+    deep_itm / remaining_ann 参数保留给旧调用方,动作以树为准。
     """
-    from app.core.wheel_decision import eval_hold_for_theta
+    del deep_itm, remaining_ann, close_notional  # 树自己算,避免第二套门槛
+    from app.core.wheel_decision import decide_position
 
-    profit_hit = profit_pct is not None and profit_pct >= profit_target
-    low_yield = bool(
-        not itm and remaining_ann is not None and min_annualized > 0
-        and remaining_ann < min_annualized
+    cfg = dict(pos_cfg or {})
+    if "hard_roll_dte" not in cfg and hard_roll_dte is not None:
+        cfg["hard_roll_dte"] = hard_roll_dte
+    dte_i = _as_int(dte)
+    item: Dict[str, Any] = {
+        "side": side,
+        "strike": strike if strike is not None else 0,
+        "spot": spot,
+        "dte": dte_i,
+        "buyback_ask": buyback_ask,
+        "current_price": current_price if current_price is not None else buyback_ask,
+        "open_price": open_price,
+        "profit_pct": profit_pct,
+        "itm": bool(itm),
+        "delta": delta,
+        "qty": qty if qty is not None else 1,
+        "contract_size": contract_size if contract_size is not None else 100,
+        "floor_price": floor_price,
+        "stance": stance,
+        "cost_basis": cost_basis,
+        "share_cost": share_cost,
+        "sell_above": sell_above,
+    }
+    if cycle_id:
+        item["cycle_id"] = cycle_id
+    pos = decide_position(
+        item,
+        float(min_annualized or 0),
+        float(profit_target if profit_target is not None else 50),
+        cfg or None,
     )
-    near_dte = dte is not None and dte <= hard_roll_dte
-    expiring = dte is not None and dte <= 7
-    hold_meta = eval_hold_for_theta(
-        itm=itm,
-        deep_itm=deep_itm,
+    return _scenario_from_position(
+        pos,
+        side=side,
         profit_pct=profit_pct,
-        dte=dte,
-        remaining_ann=remaining_ann,
-        close_notional=close_notional,
-        min_annualized=min_annualized,
-        pos_cfg=pos_cfg,
+        profit_target=float(profit_target if profit_target is not None else 50),
+        dte=dte_i,
+        hard_roll_dte=int(cfg.get("hard_roll_dte") or hard_roll_dte or 21),
     )
-    hold_theta = hold_meta["hold_for_theta"]
-    residual_ok = hold_meta["residual_worth_keeping"]
 
-    # 与持仓树一致:可吃 θ 时优先放任/持有,而非止盈
-    if hold_theta:
+
+def _income_stance(stance: Any) -> bool:
+    return str(stance or "").strip().lower() in ("income", "只收租", "rent", "premium")
+
+
+def _offer_strike_adjust(pos: Dict[str, Any], code: str, income: bool, above: bool) -> bool:
+    """树说 roll/close,且原因是只收租或超愿接 → 调 strike。PREPARE_ASSIGN 永不。"""
+    if code == "PREPARE_ASSIGN":
+        return False
+    if code == "ROLL_ADJUST":
+        return True
+    if code not in ("ROLL", "CLOSE", "REPLACE"):
+        return False
+    if above:
+        return True
+    if not income:
+        return False
+    branch = str(pos.get("decision_branch") or "")
+    return bool(
+        pos.get("deep_itm")
+        or branch in ("income_assign_warn", "deep_itm", "deep_itm_above_floor")
+    )
+
+
+def _scenario_from_position(
+    pos: Dict[str, Any],
+    *,
+    side: str,
+    profit_pct: Optional[float],
+    profit_target: float,
+    dte: Optional[int],
+    hard_roll_dte: int,
+) -> Dict[str, Any]:
+    code = str(pos.get("action_code") or "NONE").upper()
+    branch = str(pos.get("decision_branch") or "")
+    tree = pos.get("decision_tree") or {}
+    stance = pos.get("stance") or tree.get("stance")
+    income = _income_stance(stance)
+    above = bool(pos.get("strike_above_floor"))
+    hint = pos.get("action_hint") or ""
+    rem = pos.get("remaining_annualized")
+    side_u = str(side or "").upper()
+    common = {
+        "position_action": code,
+        "decision_branch": branch,
+        "remaining_annualized": rem,
+        "capital_employed": tree.get("capital_employed"),
+        "deep_itm": bool(pos.get("deep_itm")),
+    }
+    if code == "PREPARE_ASSIGN":
+        label = "接货" if side_u == "PUT" else "交货"
         return {
+            **common,
+            "scenario": "prepare_assign",
+            "recommended_action": "let_expire",
+            "headline": hint or f"准备{label}(轮子成功路径),不优先调 strike",
+            "detail": (
+                f"持仓决策是准备{label}。不推荐调 strike 的 Roll;"
+                "不愿按此 strike 成交再考虑买回。"
+            ),
+            "prefer_card": "no_roll",
+        }
+    if _offer_strike_adjust(pos, code, income, above):
+        adj = "out_and_up" if side_u == "CALL" else "out_and_down"
+        why = []
+        if income:
+            why.append("只收租")
+        if above:
+            why.append("strike 高于愿接价")
+        why_s = "、".join(why) if why else "持仓决策"
+        return {
+            **common,
+            "scenario": "deep_itm" if pos.get("deep_itm") else "roll_adjust",
+            "recommended_action": "roll_adjust",
+            "headline": hint or f"{why_s}:优先评估调 strike 的 Roll",
+            "detail": (
+                f"{why_s},接货不是这条腿的成功路径。"
+                "Call 看能否 credit roll up;Put 看能否 credit roll down。"
+                "大额 debit 防守通常不如买回"
+            ),
+            "prefer_card": "adjust_strike",
+            "prefer_branch": adj,
+        }
+    if code == "HOLD_THETA":
+        return {
+            **common,
             "scenario": "hold_theta",
             "recommended_action": "let_expire",
-            "headline": (
+            "headline": hint or (
                 f"OTM 高浮盈,优先吃 θ(浮盈 {profit_pct}%"
-                + (f",剩余年化 {remaining_ann}%" if remaining_ann is not None else "")
+                + (f",剩余年化 {rem}%" if rem is not None else "")
                 + ")"
             ),
             "detail": (
@@ -131,63 +282,46 @@ def decide_roll_scenario(
             ),
             "prefer_card": "no_roll",
         }
-    if profit_hit:
+    if code == "CLOSE":
         detail = (
             "结束 Call 义务、保留持股,不必为 credit 硬 roll"
-            if side == "CALL"
+            if side_u == "CALL"
             else "释放担保金再开新轮,不必为 credit 硬 roll"
         )
+        shown = profit_pct
         return {
+            **common,
             "scenario": "take_profit",
             "recommended_action": "close_now",
-            "headline": f"建议止盈平仓(浮盈 {profit_pct}% ≥ 目标 {profit_target}%)",
+            "headline": hint or f"建议止盈平仓(浮盈 {shown}% ≥ 目标 {profit_target:g}%)",
             "detail": detail,
             "prefer_card": "no_roll",
         }
-    if deep_itm or (itm and (delta >= 0.5 or expiring)):
-        adj = "out_and_up" if side == "CALL" else "out_and_down"
+    if code == "ROLL":
         return {
-            "scenario": "deep_itm",
-            "recommended_action": "roll_adjust",
-            "headline": "深度/临期 ITM:优先评估调 strike 的 Roll,其次认行权",
-            "detail": (
-                "Call 看能否 credit roll up;Put 看能否 credit roll down。"
-                "大额 debit 防守通常不如接货/交货或止损买回"
-            ),
-            "prefer_card": "adjust_strike",
-            "prefer_branch": adj,
-        }
-    # 临近到期:仅 ITM / 低效 / 剩余年化不体面时强推 roll
-    if near_dte and not profit_hit and (itm or low_yield or not residual_ok):
-        return {
+            **common,
             "scenario": "roll_21dte",
             "recommended_action": "roll_out",
-            "headline": f"DTE {dte} ≤ {hard_roll_dte} 且未达止盈 → 优先 Roll out",
+            "headline": hint or f"DTE {dte} ≤ {hard_roll_dte} 且未达止盈 → 优先 Roll out",
             "detail": "同 strike(或合规 strike)换到 30–45 DTE、目标 δ,尽量 for credit",
             "prefer_card": "roll_out",
         }
-    if near_dte and not profit_hit and residual_ok and not itm:
+    if code == "REPLACE":
         return {
-            "scenario": "hold_or_monitor",
-            "recommended_action": "hold",
-            "headline": f"DTE {dte} 偏短但 OTM 且剩余年化尚可,可继续持有",
-            "detail": "无需为 21DTE 机械 roll;临近 7DTE 或转 ITM 再处理",
-            "prefer_card": "no_roll",
-        }
-    if low_yield:
-        return {
+            **common,
             "scenario": "low_yield",
             "recommended_action": "close_or_roll",
-            "headline": f"剩余年化偏低({remaining_ann}%),仓位低效",
+            "headline": hint or f"剩余年化偏低({rem}%),仓位低效",
             "detail": (
-                "优先平仓后再卖 CC" if side == "CALL" else "优先平仓换仓"
+                "优先平仓后再卖 CC" if side_u == "CALL" else "优先平仓换仓"
             ) + ";若 roll for credit 效率尚可,选 $/天 更高者",
             "prefer_card": "no_roll",
         }
     return {
+        **common,
         "scenario": "hold_or_monitor",
         "recommended_action": "hold",
-        "headline": "仓位尚健康,可继续持有观察",
+        "headline": hint or "仓位尚健康,可继续持有观察",
         "detail": "无需强行 roll;有更好 credit/效率机会时再换",
         "prefer_card": "no_roll",
     }

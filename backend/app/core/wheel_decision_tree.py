@@ -349,7 +349,7 @@ def decide_position(
         if side == "PUT" and st != STANCE_INCOME and not strike_above_floor:
             branch = "deep_itm_acquire"
             code, priority = ACTION_PREPARE_ASSIGN, 1
-            prefer_card = "adjust_strike"
+            prefer_card = "no_roll"
             hint = "深ITM·准备接货(轮子成功路径)"
             secondary_hint = "不愿按此 strike 接:才 Roll 调低"
             reasons.append("允许接货:深ITM Put 视为接货窗口,不默认 Roll")
@@ -361,7 +361,7 @@ def decide_position(
         elif side == "CALL" and _call_ok_to_deliver(item, float(strike or 0)):
             branch = "deep_itm_call_deliver"
             code, priority = ACTION_PREPARE_ASSIGN, 1
-            prefer_card = "adjust_strike"
+            prefer_card = "no_roll"
             hint = "深ITM Call·已在愿卖/成本之上,准备交货"
             secondary_hint = "想继续持股:Roll 调高 strike"
         elif side == "CALL":
@@ -378,7 +378,7 @@ def decide_position(
     elif itm and expiring:
         branch = "prepare_assign"
         code, priority = ACTION_PREPARE_ASSIGN, 1
-        prefer_card = "adjust_strike"
+        prefer_card = "no_roll"
         hint = (
             f"临期ITM(DTE≤{gamma_dte}):准备接货"
             if side == "PUT" and st != STANCE_INCOME

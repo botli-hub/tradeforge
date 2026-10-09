@@ -748,7 +748,7 @@ function buildOppRows(
     ann_per_delta: null as number | null,
     covers_earnings: false,
   }
-  // 一 cycle 仅一张管理卡:完全由后端 action_code 驱动
+  // 每条在场腿一张管理卡(含非主腿 CC),动作跟后端 action_code
   for (const item of openCheckItems(openChecks)) {
     const code = (item.action_code || '').toUpperCase()
     if (!code || code === 'NONE') {
@@ -790,8 +790,9 @@ function buildOppRows(
       }
     }
     const prio = item.action_priority ?? 9
+    const legId = item.cc_leg_key || item.contract_code || `${item.strike}-${item.expiry}`
     manage.push({
-      id: `pos-${item.cycle_id}`,
+      id: `pos-${item.cycle_id}-${legId}`,
       kind: 'MANAGE',
       categories: [cat],
       strength: 'MANAGE',
@@ -1714,12 +1715,14 @@ export default function WheelPage() {
     await Promise.all([unifiedPromise, pushPromise, timingPromise])
   }
 
-  async function handleRoll(cycleId: string, preferCard?: string | null) {
+  async function handleRoll(cycleId: string, preferCard?: string | null, closeContractCode?: string | null) {
     setRollLoading(true)
     setError(null)
     try {
       const st = getAppSettings()
-      const data = await getWheelRollOptions(cycleId, st.marketHost, st.marketPort)
+      const data = await getWheelRollOptions(cycleId, st.marketHost, st.marketPort, {
+        close_contract_code: closeContractCode || undefined,
+      })
       // 决策树 prefer_card 优先于 API highlighted
       if (preferCard) {
         setRollData({
@@ -2068,7 +2071,12 @@ export default function WheelPage() {
       if (code === 'ROLL' || code === 'ROLL_ADJUST' || code === 'PREPARE_ASSIGN'
         || row.categories.includes('ROLL')) {
         if (row.check) setManageCompare(row.check)
-        if (row.cycle_id) handleRoll(row.cycle_id, row.prefer_card || row.check?.prefer_card)
+        if (row.cycle_id) {
+          const pref = code === 'PREPARE_ASSIGN'
+            ? 'no_roll'
+            : (row.prefer_card || row.check?.prefer_card)
+          handleRoll(row.cycle_id, pref, row.contract_code || row.check?.contract_code)
+        }
         return
       }
       // 平仓/换仓/止盈:一律先决策弹窗(与轮子列表一致)
@@ -4532,9 +4540,11 @@ export default function WheelPage() {
           }}
           onRoll={() => {
             const id = manageCompare.cycle_id
-            const pref = manageCompare.prefer_card
+            const code = (manageCompare.action_code || '').toUpperCase()
+            const pref = code === 'PREPARE_ASSIGN' ? 'no_roll' : manageCompare.prefer_card
+            const closeCode = manageCompare.contract_code
             setManageCompare(null)
-            if (id) handleRoll(id, pref)
+            if (id) handleRoll(id, pref, closeCode)
           }}
           onGoOpps={() => {
             setManageCompare(null)
