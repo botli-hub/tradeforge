@@ -1,7 +1,7 @@
 """动态 floor / 卖 Call strike 建议
 
-愿接价 = 推荐价(市场结构 suggest)。不再保留独立可手改 floor。
-DB 列 floor_price 仅作推荐价缓存;手写会被同步覆盖。
+默认同步推荐愿接价。floor_mode=manual 时保留手写价,不再覆盖。
+在场 Put 的决策愿接价由入场快照冻结,新开仓仍用当前推荐价。
 """
 from typing import Any, Dict, List, Optional
 
@@ -131,6 +131,7 @@ def apply_willing_floor(
     symbol = (target.get("symbol") or "").strip().upper()
     if not symbol:
         return target
+    mode = str(target.get("floor_mode") or "recommend").strip().lower()
     cached = target.get("floor_price")
     try:
         cached_f = float(cached) if cached is not None else None
@@ -160,6 +161,9 @@ def apply_willing_floor(
     target["suggested_floor"] = willing
     target["suggested_floor_delta"] = 0.0 if willing is not None else None
     target["suggested_floor_note"] = sug.get("rationale") or sug.get("message")
+    target["floor_mode"] = "manual" if mode == "manual" else "recommend"
+    if mode == "manual":
+        return target
     if willing is not None:
         old = cached_f
         target["floor_price"] = willing

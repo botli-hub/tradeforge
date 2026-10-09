@@ -23,7 +23,12 @@ POSITION_QUANT: Dict[str, float] = {
     "gamma_warn_dte": 7.0,              # 临期/gamma
     "shallow_itm_pct": 1.5,             # 浅 ITM 价内%
     "deep_itm_moneyness_pct": 3.0,      # 深 ITM 价内%
-    "deep_itm_delta": 0.38,             # PUT 深 ITM Δ(允许接货时=更早准备接货)
+    "deep_itm_delta": 0.38,             # Put 试探 ITM 下沿;深 ITM 改看 assign_delta
+    "assign_delta": 0.50,               # Put Δ≥此值(或价内超过阈值)才准备接货
+    "tested_delta_min": 0.38,           # 试探 ITM 下沿,低于此值仍按浅 ITM
+    "floor_reprice_pct": 0.0,           # 0=在场愿接价不随现价收紧
+    "put_early_assign_extrinsic_pct": 0.5,
+    "holding_drop_pct": 8.0,
     "deep_itm_delta_call": 0.35,        # CALL 更早管,低于愿卖/成本则防守
     "shallow_itm_delta_max": 0.55,
     "thin_otm_buffer_pct": 1.5,         # 薄 OTM 垫%
@@ -66,6 +71,8 @@ def merge_pos_quant(pos_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, float
                 "deep_itm_moneyness_pct", "capital_tight_util_pct",
                 "dividend_warn_days", "threat_otm_buffer_pct",
                 "deep_itm_delta", "shallow_itm_delta_max",
+                "assign_delta", "tested_delta_min", "floor_reprice_pct",
+                "put_early_assign_extrinsic_pct", "holding_drop_pct",
                 "deep_itm_delta_call", "fast_profit_days",
                 "iv_low_rank", "iv_high_rank", "wide_spread_pct",
                 "early_assign_delta_deep", "early_assign_delta_div",
@@ -372,6 +379,8 @@ def build_assign_checklist(
     equity: Optional[float] = None,
     symbol_max_capital: Optional[float] = None,
     symbol_committed: Optional[float] = None,
+    cash: Optional[float] = None,
+    csp_collateral: Optional[float] = None,
 ) -> Optional[Dict[str, Any]]:
     """接货/交货清单骨架。CSP 强调担保已覆盖,不恐吓「再付全额现金」。"""
     need = bool(itm or deep_itm or expiring or early_assign)
@@ -393,6 +402,13 @@ def build_assign_checklist(
         notes.append("CSP 现金担保通常已覆盖行权名义:指派多为担保变正股,一般不必再掏同等现金")
         next_step = "接货后可按成本基础/现价扫描 Covered Call(Call 用成本底线,不用 floor)"
         collateral_covers = True
+        if cash is not None and csp_collateral is not None:
+            try:
+                collateral_covers = float(cash) >= float(csp_collateral)
+            except (TypeError, ValueError):
+                collateral_covers = True
+            if not collateral_covers:
+                notes.append("账户现金低于 CSP 担保,接货现金可能不够")
     else:
         floor_ok = None
         collateral_covers = None  # CC 不占 CSP 担保

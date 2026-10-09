@@ -192,15 +192,49 @@ def draft_from_manage(
     }
 
 
+def _draft_fee(opp: Dict[str, Any], qty: float) -> float:
+    """用户没填费用时写入估算手续费,不把 0 当成已确认的零费用。"""
+    try:
+        given = float(opp.get("fee") or 0)
+    except (TypeError, ValueError):
+        given = 0.0
+    if given > 0:
+        return given
+    per = 0.65
+    try:
+        from app.core.config import get_effective_config
+        fees = get_effective_config().get("wheel_fees") or {}
+        per = float(fees.get("per_contract") or 0.65)
+    except Exception:
+        per = 0.65
+    return round(max(0.0, per) * max(qty, 0), 2)
+
+
 def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) -> Dict[str, Any]:
     """开仓机会 → 卖 Put/Call 草稿。"""
     side = (opp.get("side") or "PUT").upper()
     tt = "SELL_PUT" if side == "PUT" else "SELL_CALL"
     symbol = opp.get("symbol")
-    q = qty if qty is not None else float(opp.get("suggest_qty") or opp.get("qty") or 1)
-    if q < 1:
+    explicit_qty = opp.get("suggest_qty")
+    if qty is not None:
+        q = float(qty)
+    elif explicit_qty is not None:
+        q = float(explicit_qty)
+    else:
+        q = float(opp.get("qty") or 1)
+    if q < 1 and qty is None and explicit_qty is None:
         q = 1
     px = opp.get("bid") or 0
+    reference = opp.get("reference_price")
+    if not reference:
+        ask = opp.get("ask")
+        if px and ask:
+            try:
+                reference = round((float(px) + float(ask)) / 2, 2)
+            except (TypeError, ValueError):
+                reference = px
+        else:
+            reference = px
     from app.core.wheel_quotes import executable_quote
     requires_fill_price = not executable_quote(opp)
     steps = [{
@@ -213,7 +247,8 @@ def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) 
         "expiry": opp.get("expiry"),
         "qty": q,
         "price": float(px or 0),
-        "fee": 0,
+        "reference_price": reference,
+        "fee": _draft_fee(opp, q),
         "contract_size": int(opp.get("contract_size") or 100),
         "note": f"一键开仓·score={opp.get('score')}",
         "entry_score": opp.get("score"),
@@ -223,6 +258,8 @@ def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) 
         notes.append("⚠ 存续覆盖财报")
     if opp.get("exceeds_capital"):
         notes.append("⚠ 可能超资金上限")
+    if explicit_qty is not None and float(explicit_qty) <= 0:
+        notes.append("⚠ 额度用尽,建议张数为 0")
     if opp.get("high_corr_warn"):
         notes.append(f"⚠ 高相关: {opp.get('high_corr_warn')}")
     if requires_fill_price:
@@ -319,6 +356,46 @@ def register_roll_draft(body):
     if side == "PUT" and (close["qty"] < leg["open_qty"] or c.get("shares", 0) > 0):
         opening.update(cycle_id=None, new_cycle=True)
     from app.core.wheel_research_analytics import roll_review
+    from app.core.wheel_roll import validate_roll_economics
     analysis = roll_review(leg.get("open_price"), close, opening)
+    roll_cfg = {}
+    floor = None
+    call_floor = None
+    prior = 0
+    try:
+        from app.core.config import get_effective_config
+        roll_cfg = (get_effective_config().get("wheel_roll") or {})
+    except Exception:
+        roll_cfg = {}
+    try:
+        tgt = repo.get_target(c["symbol"]) or {}
+        if tgt.get("floor_price"):
+            floor = float(tgt["floor_price"])
+        for v in (tgt.get("sell_above"), c.get("cost_basis"), c.get("share_cost")):
+            if v:
+                call_floor = float(v)
+                break
+    except Exception:
+        floor = None
+    try:
+        prior = sum(
+            1 for t in repo.get_trades(cycle_id=c["id"], limit=200)
+            if t.get("is_roll") or "Roll" in str(t.get("note") or "")
+        )
+    except Exception:
+        prior = 0
+    err = validate_roll_economics(
+        side=side,
+        buyback=float(body["buyback_price"]),
+        sell=float(body["sell_price"]),
+        original_credit=float(leg.get("open_price") or 0),
+        new_strike=float(body["sell_strike"]),
+        floor_price=floor if side == "PUT" else None,
+        call_floor=call_floor if side == "CALL" else None,
+        prior_roll_count=prior,
+        cfg=roll_cfg,
+    )
+    if err:
+        raise repo.WheelError(err)
     return repo.record_trades([close, opening], execution_id=execution_id,
         mode=body.get("mode", "recorded"), request_context={"roll_request": request, "roll_analysis": analysis})
