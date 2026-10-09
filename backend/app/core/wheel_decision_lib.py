@@ -452,5 +452,3 @@ def build_assign_checklist(
         "qty": qty,
         "contract_size": size,
     }
-
-
