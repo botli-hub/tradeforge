@@ -21,10 +21,53 @@ def _mid(bid: float, ask: float) -> float:
 
 
 def _tick(price: float) -> float:
-    """美股期权常见最小跳动粗估。"""
-    if price < 3:
-        return 0.01
-    return 0.05
+    """美股期权跳动。$3 以下 $0.05,$3 及以上非便士 $0.10。"""
+    from app.core.wheel_sizing import option_tick
+    return option_tick(price)
+
+
+def _open_ladder(bid: float, ask: float):
+    from app.core.wheel_sizing import limit_ladder
+    return limit_ladder(bid, ask)
+
+
+def validate_roll_economics(
+    *,
+    side: str,
+    buyback: float,
+    sell: float,
+    original_credit: float = 0,
+    new_strike: float = 0,
+    floor_price: Optional[float] = None,
+    call_floor: Optional[float] = None,
+    prior_roll_count: int = 0,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """返回错误文案;None 表示允许。没有愿接价时跳过 strike 底线。"""
+    c = cfg or {}
+    require = bool(c.get("roll_require_credit", True))
+    try:
+        max_debit_pct = float(c.get("roll_max_debit_pct", 0.25) or 0)
+    except (TypeError, ValueError):
+        max_debit_pct = 0.25
+    try:
+        max_count = int(c.get("roll_max_count", 4) or 4)
+    except (TypeError, ValueError):
+        max_count = 4
+    net = float(sell) - float(buyback)
+    if require and net < -1e-9:
+        cap = max(0.0, float(original_credit or 0) * max_debit_pct)
+        if -net > cap + 1e-9:
+            return f"Roll 净借记 {-net:.2f} 超过原权利金的 {max_debit_pct:.0%}"
+    if prior_roll_count >= max_count:
+        return f"已 Roll {prior_roll_count} 次,达到上限 {max_count}"
+    if str(side or "").upper() == "PUT" and floor_price is not None and float(floor_price) > 0:
+        if float(new_strike) > float(floor_price) + 1e-9:
+            return f"新 Put strike {float(new_strike):g} 高于愿接 {float(floor_price):g}"
+    if str(side or "").upper() == "CALL" and call_floor is not None and float(call_floor) > 0:
+        if float(new_strike) + 1e-9 < float(call_floor):
+            return f"新 Call strike {float(new_strike):g} 低于成本/愿卖 {float(call_floor):g}"
+    return None
 
 
 def pricing_scenarios(
@@ -72,7 +115,7 @@ def spread_pct(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
     return round((ask - bid) / mid * 100, 2)
 
 
-# ── 决策树 ────────────────────────────────────────────────────────────────────
+# ── 决策树 ────────────────────────────────────────────────────────────────
 
 def resolve_roll_leg(cycle: Dict[str, Any], close_contract_code: Optional[str] = None) -> Dict[str, Any]:
     """Roll 台用的在场腿。
@@ -327,7 +370,7 @@ def _scenario_from_position(
     }
 
 
-# ── 候选增强 ──────────────────────────────────────────────────────────────────
+# ── 候选增强 ──────────────────────────────────────────────────────────────
 
 def enrich_candidate(
     *,
@@ -465,7 +508,10 @@ def enrich_candidate(
             "close_limit": limit_close,
             "open_limit": limit_open,
             "net_credit_target": net_target,
-            "note": "平仓挂 close_limit(买),开仓挂 open_limit(卖);净 credit 目标约 net_credit_target/股",
+            "tick": _tick(max(limit_open, limit_close, 0)),
+            "combo_net_per_share": round(limit_open - limit_close, 4),
+            "open_ladder": _open_ladder(bid, ask),
+            "note": "平仓挂 close_limit(买),开仓挂 open_limit(卖);组合净价=新卖−买回,限价从中间价按 tick 下调",
         },
         "preview": {
             "new_strike": strike,
