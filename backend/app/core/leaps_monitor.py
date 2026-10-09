@@ -66,6 +66,7 @@ class LeapsSuggestion:
 
 @dataclass
 class LeapsSignal:
+    contract_code: str
     symbol: str
     contract_code: str
     expiry: str
@@ -808,15 +809,40 @@ class LeapsMonitor:
                 # S1: 价格触及 EMA200 / EMA50（CALL/PUT 按 timeframe(1h/1d)）
                 # last/high 初检后须卖方 bid 确认; volume=0 禁止仅凭 last
                 n_bars = len(closes)
-                hit = ema_touch(
-                    closes, float(trigger_price),
-                    ema50_min=self.ema50_min, ema200_min=self.ema200_min,
-                    allow_partial_ema=self.allow_partial_ema,
-                    level_map=level_map,
-                    bid=bid_q, ask=ask_q, volume=vol_q,
-                    require_tradeable_quote=True,
-                    confirm_with_bid=True,
-                )
+                timing_mode = "ema"
+                try:
+                    from app.core.config import get_effective_config
+                    timing_mode = str(
+                        ((get_effective_config().get("wheel_timing") or {}).get("timing_signal_mode") or "ema")
+                    ).lower()
+                except Exception:
+                    timing_mode = "ema"
+                if timing_mode == "iv_rank":
+                    from app.core.wheel_timing_klines import iv_rank_touch
+                    from app.core.volatility import brief_profile
+                    prof = brief_profile(symbol) or {}
+                    rank = prof.get("iv_rank") if prof.get("iv_rank_source") == "iv_history" else None
+                    thr = 50.0
+                    try:
+                        thr = float((get_effective_config().get("wheel_timing") or {}).get("push_min_iv_rank") or 50)
+                    except Exception:
+                        thr = 50.0
+                    hit = {
+                        "signal_level": "PRIMARY",
+                        "ema_type": "IVR",
+                        "ema_value": rank,
+                        "ema_partial": False,
+                    } if iv_rank_touch(rank, thr) else None
+                else:
+                    hit = ema_touch(
+                        closes, float(trigger_price),
+                        ema50_min=self.ema50_min, ema200_min=self.ema200_min,
+                        allow_partial_ema=self.allow_partial_ema,
+                        level_map=level_map,
+                        bid=bid_q, ask=ask_q, volume=vol_q,
+                        require_tradeable_quote=True,
+                        confirm_with_bid=True,
+                    )
                 from app.data.wheel_research_repository import append_event
                 from app.core.wheel_signal import SIGNAL_VERSION
                 append_event("timing", {"contract_code": code, "timeframe": tf,
@@ -925,7 +951,7 @@ class LeapsMonitor:
             repo.arm_signal_bucket_cooldowns(signals, self.cooldown_days)
         return signals
 
-    # ── 内部方法 ──────────────────────────────────────────────────────────────
+    # ── 内部方法 ────────────────────────────────────────────────────────────────────
 
     def _fetch_underlying_price(
         self, symbol: str, quote_ctx: Any = None,
