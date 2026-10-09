@@ -115,7 +115,7 @@ def spread_pct(bid: Optional[float], ask: Optional[float]) -> Optional[float]:
     return round((ask - bid) / mid * 100, 2)
 
 
-# ── 决策树 ────────────────────────────────────────────────────────────────
+# ── 决策树 ────────────────────────────────────────────────────────────────────
 
 def resolve_roll_leg(cycle: Dict[str, Any], close_contract_code: Optional[str] = None) -> Dict[str, Any]:
     """Roll 台用的在场腿。
@@ -370,7 +370,7 @@ def _scenario_from_position(
     }
 
 
-# ── 候选增强 ──────────────────────────────────────────────────────────────
+# ── 候选增强 ──────────────────────────────────────────────────────────────────
 
 def enrich_candidate(
     *,
