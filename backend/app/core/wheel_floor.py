@@ -3,7 +3,10 @@
 愿接价 = 推荐价(市场结构 suggest)。不再保留独立可手改 floor。
 DB 列 floor_price 仅作推荐价缓存;手写会被同步覆盖。
 """
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _closes(symbol: str, limit: int = 320) -> List[float]:
@@ -259,3 +262,83 @@ def suggest_call_strikes(
 
 # 兼容旧名/旧语义
 suggest_call_floor = suggest_call_strikes  # noqa: F401
+
+
+# ── 开仓冻结愿接价(去顺周期)─────────────────────────────────────────────────
+
+def floor_mode(cfg: Optional[Dict[str, Any]] = None) -> str:
+    """wheel_floor.mode: frozen_at_open(默认) | live。"""
+    if cfg is None:
+        try:
+            from app.core.config import get_effective_config
+            cfg = get_effective_config()
+        except Exception:
+            cfg = {}
+    mode = str(((cfg or {}).get("wheel_floor") or {}).get("mode") or "frozen_at_open").strip().lower()
+    return "live" if mode == "live" else "frozen_at_open"
+
+
+def parse_entry_meta(raw: Any) -> Dict[str, Any]:
+    import json
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    try:
+        v = json.loads(raw)
+        return v if isinstance(v, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def entry_floor_of(cycle: Optional[Dict[str, Any]]) -> Optional[float]:
+    meta = parse_entry_meta((cycle or {}).get("entry_meta"))
+    try:
+        v = float(meta.get("entry_floor"))
+        return v if v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def position_floor(
+    symbol: str,
+    cycle: Optional[Dict[str, Any]],
+    *,
+    spot: Optional[float] = None,
+    iv_rank: Optional[float] = None,
+    current_floor: Optional[float] = None,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """在场 CSP 的愿接价。返回 {floor, source: entry|live}。
+
+    frozen_at_open: 有 entry_meta.entry_floor 用它(不随跌价下移);旧周期无记录回退实时。
+    live: 每次实时重算(旧行为)。
+    """
+    if floor_mode(cfg) == "frozen_at_open":
+        frozen = entry_floor_of(cycle)
+        if frozen is not None:
+            return {"floor": round(frozen, 2), "source": "entry"}
+    return {
+        "floor": resolve_willing_price(symbol, spot, iv_rank, current_floor),
+        "source": "live",
+    }
+
+
+def entry_meta_for_sell_put(
+    symbol: str, *, entry_floor: Optional[float] = None,
+    current_floor: Optional[float] = None, cfg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """卖 Put 开仓时写入 entry_meta 的内容:冻结愿接价 + 口径。"""
+    from datetime import datetime
+    floor = entry_floor
+    if floor is None:
+        try:
+            floor = resolve_willing_price(symbol, None, None, current_floor)
+        except Exception as e:
+            logger.warning("entry floor 计算失败 %s: %s", symbol, e)
+            floor = None
+    return {
+        "entry_floor": round(float(floor), 2) if floor else None,
+        "floor_mode_at_open": floor_mode(cfg),
+        "recorded_at": datetime.now().isoformat(timespec="seconds"),
+    }
