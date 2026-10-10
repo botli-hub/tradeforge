@@ -115,6 +115,29 @@ def _strength_from_row(ema_type: Optional[str], iv_rank: Optional[float], min_iv
     return "WATCH"
 
 
+def _apply_sizing(item: Dict[str, Any], cfg: Dict[str, Any], size_mult: float) -> None:
+    """写入 suggest_qty / sizing(见 wheel_sizing;默认 max_contracts=1)。"""
+    from app.core.wheel_sizing import suggest_qty
+    uncovered = None
+    if item.get("side") == "CALL" and item.get("cycle_id"):
+        try:
+            from app.data import wheel_repository as wrepo
+            from app.core.wheel_cc_legs import uncovered_shares_of
+            cyc = wrepo.get_cycle(item["cycle_id"])
+            uncovered = uncovered_shares_of(cyc) if cyc else None
+        except Exception:
+            uncovered = None
+    out = suggest_qty(
+        item, cfg=cfg,
+        headroom=(item.get("context") or {}).get("headroom"),
+        uncovered_shares=uncovered,
+        size_mult=size_mult,
+        risk_budget=(item.get("post_trade_risk") or {}).get("risk_budget"),
+    )
+    item["suggest_qty"] = out["suggest_qty"]
+    item["sizing"] = out
+
+
 def _symbol_context(symbol: str) -> Dict[str, Any]:
     from app.data import wheel_repository as wrepo
 
@@ -664,15 +687,25 @@ def build_opportunities(
     from app.data.wheel_research_repository import observe_nav
     risk_nav["drawdown"] = observe_nav(risk_nav)
     risk_targets = book_repo.get_targets()
+    from app.core.wheel_sizing import current_size_mult
+    size_mult = current_size_mult(cfg)
     for item in merged.values():
         quote = pool_by_code.get(_norm_code(item.get("contract_code"))) or {}
         for field in ("bid", "ask", "quote_asof", "quote_delayed", "spread_pct"):
             item[field] = quote.get(field)
+        if quote.get("earnings_unknown") and item.get("side") == "PUT":
+            # 无日期≠无财报:policy=warn 时仅标记,不改 actionable(block 已在 _suggest 剔除)
+            item["earnings_unknown"] = True
+            item.setdefault("flags", []).append("财报日未知(Finnhub 未配置/失败)")
         if not executable_quote(item, max_spread_pct=float(scan_cfg.get("max_spread_pct", 8) or 8)):
             item["actionable"] = False
             item["grade"] = "watch"
             item.setdefault("flags", []).append("报价缺失/过期/点差过宽")
         item["post_trade_risk"] = candidate_risk(risk_nav, item, risk_targets, cfg)
+        _apply_sizing(item, cfg, size_mult)
+        if int(item.get("suggest_qty") or 1) > 1:
+            # 按建议张数重算交易后风险(资金/压力)
+            item["post_trade_risk"] = candidate_risk(risk_nav, item, risk_targets, cfg)
         if not item["post_trade_risk"]["ok"]:
             item["actionable"] = False
             item["grade"] = "blocked"

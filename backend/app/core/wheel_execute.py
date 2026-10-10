@@ -217,6 +217,8 @@ def draft_from_opportunity(opp: Dict[str, Any], *, qty: Optional[float] = None) 
         "contract_size": int(opp.get("contract_size") or 100),
         "note": f"一键开仓·score={opp.get('score')}",
         "entry_score": opp.get("score"),
+        # 开仓冻结愿接价(wheel_floor.mode=frozen_at_open 时在场仓位用它)
+        "entry_floor": (opp.get("context") or {}).get("floor_price") if side == "PUT" else None,
     }]
     notes = []
     if opp.get("covers_earnings"):

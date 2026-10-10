@@ -158,12 +158,32 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "log_suggestions": True,
         # 机会流同标的同方向最多条数(旧默认 5 会挤掉好 strike)
         "opp_max_per_symbol_side": 10,
+        # 缓冲口径: dte_scaled = (现价−strike)/(真实ATR14×√DTE),阈值=buffer_atr_min×buffer_dte_ratio
+        #          legacy     = (现价−strike)/ATR20(|Δclose|),不随 DTE 变
+        "buffer_mode": "dte_scaled",
+        "buffer_dte_ratio": 0.625,
+        # POP: bs_iv = Black-Scholes N(d2)(缺 IV 回退 1−|Δ|); delta = 1−|Δ|
+        "pop_model": "bs_iv",
+        # 年化(含 min_annualized 过滤)扣 wheel_portfolio.fee_per_contract
+        "annualized_net_of_fees": True,
+        # 无 Finnhub key / 请求失败 → 财报日未知: warn=标记不过滤; block=卖 Put 直接剔除
+        "earnings_unknown_policy": "warn",
     },
     "wheel_portfolio": {
         "total_equity": 0,  # 起始现金;0=用 max_capital 之和.权益=现金+持股市值+期权盯市
         "max_portfolio_pct": 0.80,
         "max_symbol_pct": 0.25,
         "high_corr_threshold": 0.70,
+        "fee_per_contract": 0.65,  # 每张开/平手续费(美元),年化扣费/风险预算共用
+    },
+    # 愿接价(floor)口径: frozen_at_open = 在场 CSP 用开仓时写入 entry_meta.entry_floor(无则回退实时);
+    #                     live = 每次实时重算推荐价(顺周期:跌→floor 下移)
+    "wheel_floor": {"mode": "frozen_at_open"},
+    # 张数建议: max_contracts 硬顶(默认 1 = 与旧行为一致);资金余量/IV 档 size_mult/风险预算只会往下压
+    "wheel_sizing": {
+        "max_contracts": 1,
+        "apply_iv_size_mult": True,
+        "use_risk_budget_cap": True,
     },
     "wheel_profiles": {
         "active": "balanced",

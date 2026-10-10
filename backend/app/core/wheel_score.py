@@ -12,6 +12,7 @@ score = annualized(现金担保口径, 默认 bid 计)
 
 所有权重可在设置页 wheel_scan 段覆盖,分项明细随建议返回,前端可展示归因。
 """
+import math
 from typing import Any, Dict, List, Optional
 
 # 代码兜底默认;数据库(设置页)可覆盖,见 get_scan_cfg()
@@ -87,13 +88,56 @@ def liquidity_factor(sp: Optional[float], scan_cfg: Dict[str, Any]) -> Optional[
     return round(1.0 - 0.3 * (sp - soft) / max(max_sp - soft, 1e-9), 4)
 
 
-def estimate_pop(side: str, delta: float) -> float:
-    """用 |delta| 近似到期 OTM 概率(卖方视角)。
-    卖 Put: POP ≈ 1 - |delta|; 卖 Call: 同理。
-    夹到 [0.05, 0.98] 避免极端。"""
-    d = abs(float(delta or 0))
-    pop = 1.0 - d
+def _iv_fraction(iv: Any) -> Optional[float]:
+    """Futu iv 常为百分数(45.2);>3 视为百分数。"""
+    try:
+        v = float(iv)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v) or v <= 0:
+        return None
+    return v / 100.0 if v > 3 else v
+
+
+def bs_pop(side: str, spot: Any, strike: Any, iv: Any, dte: Any) -> Optional[float]:
+    """Black-Scholes 风险中性到期 OTM 概率 N(±d2),r=q=0。字段缺失返回 None。"""
+    sig = _iv_fraction(iv)
+    try:
+        s, k, t = float(spot), float(strike), float(dte) / 365.0
+    except (TypeError, ValueError):
+        return None
+    if not sig or s <= 0 or k <= 0 or t <= 0:
+        return None
+    d2 = (math.log(s / k) - 0.5 * sig * sig * t) / (sig * math.sqrt(t))
+    from statistics import NormalDist
+    n = NormalDist().cdf(d2)
+    return n if str(side).upper() == "PUT" else 1.0 - n
+
+
+def estimate_pop(
+    side: str, delta: float, *,
+    spot: Any = None, strike: Any = None, iv: Any = None, dte: Any = None,
+) -> float:
+    """到期 OTM 概率(卖方视角),夹到 [0.05, 0.98]。
+
+    有 spot/strike/iv/dte 时用 BS N(d2)(比 1-|Δ| 少了 N(d1)/N(d2) 偏差);
+    否则回退 1-|delta|。
+    """
+    pop = bs_pop(side, spot, strike, iv, dte)
+    if pop is None:
+        pop = 1.0 - abs(float(delta or 0))
     return max(0.05, min(0.98, pop))
+
+
+def annualized_net(
+    premium: float, collateral: float, dte: int, *,
+    fee_per_contract: float = 0.0, contract_size: float = 100,
+) -> float:
+    """扣手续费后的年化 %:(premium×size − fee)/(collateral×size)×365/DTE。"""
+    if collateral <= 0 or dte <= 0 or contract_size <= 0:
+        return 0.0
+    net = float(premium) * contract_size - float(fee_per_contract or 0)
+    return round(net / (float(collateral) * contract_size) * (365 / dte) * 100, 2)
 
 
 def estimate_ev(
@@ -122,20 +166,52 @@ def compute_atr(closes: List[float], window: int = 20) -> Optional[float]:
     return sum(seg) / len(seg)
 
 
+def compute_true_atr(bars: List[Dict[str, Any]], window: int = 14) -> Optional[float]:
+    """Wilder 真实波幅 ATR:TR=max(H−L, |H−prevC|, |L−prevC|)。bars 需含 high/low/close。"""
+    trs: List[float] = []
+    for i in range(1, len(bars)):
+        try:
+            h, l = float(bars[i]["high"]), float(bars[i]["low"])
+            pc = float(bars[i - 1]["close"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < window:
+        return None
+    atr = sum(trs[:window]) / window
+    for tr in trs[window:]:
+        atr = (atr * (window - 1) + tr) / window
+    return atr
+
+
 def buffer_atr_multiple(
     side: str,
     spot: Optional[float],
     strike: float,
     atr: Optional[float],
+    dte: Optional[float] = None,
 ) -> Optional[float]:
-    """strike 距现价相对 ATR 的倍数(卖 Put 为现价−strike)。"""
+    """strike 距现价相对 ATR 的倍数(卖 Put 为现价−strike)。
+
+    dte>0 时按持有期缩放:buf / (ATR×√DTE)(日 ATR → 到期期望波动)。
+    """
     if not spot or spot <= 0 or not atr or atr <= 0:
         return None
     if side == "PUT":
         buf = spot - strike
     else:
         buf = strike - spot
-    return round(buf / atr, 3)
+    denom = atr * math.sqrt(float(dte)) if dte and float(dte) > 0 else atr
+    return round(buf / denom, 3)
+
+
+def buffer_scan_cfg(scan_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """dte_scaled 模式下把 buffer_atr_min 换算成 √DTE 口径阈值(保持 IV 档比例)。"""
+    if str(scan_cfg.get("buffer_mode") or "dte_scaled") != "dte_scaled":
+        return scan_cfg
+    ratio = float(scan_cfg.get("buffer_dte_ratio", 0.625) or 0.625)
+    base = float(scan_cfg.get("buffer_atr_min", 0.8) or 0.8)
+    return {**scan_cfg, "buffer_atr_min": round(base * ratio, 4)}
 
 
 def trend_profile(symbol: str, spot: Optional[float]) -> Optional[Dict[str, Any]]:
@@ -160,6 +236,12 @@ def trend_profile(symbol: str, spot: Optional[float]) -> Optional[Dict[str, Any]
     else:
         trend = "UP"
     atr = compute_atr(closes, 20)
+    atr_true = None
+    try:
+        from app.core.volatility import get_daily_ohlc
+        atr_true = compute_true_atr(get_daily_ohlc(symbol, limit=60), 14)
+    except Exception:
+        atr_true = None
     return {
         "ema50": ema50, "ema200": ema200,
         "above_ema50": above50, "above_ema200": above200,
@@ -167,6 +249,7 @@ def trend_profile(symbol: str, spot: Optional[float]) -> Optional[Dict[str, Any]
         "pct_vs_ema50": round((spot - ema50) / ema50 * 100, 2) if ema50 else None,
         "pct_vs_ema200": round((spot - ema200) / ema200 * 100, 2) if ema200 else None,
         "atr20": atr,
+        "atr_true14": atr_true,
         "closes_n": len(closes),
     }
 

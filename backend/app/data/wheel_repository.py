@@ -418,6 +418,35 @@ def record_trade(
     return record_trades([step], execution_id=execution_id, mode=mode)["cycle"]
 
 
+def _freeze_entry_floor(conn, cycle, raw) -> None:
+    """卖 Put 开仓:把当时愿接价写入 entry_meta.entry_floor(已有则不覆盖)。失败只记日志。"""
+    import json
+    import logging
+    from app.core.wheel_floor import entry_meta_for_sell_put, parse_entry_meta
+    try:
+        row = conn.execute(
+            "SELECT entry_meta FROM wheel_cycles WHERE id=?", (cycle["id"],),
+        ).fetchone()
+        meta = parse_entry_meta(row["entry_meta"] if row else None)
+        if meta.get("entry_floor"):
+            return
+        trow = conn.execute(
+            "SELECT floor_price FROM wheel_targets WHERE symbol=?", (cycle["symbol"],),
+        ).fetchone()
+        meta.update(entry_meta_for_sell_put(
+            cycle["symbol"],
+            entry_floor=raw.get("entry_floor"),
+            current_floor=(trow["floor_price"] if trow else None),
+        ))
+        conn.execute(
+            "UPDATE wheel_cycles SET entry_meta=? WHERE id=?",
+            (json.dumps(meta, ensure_ascii=False), cycle["id"]),
+        )
+        cycle["entry_meta"] = json.dumps(meta, ensure_ascii=False)
+    except Exception as e:
+        logging.getLogger(__name__).warning("entry floor 冻结失败 %s: %s", cycle.get("id"), e)
+
+
 def record_trades(steps, *, execution_id=None, mode="recorded", request_context=None):
     """Atomic batch; same id+payload returns same receipt, changed payload conflicts.
 
@@ -445,6 +474,8 @@ def record_trades(steps, *, execution_id=None, mode="recorded", request_context=
             cycle = _record_trade(conn, **step)
             if raw.get("entry_score") is not None:
                 conn.execute("UPDATE wheel_cycles SET entry_score=? WHERE id=?", (float(raw["entry_score"]), cycle["id"]))
+            if step.get("trade_type") == "SELL_PUT":
+                _freeze_entry_floor(conn, cycle, raw)
         from app.core.wheel_risk import check_books
         risk = check_books(conn)
         adds_risk = any(x.get("trade_type") in ("SELL_PUT", "SELL_CALL", "BUY_SHARES") for x in steps)

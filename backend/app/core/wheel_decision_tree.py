@@ -164,12 +164,28 @@ def decide_position(
         itm and not deep_itm
         and (moneyness_pct <= shallow_itm_pct and delta <= shallow_delta_max)
     )
+    # 除息提前行权的经济判据:剩余时间价值(extrinsic) < 股息 → 持有人行权拿息更划算
+    div_amount = item.get("dividend_amount")
+    try:
+        div_amount = float(div_amount) if div_amount is not None else None
+    except (TypeError, ValueError):
+        div_amount = None
+    option_mark = quote.get("mid") or (close_px if close_px > 0 else None)
+    extrinsic = None
+    if side == "CALL" and option_mark and spot and strike:
+        intrinsic = max(0.0, float(spot) - float(strike))
+        extrinsic = round(max(0.0, float(option_mark) - intrinsic), 4)
+    ex_div_extrinsic_risk = bool(
+        side == "CALL" and itm and div_window and div_amount and div_amount > 0
+        and extrinsic is not None and extrinsic < div_amount
+    )
     early_assign = bool(
         side == "CALL"
         and (
             (itm and (delta >= ea_deep or (div_window and delta >= ea_div)))
             or (itm and shallow_itm and div_window and delta >= ea_shallow)
             or (not itm and div_window and delta >= ea_otm)
+            or ex_div_extrinsic_risk
         )
     )
 
@@ -292,6 +308,10 @@ def decide_position(
         reasons.append(f"ITM Δ{delta:.2f}" if delta else "ITM")
     if thin_otm and buffer is not None:
         reasons.append(f"OTM垫 {buffer}% < 薄垫阈值 {thin_otm_pct:g}%")
+    if ex_div_extrinsic_risk:
+        reasons.append(
+            f"除息前剩余时间价值 ${extrinsic:g} < 股息 ${div_amount:g},提前行权风险高"
+        )
     if early_assign:
         if div_window:
             reasons.append(
@@ -733,6 +753,8 @@ def decide_position(
         "deep_itm": deep_itm,
         "shallow_itm": shallow_itm,
         "early_assign_risk": early_assign,
+        "extrinsic": extrinsic,
+        "ex_div_extrinsic_risk": ex_div_extrinsic_risk,
         "thin_otm": thin_otm,
         "otm_buffer_pct": buffer,
         "strike_above_floor": strike_above_floor,

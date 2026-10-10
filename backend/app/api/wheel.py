@@ -513,16 +513,31 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     from app.core.wheel_score import (
         get_scan_cfg, spread_pct, score_contract, trend_profile, is_iv_high,
         premium_from_quote, estimate_pop, sort_key_for_mode, buffer_atr_multiple,
+        annualized_net, buffer_scan_cfg,
     )
     from app.core.wheel_quotes import executable_quote
     from app.core.wheel_portfolio import headroom_ratio_for_symbol
     scan_cfg = get_scan_cfg(_wheel_cfg())
     pricing = scan_cfg.get("premium_pricing", "mid")
+    fee_per_contract = float((_wheel_cfg().get("wheel_portfolio") or {}).get("fee_per_contract", 0.65) or 0)
+    net_of_fees = bool(scan_cfg.get("annualized_net_of_fees", True))
+    pop_model = str(scan_cfg.get("pop_model") or "bs_iv")
+    buffer_mode = str(scan_cfg.get("buffer_mode") or "dte_scaled")
 
     # 财报 / 除息 / 事件封锁
     from app.core.earnings import get_next_earnings
     from app.core.dividends import dividend_warn
     earnings_date = get_next_earnings(symbol)
+    # 无日期 ≠ 无财报:区分 none / unknown(无 key / 请求失败)
+    earnings_status = "ok" if earnings_date else "none"
+    if not earnings_date:
+        try:
+            from app.core.earnings import get_earnings_status
+            earnings_status = get_earnings_status(symbol).get("status") or "unknown"
+        except Exception:
+            earnings_status = "unknown"
+    earnings_unknown = earnings_status == "unknown"
+    earnings_unknown_policy = str(scan_cfg.get("earnings_unknown_policy") or "warn")
     div_warn = dividend_warn(symbol, int(pos_cfg.get("dividend_warn_days", 14)))
     headroom_ratio = headroom_ratio_for_symbol(symbol) if side == "PUT" else None
 
@@ -607,6 +622,10 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 audit["reason"] = "earnings"
                 filtered_earnings += 1
                 continue
+            if side == "PUT" and earnings_unknown and earnings_unknown_policy == "block":
+                audit["reason"] = "earnings_unknown"
+                filtered_earnings += 1
+                continue
             if side == "PUT":
                 if strike > floor:
                     audit["reason"] = "willing_price"
@@ -624,13 +643,20 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                     ((strike - (cost_basis or 0)) * shares + prem * size) if cost_basis else 0, 2
                 )
                 extra = {"if_called_total": if_called}
-            ann = _annualized(prem, collateral, dte)
+            ann_gross = _annualized(prem, collateral, dte)
+            ann = (
+                annualized_net(prem, collateral, dte, fee_per_contract=fee_per_contract, contract_size=size)
+                if net_of_fees else ann_gross
+            )
             if ann < (target.get("min_annualized") or 0):
                 audit["reason"] = "annualized"
                 continue
             # 保证金口径年化(仅 PUT;决策仍以现金担保年化为主)
             ann_margin = _annualized(prem, strike * margin_ratio, dte) if side == "PUT" else None
-            pop = estimate_pop(side, d)
+            pop = (
+                estimate_pop(side, d, spot=spot, strike=strike, iv=c.get("iv"), dte=dte)
+                if pop_model == "bs_iv" else estimate_pop(side, d)
+            )
             audit.update(status="eligible", reason=None)
             suggestions.append({
                 "contract_code": c["option_symbol"],
@@ -645,6 +671,10 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 "iv": c.get("iv"), "open_interest": c.get("open_interest"),
                 "volume": c.get("volume"), "contract_size": size,
                 "annualized": ann,
+                "annualized_gross": ann_gross,
+                "annualized_net_of_fees": net_of_fees,
+                "fee_per_contract": fee_per_contract,
+                "earnings_unknown": bool(earnings_unknown),
                 "annualized_margin": ann_margin,
                 "annualized_cash": ann,  # 明确现金担保口径
                 "spread_pct": sp,
@@ -684,15 +714,26 @@ def _suggest(symbol: str, side: str, host: str, port: int,
     except Exception as e:
         logger.warning("trend profile 失败: %s", e)
 
-    atr = (trend or {}).get("atr20")
+    if buffer_mode == "dte_scaled" and (trend or {}).get("atr_true14"):
+        atr = (trend or {}).get("atr_true14")
+        score_cfg = buffer_scan_cfg(scan_cfg)
+    else:
+        atr = (trend or {}).get("atr20")
+        score_cfg = scan_cfg
+        if buffer_mode == "dte_scaled":
+            buffer_mode = "legacy"  # 无日K高低价 → 回退旧口径
     # 综合打分:年化 × 流动性 × 趋势 × 财报 × IV × POP × 缓冲 × 资金余量
     kept: List[Dict[str, Any]] = []
     for s in suggestions:
-        buf = buffer_atr_multiple(side, spot, s["strike"], atr)
+        buf = buffer_atr_multiple(
+            side, spot, s["strike"], atr,
+            dte=s.get("dte") if buffer_mode == "dte_scaled" else None,
+        )
         s["buffer_atr"] = buf
+        s["buffer_mode"] = buffer_mode
         scored = score_contract(
             s["annualized"], side, s["delta"], s.get("spread_pct"),
-            s["covers_earnings"], volatility, trend, scan_cfg,
+            s["covers_earnings"], volatility, trend, score_cfg,
             pop=s.get("pop"), buffer_atr=buf, headroom_ratio=headroom_ratio,
             premium=s.get("premium_used"), collateral=s["strike"],
         )
@@ -789,6 +830,9 @@ def _suggest(symbol: str, side: str, host: str, port: int,
         "days_to_earnings": days_to_earn,
         "earnings_warn": days_to_earn is not None and days_to_earn <= pos_cfg.get("earnings_warn_days", 14),
         "earnings_filtered_count": filtered_earnings,
+        "earnings_status": earnings_status,
+        "earnings_unknown": bool(earnings_unknown),
+        "earnings_unknown_policy": earnings_unknown_policy,
         "dividend_warn": div_warn,
         "delta_preference": delta_preference,
         "headroom_ratio": headroom_ratio,
@@ -910,7 +954,8 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
     from app.core.leaps_monitor import _throttle, _to_futu_symbol
     from app.core.wheel_today import save_positions_cache, load_positions_cache, try_buying_power
 
-    cfg = _wheel_cfg().get("wheel_position", {}) or {}
+    cfg_all = _wheel_cfg()
+    cfg = cfg_all.get("wheel_position", {}) or {}
     profit_target = cfg.get("profit_target_pct", 50)
     portfolio_ctx = _portfolio_context_for_manage()
     # 真实购买力(若交易账户已连接)
@@ -1050,8 +1095,8 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
         tgt = target_by_symbol[c["symbol"]]
         # 愿接=推荐价(非手改缓存)
         floor_px = None
+        floor_source = "cached"
         try:
-            from app.core.wheel_floor import resolve_willing_price
             from app.core.volatility import brief_profile as _bp
             iv = None
             try:
@@ -1059,10 +1104,16 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             except Exception:
                 pass
             cached = (tgt or {}).get("floor_price")
-            floor_px = resolve_willing_price(
-                c["symbol"], float(spot) if spot else None, iv, cached,
+            # 在场 CSP:默认用开仓冻结愿接价(wheel_floor.mode),避免跌价→floor 下移顺周期
+            from app.core.wheel_floor import position_floor
+            pf = position_floor(
+                c["symbol"], c, spot=float(spot) if spot else None,
+                iv_rank=iv, current_floor=cached, cfg=cfg_all,
             )
-        except Exception:
+            floor_px = pf["floor"]
+            floor_source = pf["source"]
+        except Exception as e:
+            logger.warning("在场愿接价计算失败 %s: %s", c.get("symbol"), e)
             try:
                 floor_px = float((tgt or {}).get("floor_price") or 0) or None
             except (TypeError, ValueError):
@@ -1110,7 +1161,9 @@ def check_open_positions_core(host: str, port: int) -> Dict[str, Any]:
             "qty": qty,
             "contract_size": size,
             "days_to_ex_div": days_to_ex_div,
+            "dividend_amount": (dividend_warn_payload or {}).get("amount"),
             "floor_price": floor_px,
+            "floor_source": floor_source,
             "profit_hit": profit_pct is not None and profit_pct >= profit_target,
             "expiring": dte is not None and dte <= 7,
             "capital_util_pct": util_pct,

@@ -31,6 +31,24 @@ def get_daily_closes(symbol: str, limit: int = 300) -> List[float]:
         conn.close()
 
 
+def get_daily_ohlc(symbol: str, limit: int = 60) -> List[Dict[str, float]]:
+    """本地日K(high/low/close),时间正序;用于真实 ATR。"""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT high, low, close FROM kline_bars WHERE symbol = ? AND timeframe = '1d' "
+            "ORDER BY ts DESC LIMIT ?",
+            (symbol, limit),
+        ).fetchall()
+        return [
+            {"high": float(r["high"]), "low": float(r["low"]), "close": float(r["close"])}
+            for r in reversed(rows)
+            if r["high"] is not None and r["low"] is not None and r["close"] is not None
+        ]
+    finally:
+        conn.close()
+
+
 def compute_hv(closes: List[float], window: int) -> Optional[float]:
     """年化历史波动率(%),基于对数收益率"""
     if len(closes) < window + 1:
