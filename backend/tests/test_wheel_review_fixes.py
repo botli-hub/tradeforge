@@ -165,3 +165,42 @@ def test_ex_div_extrinsic_above_dividend_not_flagged_by_rule():
     assert r["ex_div_extrinsic_risk"] is False
     r2 = decide_position(_cc(dividend_amount=None), 15, 50)
     assert r2["ex_div_extrinsic_risk"] is False
+
+
+def test_dte_buffer_0p5_is_stricter_than_legacy_0p8_at_30_45_dte():
+    """旧: d ≥ 0.8×ATRc(|Δclose| 均值);新: d ≥ 0.5×ATRtrue×√DTE,ATRtrue ≥ ATRc。"""
+    atr_c = 1.0
+    for k in (1.0, 1.3):  # 真实ATR/收盘差ATR 比值,经验 1.2~1.5,取下界 1.0 最保守
+        for dte in (30, 45):
+            need_new = 0.5 * k * atr_c * math.sqrt(dte)
+            need_old = 0.8 * atr_c
+            assert need_new > 3 * need_old
+    # 同一 strike:旧口径刚好 0.8 → 新口径远低于 0.5 → 被惩罚
+    d = 0.8
+    assert ws.buffer_atr_multiple("PUT", 100, 100 - d, 1.0, dte=30) < 0.5
+
+
+def test_opportunity_earnings_fields_machine_readable():
+    from app.core.wheel_opportunities import apply_earnings_fields, EARNINGS_UNKNOWN_FLAG
+    it = {"side": "PUT"}
+    apply_earnings_fields(it, {"earnings_status": "unknown", "earnings_unknown": True})
+    assert it["earnings_status"] == "unknown" and it["earnings_unknown"] is True
+    assert EARNINGS_UNKNOWN_FLAG in it["flags"] and "earnings_unknown" in it["warnings"]
+    apply_earnings_fields(it, {"earnings_status": "unknown"})  # 幂等不重复
+    assert it["flags"].count(EARNINGS_UNKNOWN_FLAG) == 1
+    k = {"side": "PUT"}
+    apply_earnings_fields(k, {"earnings_status": "known", "earnings_date": "2026-10-22"})
+    assert k["earnings_status"] == "known" and k["earnings_date"] == "2026-10-22"
+    assert "flags" not in k
+    n = {"side": "CALL"}
+    apply_earnings_fields(n, {"earnings_status": "none"})
+    assert n["earnings_status"] == "none" and n["earnings_unknown"] is False
+    t = {"side": "PUT"}  # 纯触线、无扫描报价 → 未查询 = unknown
+    apply_earnings_fields(t, {})
+    assert t["earnings_status"] == "unknown"
+
+
+def test_public_earnings_status_mapping():
+    from app.api.wheel import _public_earnings_status as f
+    assert [f("ok"), f("none"), f("unknown"), f("unsupported"), f(None)] == \
+        ["known", "none", "unknown", "unknown", "unknown"]

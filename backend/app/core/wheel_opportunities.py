@@ -115,6 +115,34 @@ def _strength_from_row(ema_type: Optional[str], iv_rank: Optional[float], min_iv
     return "WATCH"
 
 
+EARNINGS_UNKNOWN_FLAG = "财报日未知(Finnhub 未配置/失败)"
+
+
+def apply_earnings_fields(item: Dict[str, Any], quote: Optional[Dict[str, Any]]) -> None:
+    """每条机会都带机器可读 earnings_status: known|none|unknown(+earnings_unknown 布尔)。
+
+    unknown 时写入 flags 与 warnings(policy=warn 不改 actionable;block 已在 _suggest 剔除)。
+    无扫描报价来源(纯触线)时未查询过财报 → unknown。
+    """
+    q = quote or {}
+    status = q.get("earnings_status")
+    if status not in ("known", "none", "unknown"):
+        status = "unknown" if (q.get("earnings_unknown") or not q) else (
+            "known" if q.get("earnings_date") or q.get("covers_earnings") else "unknown"
+        )
+    item["earnings_status"] = status
+    item["earnings_unknown"] = status == "unknown"
+    if q.get("earnings_date"):
+        item["earnings_date"] = q.get("earnings_date")
+    if status == "unknown":
+        flags = item.setdefault("flags", [])
+        if EARNINGS_UNKNOWN_FLAG not in flags:
+            flags.append(EARNINGS_UNKNOWN_FLAG)
+        warns = item.setdefault("warnings", [])
+        if "earnings_unknown" not in warns:
+            warns.append("earnings_unknown")
+
+
 def _apply_sizing(item: Dict[str, Any], cfg: Dict[str, Any], size_mult: float) -> None:
     """写入 suggest_qty / sizing(见 wheel_sizing;默认 max_contracts=1)。"""
     from app.core.wheel_sizing import suggest_qty
@@ -693,10 +721,7 @@ def build_opportunities(
         quote = pool_by_code.get(_norm_code(item.get("contract_code"))) or {}
         for field in ("bid", "ask", "quote_asof", "quote_delayed", "spread_pct"):
             item[field] = quote.get(field)
-        if quote.get("earnings_unknown") and item.get("side") == "PUT":
-            # 无日期≠无财报:policy=warn 时仅标记,不改 actionable(block 已在 _suggest 剔除)
-            item["earnings_unknown"] = True
-            item.setdefault("flags", []).append("财报日未知(Finnhub 未配置/失败)")
+        apply_earnings_fields(item, quote)
         if not executable_quote(item, max_spread_pct=float(scan_cfg.get("max_spread_pct", 8) or 8)):
             item["actionable"] = False
             item["grade"] = "watch"

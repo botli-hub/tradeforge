@@ -438,6 +438,11 @@ def stats():
 
 # ── 合约建议(卖 Put / 卖 Call)─────────────────────────────────────────────────
 
+def _public_earnings_status(status: Optional[str]) -> str:
+    """对外口径: known(有日期) | none(已查询无财报) | unknown(无 key/失败/不支持)。"""
+    return {"ok": "known", "known": "known", "none": "none"}.get(str(status or ""), "unknown")
+
+
 def _annualized(premium: float, collateral: float, dte: int) -> float:
     if collateral <= 0 or dte <= 0:
         return 0.0
@@ -675,6 +680,8 @@ def _suggest(symbol: str, side: str, host: str, port: int,
                 "annualized_net_of_fees": net_of_fees,
                 "fee_per_contract": fee_per_contract,
                 "earnings_unknown": bool(earnings_unknown),
+                "earnings_status": _public_earnings_status(earnings_status),
+                "earnings_date": earnings_date,
                 "annualized_margin": ann_margin,
                 "annualized_cash": ann,  # 明确现金担保口径
                 "spread_pct": sp,
