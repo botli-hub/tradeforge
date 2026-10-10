@@ -1196,6 +1196,44 @@ def check_open_positions(host: str = Query("127.0.0.1"), port: int = Query(11111
 
 # ── Roll 对比 ─────────────────────────────────────────────────────────────────
 
+def _underlying_spot(symbol: str, host: str, port: int, warnings: List[str]) -> Optional[float]:
+    """OpenD 快照取标的现价;失败返回 None 并记 warning(不抛)。"""
+    try:
+        import futu
+        from app.core.leaps_monitor import _throttle, _to_futu_symbol
+        ctx = futu.OpenQuoteContext(host=host, port=port)
+        try:
+            _throttle()
+            ret, snap = ctx.get_market_snapshot([_to_futu_symbol(symbol)])
+            if ret == futu.RET_OK and snap is not None and not snap.empty:
+                px = float(snap.iloc[0].get("last_price", 0) or 0)
+                return px if px > 0 else None
+        finally:
+            ctx.close()
+    except Exception as e:
+        logger.warning("roll_options 标的现价获取失败 %s: %s", symbol, e)
+        warnings.append(f"标的现价获取失败: {e}")
+    return None
+
+
+def _put_strike_cap(
+    symbol: str, spot: Optional[float], target: Dict[str, Any], warnings: List[str],
+) -> Optional[float]:
+    """PUT Roll strike 上限 = 愿接价;推荐价计算失败时显式记录并回退缓存 floor。"""
+    from app.core.wheel_floor import resolve_willing_price
+    try:
+        return resolve_willing_price(
+            symbol, float(spot) if spot else None, None, target.get("floor_price"),
+        )
+    except Exception as e:
+        logger.warning("roll_options 愿接价计算失败 %s,回退缓存 floor: %s", symbol, e)
+        warnings.append(f"愿接价计算失败,回退缓存 floor: {e}")
+        try:
+            return float(target.get("floor_price") or 0) or None
+        except (TypeError, ValueError):
+            return None
+
+
 @router.get("/roll-options")
 def roll_options(
     cycle_id: str = Query(...),
@@ -1320,22 +1358,14 @@ def roll_options(
     if call_cost_floor is None and cur_strike > 0 and side == "CALL":
         call_cost_floor = cur_strike
         warnings.append(f"无成本基础,CALL 底线暂用当前 strike ${cur_strike:g}")
+    # 标的现价:愿接价/strike 过滤要用;之前在此处引用未赋值的 spot → UnboundLocalError 被吞
+    spot: Optional[float] = None
+    if opend_ok:
+        spot = _underlying_spot(symbol, host, port, warnings)
+
     put_strike_cap = None
     if side == "PUT":
-        try:
-            # 愿接=推荐价
-            try:
-                from app.core.wheel_floor import resolve_willing_price
-                put_strike_cap = resolve_willing_price(
-                    symbol,
-                    float(spot) if spot else None,
-                    None,
-                    target.get("floor_price"),
-                )
-            except Exception:
-                put_strike_cap = float(target.get("floor_price") or 0) or None
-        except (TypeError, ValueError):
-            put_strike_cap = None
+        put_strike_cap = _put_strike_cap(symbol, spot, target, warnings)
 
     # 事件
     earnings_date = get_next_earnings(symbol)
@@ -1387,7 +1417,6 @@ def roll_options(
         return True
 
     candidates: List[Dict[str, Any]] = []
-    spot = None
     skipped = {"below_cost": 0, "spread": 0, "oi": 0, "delta": 0, "earnings": 0}
 
     for exp, dte in next_exps[:4]:
@@ -1592,6 +1621,7 @@ def roll_options(
         "symbol": symbol,
         "side": side,
         "spot_price": spot,
+        "put_strike_cap": put_strike_cap,
         "qty": qty,
         "allow_down_strike": allow_down_strike,
         "decision": {
