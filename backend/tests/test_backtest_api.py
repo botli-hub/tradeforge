@@ -35,9 +35,12 @@ class BacktestApiTest(unittest.TestCase):
         self.assertIn("equity_curve", payload)
         self.assertIn("data_sources", payload)
 
-    def test_run_backtest_falls_back_to_mock_when_local_history_load_fails(self):
-        with patch("app.api.backtest.ensure_local_kline_range", side_effect=RuntimeError("history unavailable")):
-            payload = asyncio.run(
+    def test_run_backtest_errors_instead_of_mock_when_local_history_load_fails(self):
+        # 45c0ba8 起移除 mock 数据:历史加载失败必须报错(502),不能静默用假数据回测
+        from fastapi import HTTPException
+        with patch("app.api.backtest.ensure_local_kline_range", side_effect=RuntimeError("history unavailable")), \
+                self.assertRaises(HTTPException) as cm:
+            asyncio.run(
                 run_backtest(
                     BacktestParams(
                         strategy_id=self.strategy_id,
@@ -48,8 +51,8 @@ class BacktestApiTest(unittest.TestCase):
                     )
                 )
             )
-        self.assertEqual(payload["data_sources"][0]["data_source"], "mock")
-        self.assertEqual(payload["data_sources"][0]["load_mode"], "fallback_mock")
+        self.assertEqual(cm.exception.status_code, 502)
+        self.assertIn("历史数据获取失败", str(cm.exception.detail))
 
 
 if __name__ == "__main__":
