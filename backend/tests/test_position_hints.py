@@ -16,7 +16,8 @@ def _item(**kw):
 
 def test_profit_hit_first():
     r = _position_hints(_item(profit_pct=60.0, buyback_ask=1.0), 15, 50)
-    assert "止盈平仓" in (r["action_hint"] or "")
+    # 文案自 2a4c157 起为「止盈(≥50%)释放担保」;断言语义而非旧文案
+    assert "止盈" in (r["action_hint"] or "")
     assert r["action_code"] == "CLOSE"
 
 
@@ -59,7 +60,9 @@ def test_low_yield():
     assert r["action_code"] == "REPLACE"
     assert abs(r["remaining_annualized"] - 3.13) < 0.01
     r_pure = _position_hints(_item(current_price=0.3, buyback_ask=0.3, profit_pct=10.0), 15, 50)
-    assert r_pure["action_hint"] == "平仓换仓(剩余年化低)"
+    # 文案自 2a4c157 起带具体数值:「剩余年化3.13%<15% → 换仓」
+    assert r_pure["action_code"] == "REPLACE"
+    assert "换仓" in r_pure["action_hint"] and "剩余年化" in r_pure["action_hint"]
     # ITM 时剩余价值高是风险不是收益,不触发 low_yield
     r2 = _position_hints(
         _item(current_price=0.3, buyback_ask=0.3, itm=True, spot=99.5, delta=0.4, profit_pct=-5.0),

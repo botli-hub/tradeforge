@@ -62,9 +62,13 @@ def test_open_missed_50():
     assert r["items"][0]["symbol"] == "X"
 
 
-def test_exit_stats_empty_ok():
-    # 可能有真实库数据;只断言结构
+def test_exit_stats_empty_ok(tmp_path, monkeypatch):
+    # 用临时空库:旧版依赖开发机真实 DB(无 data 目录时 unable to open database file)
+    from app.data import database as db
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "wheel.db")
+    db.init_db()
     r = exit_efficiency_stats()
+    assert r["n_legs"] == 0
     assert "n_legs" in r
     assert "buckets" in r or r["n_legs"] == 0
     assert r.get("focus") == "portfolio_annualized" or r["n_legs"] == 0
