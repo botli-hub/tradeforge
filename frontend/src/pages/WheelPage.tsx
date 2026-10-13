@@ -32,6 +32,7 @@ import {
   Badge, Stat, StatusDot, TargetPriceStrip, RiskMarks, C,
   type SemColor,
 } from '../components/wheel/WheelUi'
+import { SymbolCycleDots } from '../components/wheel/SymbolCycleDots'
 import ManageDecisionModal from '../components/wheel/ManageDecisionModal'
 import HoldingCcBanner from '../components/wheel/HoldingCcBanner'
 import TargetSellAbove from '../components/wheel/TargetSellAbove'
@@ -2868,7 +2869,7 @@ export default function WheelPage() {
             return (
               <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 {/* ── 左:标的列表(窄屏自动占满整行堆叠) ── */}
-                <div className="card" style={{ flex: '1 0 250px', maxWidth: 320, minWidth: 220, padding: 8 }}>
+                <div className="card" style={{ flex: '1 0 250px', maxWidth: 320, minWidth: 220, padding: 8, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px 8px' }}>
                     <span style={{ fontSize: 13, color: 'var(--text-secondary)', flexShrink: 0 }}>标的({enabled.length})</span>
                     <select value={symbolQuery} onChange={e => {
@@ -2902,11 +2903,12 @@ export default function WheelPage() {
                         setSelectedCycleId(sorted[0]?.id ?? null)
                       }} style={{
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        gap: 8, minWidth: 0,
                         padding: '9px 10px', borderRadius: 6, cursor: 'pointer', marginBottom: 2,
                         background: isSel ? 'var(--accent)22' : 'transparent',
                         borderLeft: `3px solid ${isSel ? 'var(--accent)' : 'transparent'}`,
                       }}>
-                        <div style={{ minWidth: 0 }}>
+                        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
                           <div style={{ fontWeight: 700, fontSize: 15, display: 'flex', alignItems: 'center', gap: 5 }}>
                             {t.symbol}
                             {hasWarn && <span title="临期或ITM" style={{ fontSize: 13 }}>⚠</span>}
@@ -2932,16 +2934,7 @@ export default function WheelPage() {
                             </span>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: 3, flexShrink: 0 }}>
-                          {cs.length === 0 ? (
-                            <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>未开轮</span>
-                          ) : cs.map(c => (
-                            <span key={c.id} title={STAGE_LABELS[c.status]} style={{
-                              width: 9, height: 9, borderRadius: '50%',
-                              background: STAGE_COLORS[c.status], display: 'inline-block',
-                            }} />
-                          ))}
-                        </div>
+                        <SymbolCycleDots cycles={cs} />
                       </div>
                     )
                   })}
