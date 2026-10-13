@@ -1,11 +1,17 @@
 """到期日选取 + 核心 DTE 优先"""
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.wheel_expiries import pick_windowed_expiries, select_expiries  # noqa: E402
+from app.core.wheel_expiries import (  # noqa: E402
+    chain_scope_kwargs,
+    classify_expiry_cycle,
+    pick_windowed_expiries,
+    select_expiries,
+    select_near_term_expiries,
+)
 
 
 def test_prefers_core_over_near_month():
@@ -114,6 +120,68 @@ def test_suggest_old_slice3_without_prefer_drops_core():
     dates = [str(e[0])[:10] for e in sel]
     assert dates == ["2026-07-31", "2026-08-07", "2026-08-14"]
     assert "2026-08-21" in [str(e[0])[:10] for e in skip]
+
+
+def _fridays(start: date, days: int):
+    out = []
+    d = start
+    end = start + timedelta(days=days)
+    while d <= end:
+        if d.weekday() == 4:
+            out.append(d.isoformat())
+        d += timedelta(days=1)
+    return out
+
+
+def test_near_term_three_weeks_weekly_and_three_monthlies():
+    """2026-10-13(周二): 3 周内周权 + 接下来 3 张月权;更远周权与第 4 张月权不扫。"""
+    today = date(2026, 10, 13)
+    assert today.weekday() == 1
+    expirations = _fridays(today, 120)
+    sel, skip = select_near_term_expiries(expirations, today=today, weekly_weeks=3, monthly_months=3)
+    chosen = {str(e[0])[:10]: e[2] for e in sel}
+    # 10-16 是第三个周五 → 月权,不占周权名额
+    assert chosen["2026-10-16"] == "monthly"
+    assert chosen["2026-10-23"] == "weekly"
+    assert chosen["2026-10-30"] == "weekly"
+    assert chosen["2026-11-20"] == "monthly"
+    assert chosen["2026-12-18"] == "monthly"
+    assert "2026-11-06" not in chosen  # 第 4 周周权
+    assert "2027-01-15" not in chosen  # 第 4 张月权
+    skipped = {str(e[0])[:10] for e in skip}
+    assert "2026-11-06" in skipped
+    assert "2027-01-15" in skipped
+    assert all(e[1] <= 21 for e in sel if e[2] == "weekly")
+    assert sum(1 for e in sel if e[2] == "monthly") == 3
+
+
+def test_cycle_overrides_third_friday_heuristic():
+    today = date(2026, 10, 13)
+    expirations = ["2026-10-16", "2026-11-20", "2026-12-18", "2027-01-15"]
+    sel, _skip = select_near_term_expiries(
+        expirations,
+        today=today,
+        cycles={"2026-10-16": "ExpirationCycle.WEEK"},
+        weekly_weeks=3,
+        monthly_months=3,
+    )
+    kinds = {str(e[0])[:10]: e[2] for e in sel}
+    assert kinds["2026-10-16"] == "weekly"
+    assert kinds["2026-11-20"] == "monthly"
+    assert "2027-01-15" in kinds  # 10-16 不再占月权名额
+
+
+def test_chain_scope_defaults_and_dte_window_override():
+    scope = chain_scope_kwargs({})
+    assert scope == {"expiry_mode": "near_weekly_monthly", "weekly_weeks": 3, "monthly_months": 3}
+    override = chain_scope_kwargs({
+        "wheel_timing": {"expiry_mode": "dte_window", "weekly_weeks": 2, "monthly_months": "4"},
+    })
+    assert override["expiry_mode"] == "dte_window"
+    assert override["weekly_weeks"] == 2
+    assert override["monthly_months"] == 4
+    assert classify_expiry_cycle("MONTH", date(2026, 10, 23)) == "monthly"
+    assert classify_expiry_cycle(None, date(2026, 10, 23)) == "weekly"
 
 
 if __name__ == "__main__":

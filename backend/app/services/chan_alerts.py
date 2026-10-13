@@ -1,7 +1,8 @@
 """缠论买卖点 Telegram 增量推送(默认 30m/1d)。
 
 默认同级别 30m / 日线(1d);5m 仍允许显式配置,但不在代码默认里。
-忽略 1m/1h。标的默认启用 Wheel 池。
+忽略 1m/1h。标的默认启用 Wheel 池,再减去 monitor_universe.chan_exclude
+(与 wheel enabled 解耦,排除不等于停用轮子)。
 日线默认 ~每美股会话扫一次(poll_minutes_1d≈390),不几分钟刷屏。
 走现有 alerts 管道:fingerprint 去重、quiet_hours、wheel_push_log。
 不自动下单,不碰 POSITION_QUANT / wheel_reconcile。
@@ -37,7 +38,7 @@ _DEFAULT_POLL = {"5m": 5, "30m": 30, "1d": 390}
 DEFAULT_CHAN_ALERTS: Dict[str, Any] = {
     "enabled": True,
     "timeframes": ["30m", "1d"],
-    "symbols": [],  # 空 = 启用 Wheel 标的
+    "symbols": [],  # 空 = 启用 Wheel 标的,再减去 monitor_universe.chan_exclude
     "poll_minutes_5m": 5,
     "poll_minutes_30m": 30,
     "poll_minutes_1d": 390,  # ~美股 RTH 一次; 非几分钟刷屏
@@ -121,21 +122,22 @@ def resolve_universe(
     if isinstance(override, str):
         override = [s.strip() for s in override.split(",")]
     override = [str(s).strip().upper() for s in override if str(s).strip()]
+    from app.core.monitor_universe import filter_monitor_symbols
     if override:
-        return override
+        return filter_monitor_symbols(override, cfg, "chan")
     if targets is None:
         try:
             from app.data import wheel_repository as wrepo
             targets = wrepo.get_targets()
         except Exception as e:
             logger.info("chan alerts: load wheel targets failed, fallback: %s", e)
-            return list(_FALLBACK_SYMBOLS)
+            return filter_monitor_symbols(_FALLBACK_SYMBOLS, cfg, "chan")
     enabled = [
         str(t.get("symbol") or "").strip().upper()
         for t in (targets or [])
         if t.get("enabled")
     ]
-    return [s for s in enabled if s]
+    return filter_monitor_symbols(enabled, cfg, "chan")
 
 
 def is_us_rth(now: Optional[datetime] = None) -> bool:

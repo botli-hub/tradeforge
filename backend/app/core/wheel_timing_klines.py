@@ -114,6 +114,35 @@ def is_otm_put(strike: Any, spot: Any) -> bool:
     return k < s
 
 
+def near_otm_strike_bounds(
+    spot: float,
+    option_type: str,
+    *,
+    range_down: float,
+    range_up: float,
+    strike_min: Optional[float] = None,
+    strike_max: Optional[float] = None,
+    otm_only: bool = False,
+) -> Tuple[float, float]:
+    """现价附近的行权价窗口。otm_only 时 PUT 上沿≤现价、CALL 下沿≥现价,深度实值落在窗外。
+
+    窗口是闭区间;ATM 仍由 is_otm_put / is_otm_call 剔除(strike==spot 不算虚值)。
+    """
+    lo = float(spot) * (1.0 - float(range_down))
+    hi = float(spot) * (1.0 + float(range_up))
+    if strike_min is not None:
+        lo = max(lo, float(strike_min))
+    if strike_max is not None:
+        hi = min(hi, float(strike_max))
+    if otm_only:
+        side = str(option_type or "").strip().upper()
+        if side == "PUT":
+            hi = min(hi, float(spot))
+        elif side == "CALL":
+            lo = max(lo, float(spot))
+    return lo, hi
+
+
 def is_otm_call(strike: Any, spot_or_anchor: Any) -> bool:
     """Call 严格 OTM: strike > spot_or_anchor。
 
