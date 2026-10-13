@@ -70,9 +70,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "auto_scan_minutes": 30,
         # 仅美股 RTH 自动扫(周末/盘外不推 TG);手动 POST /wheel-scan 仍可 force
         "session_only": True,
-        # strike 扫描区间(相对标的现价):[spot×(1−down), spot×(1+up)]
+        # 触线只扫现价附近虚值,不扫深度实值、不扫整条链。
+        # 窗口 [spot×(1−down), spot×(1+up)],再按方向收到严格 OTM(PUT strike<spot / CALL strike>spot)。
         "strike_range_down": 0.20, "strike_range_up": 0.10,
-        # 每标的最多扫几个到期日(旧逻辑写死 3,周期权密时会漏掉 21–45 舒适区)
+        # 触线期权链到期日: near_weekly_monthly=近 weekly_weeks 周周权 + 近 monthly_months 张月权。
+        # dte_window=旧逻辑(标的 dte_min/max + max_expiries)。LEAPS 不读此键。
+        "expiry_mode": "near_weekly_monthly",
+        "weekly_weeks": 3,
+        "monthly_months": 3,
+        # 每标的最多扫几个到期日(仅 expiry_mode=dte_window;周期权密时避免漏掉 21–45 舒适区)
         "max_expiries": 6,
         # 优先覆盖标的核心 DTE(无 pad),再补 pad 外的近月/远月
         "prefer_core_dte": True,
@@ -222,11 +228,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "high_enter": 60.0,
         "high_exit": 55.0,
     },
+    # 触线扫描 + 缠论监控的排除名单。与 wheel_targets.enabled 解耦:
+    # 排除后仍是轮子目标(账本/UI/轮子/机会扫描),只是不进触线与缠论扫描。
+    # touch_exclude / chan_exclude 可分开;exclude 为两侧共用。
+    "monitor_universe": {
+        "exclude": [],
+        "touch_exclude": ["TSLL", "SPCH"],
+        "chan_exclude": ["TSLL", "SPCH"],
+    },
     # 缠论买卖点 Telegram(默认 30m/1d; 5m 可配但代码默认不含; enabled=false 关闭; 不自动下单)
     "chan_alerts": {
         "enabled": True,
         "timeframes": ["30m", "1d"],
-        "symbols": [],  # 空=启用 Wheel 标的
+        "symbols": [],  # 空=启用 Wheel 标的,再减去 monitor_universe.chan_exclude
         "poll_minutes_5m": 5,
         "poll_minutes_30m": 30,
         "poll_minutes_1d": 390,  # ~美股 RTH 一次

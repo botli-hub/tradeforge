@@ -99,10 +99,17 @@ def scan_call_touches(
             message=f"触线 · {symbol} CALL {call_tf} · 标的 {target_i}/{target_n}",
         )
         level_map = call_level_map(call_tf, wheel_timing=wt)
+        if str(getattr(monitor, "expiry_mode", "") or "") == "near_weekly_monthly":
+            dte_label = (
+                f"weekly≤{getattr(monitor, 'weekly_weeks', 3)}w"
+                f"+monthly×{getattr(monitor, 'monthly_months', 3)}"
+            )
+        else:
+            dte_label = f"{dte_lo}-{dte_hi}"
         rep = {
             "symbol": symbol, "side": "CALL",
             "timeframe": call_tf,
-            "dte": f"{dte_lo}-{dte_hi}",
+            "dte": dte_label,
             "core_dte": f"{core_lo}-{core_hi}",
             "holding": bool(holding),
         }

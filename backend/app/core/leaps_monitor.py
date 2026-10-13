@@ -20,7 +20,14 @@ import numpy as np
 import pandas as pd
 
 from app.data import leaps_repository as repo
-from app.core.wheel_expiries import pick_windowed_expiries, select_expiries  # noqa: F401
+from app.core.monitor_universe import touch_scan_targets
+from app.core.wheel_expiries import (  # noqa: F401
+    NEAR_WEEKLY_MONTHLY,
+    chain_scope_kwargs,
+    pick_windowed_expiries,
+    select_expiries,
+    select_near_term_expiries,
+)
 from app.core.wheel_timing_klines import (
     PUT_SCAN_TIMEFRAMES,
     TIMEFRAME_DAY,
@@ -29,6 +36,7 @@ from app.core.wheel_timing_klines import (
     ema_touch,
     futu_kl_names,
     is_tradeable_quote,
+    near_otm_strike_bounds,
     normalize_timeframe,
     resolve_scan_timeframe,
     snapshot_bar,
@@ -105,6 +113,8 @@ class WheelTimingMonitor:
     """Wheel 开仓时机扫描 —— 核心原则:期权合约价格受长期均线压制,
     合约价触及自身均线 EMA50(一级)或 EMA200(强)即为卖出时机。
     PUT / CALL 均扫 1h+1d(K_60M / K_DAY);档案按 timeframe 分桶。
+    标的宇宙 = wheel enabled 减去 monitor_universe.touch_exclude(不停用轮子)。
+    期权链默认只扫近 3 周周权 + 近 3 个月月权,且仅现价附近虚值。
 
     卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
       - 标的现价 > 接货底线价
@@ -154,6 +164,12 @@ class WheelTimingMonitor:
         # 标的级并行(默认 4,硬顶 8);OpenD 全局限频仍走 _throttle≈3.2s
         self.scan_max_workers = resolve_scan_max_workers(cfg.get("scan_max_workers"))
         self.monitor.scan_max_workers = self.scan_max_workers
+        # 触线期权链范围(与 LEAPS 的 DTE 窗分开;默认近 3 周周权 + 近 3 个月月权)
+        scope = chain_scope_kwargs(config)
+        self.expiry_mode = scope["expiry_mode"]
+        self.monitor.expiry_mode = scope["expiry_mode"]
+        self.monitor.weekly_weeks = scope["weekly_weeks"]
+        self.monitor.monthly_months = scope["monthly_months"]
 
     def _dte_window(self, target: Dict[str, Any]) -> Tuple[int, int]:
         """标的级 DTE 窗口(含 pad);align 时用标的设置 ± pad,否则用全局 wheel_timing。"""
@@ -197,6 +213,13 @@ class WheelTimingMonitor:
             cycles = wrepo.get_active_cycles(sym)
             dte_lo, dte_hi = self._dte_window(t)
             core_lo, core_hi = self._core_dte_window(t)
+            if getattr(self, "expiry_mode", None) == NEAR_WEEKLY_MONTHLY:
+                dte_label = (
+                    f"weekly≤{self.monitor.weekly_weeks}w"
+                    f"+monthly×{self.monitor.monthly_months}"
+                )
+            else:
+                dte_label = f"{dte_lo}-{dte_hi}"
 
             for put_tf in PUT_SCAN_TIMEFRAMES:
                 _prog(
@@ -207,7 +230,7 @@ class WheelTimingMonitor:
                 rep: Dict[str, Any] = {
                     "symbol": sym, "side": "PUT",
                     "timeframe": put_tf,
-                    "dte": f"{dte_lo}-{dte_hi}",
+                    "dte": dte_label,
                     "core_dte": f"{core_lo}-{core_hi}",
                 }
                 signals.extend(self.monitor.scan_symbol(
@@ -276,9 +299,16 @@ class WheelTimingMonitor:
             _upd(**kw)
 
         signals: List[LeapsSignal] = []
-        targets = [t for t in wrepo.get_targets() if t.get("enabled")]
+        # enabled 只表示轮子目标;触线宇宙再减去 monitor_universe.touch_exclude
+        targets = touch_scan_targets(wrepo.get_targets(), self.monitor.cfg)
         if symbol:
-            targets = [t for t in targets if t["symbol"] == symbol.upper()]
+            want = symbol.upper()
+            targets = [t for t in targets if str(t.get("symbol") or "").upper() == want]
+            if not targets:
+                logger.info(
+                    "wheel timing: %s 不在触线宇宙(未启用或 monitor_universe.touch_exclude)",
+                    want,
+                )
         n_targets = len(targets)
         _prog(
             phase="timing", target_n=n_targets, target_i=0,
@@ -465,6 +495,10 @@ class LeapsMonitor:
             self.sig_cfg.get("scan_max_workers")
             or (config.get("futu") or {}).get("scan_max_workers")
         )
+        # None = 按 DTE 窗选到期日(LEAPS)。Wheel 触线在 WheelTimingMonitor 里改成近端周/月权。
+        self.expiry_mode = None
+        self.weekly_weeks = 3
+        self.monthly_months = 3
 
     def scan_all(self, is_intraday: bool = False) -> List[LeapsSignal]:
         """标的级并行扫描 LEAPS 观察池;每标的复用 QuoteSession;限频全局共享。"""
@@ -659,6 +693,8 @@ class LeapsMonitor:
         rep["contracts"] = len(contracts)
         rep["expiries_scanned"] = fetch_meta.get("expiries_scanned") or []
         rep["expiries_skipped"] = fetch_meta.get("expiries_skipped") or []
+        rep["expiry_mode"] = fetch_meta.get("expiry_mode")
+        rep["expiry_kinds"] = fetch_meta.get("expiry_kinds") or {}
         rep["strike_lo"] = fetch_meta.get("strike_lo")
         rep["strike_hi"] = fetch_meta.get("strike_hi")
         total_all = len(contracts)
@@ -1011,55 +1047,92 @@ class LeapsMonitor:
                     ctx.close()
                 return contracts
 
-            eligible_expiries = []
+            parsed_rows = []
             for _, row in dates.iterrows():
                 exp_str = str(row.get("strike_time") or row.get("option_expiry_date_closes") or "")
                 exp_str = exp_str[:10]  # YYYY-MM-DD
                 try:
                     exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
                     dte = (exp_date - date.today()).days
-                    if dte >= eff_dte_min and (dte_max is None or dte <= dte_max):
-                        eligible_expiries.append((exp_str, dte))
                 except Exception:
                     continue
+                cycle = None
+                for col in ("expiration_cycle", "option_expiry_cycle", "expiry_cycle"):
+                    if col in getattr(row, "index", ()) and row.get(col) not in (None, ""):
+                        cycle = row.get(col)
+                        break
+                parsed_rows.append((exp_str, dte, cycle))
 
-            if not eligible_expiries:
-                errs.append("无 DTE 范围内的到期日")
+            mode = str(getattr(self, "expiry_mode", None) or "")
+            if mode == NEAR_WEEKLY_MONTHLY:
+                # 近端周/月权不走标的 dte_min/max(那会丢掉 <10 天周权和更远的第三张月权)。
+                # 同时强制只留现价附近虚值,不扫深度实值、不扫整条链。
+                otm_only = True
+                cycles: Dict[str, Any] = {}
+                for exp, _row_dte, cyc in parsed_rows:
+                    key = exp[:10]
+                    prev = cycles.get(key)
+                    if key not in cycles or (prev in (None, "") and cyc not in (None, "")):
+                        cycles[key] = cyc
+                selected, skipped = select_near_term_expiries(
+                    [exp for exp, _row_dte, _cyc in parsed_rows],
+                    cycles=cycles,
+                    today=date.today(),
+                    weekly_weeks=int(getattr(self, "weekly_weeks", 3) or 3),
+                    monthly_months=int(getattr(self, "monthly_months", 3) or 3),
+                )
+                exp_slice = [(e[0], e[1]) for e in selected]
+                exp_skipped = [(e[0], e[1]) for e in skipped]
+                meta["expiry_mode"] = NEAR_WEEKLY_MONTHLY
+                meta["expiry_kinds"] = {str(e[0])[:10]: e[2] for e in selected}
+                pool_n = len({p[0] for p in parsed_rows})
+            else:
+                eligible_expiries = [
+                    (exp, dte) for exp, dte, _cyc in parsed_rows
+                    if dte >= eff_dte_min and (dte_max is None or dte <= dte_max)
+                ]
+                exp_slice, exp_skipped = select_expiries(
+                    eligible_expiries,
+                    max_n=max_exp,
+                    core_dte_min=core_dte_min,
+                    core_dte_max=core_dte_max,
+                    prefer_core=prefer_core_dte,
+                )
+                meta["expiry_mode"] = "dte_window"
+                pool_n = len(eligible_expiries)
+
+            if not exp_slice:
+                errs.append(
+                    "无近端周权/月权到期日"
+                    if mode == NEAR_WEEKLY_MONTHLY
+                    else "无 DTE 范围内的到期日"
+                )
                 if owns_ctx:
                     ctx.close()
                 return contracts
 
-            strike_lo = underlying_price * (1 - (self.strike_range if range_down is None else range_down))
-            strike_hi = underlying_price * (1 + (self.strike_range if range_up is None else range_up))
-            if strike_min is not None:
-                strike_lo = max(strike_lo, strike_min)
-            if strike_max is not None:
-                strike_hi = min(strike_hi, strike_max)
-            # Wheel 触线:严格 OTM 收窄区间(ATM 仍靠下方 is_otm_* 剔除)
-            if otm_only:
-                if option_type == "PUT":
-                    strike_hi = min(strike_hi, float(underlying_price))
-                elif option_type == "CALL":
-                    strike_lo = max(strike_lo, float(underlying_price))
+            range_down_eff = self.strike_range if range_down is None else range_down
+            range_up_eff = self.strike_range if range_up is None else range_up
+            strike_lo, strike_hi = near_otm_strike_bounds(
+                float(underlying_price),
+                option_type,
+                range_down=range_down_eff,
+                range_up=range_up_eff,
+                strike_min=strike_min,
+                strike_max=strike_max,
+                otm_only=otm_only,
+            )
             meta["strike_lo"] = round(strike_lo, 2)
             meta["strike_hi"] = round(strike_hi, 2)
             meta["otm_only"] = bool(otm_only)
 
-            # 优先核心 DTE 带,最多 max_exp 个(默认 6;旧写死 3 会漏周度期权舒适区)
-            exp_slice, exp_skipped = select_expiries(
-                eligible_expiries,
-                max_n=max_exp,
-                core_dte_min=core_dte_min,
-                core_dte_max=core_dte_max,
-                prefer_core=prefer_core_dte,
-            )
             meta["expiries_scanned"] = [e[0] for e in exp_slice]
             meta["expiries_skipped"] = [e[0] for e in exp_skipped]
             if exp_skipped:
                 logger.info(
                     "%s: 到期日选取 %d/%d, 跳过 %s",
-                    symbol, len(exp_slice), len(eligible_expiries),
-                    ",".join(e[0] for e in exp_skipped[:8]),
+                    symbol, len(exp_slice), pool_n,
+                    ",".join(str(e[0]) for e in exp_skipped[:8]),
                 )
 
             futu_opt_type = futu.OptionType.CALL if option_type == "CALL" else futu.OptionType.PUT

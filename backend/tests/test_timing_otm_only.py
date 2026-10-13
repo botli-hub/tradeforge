@@ -14,6 +14,7 @@ from app.core.wheel_timing_klines import (  # noqa: E402
     call_strike_min,
     is_otm_call,
     is_otm_put,
+    near_otm_strike_bounds,
 )
 
 
@@ -63,6 +64,32 @@ def test_call_sell_above_floor_stacks_with_otm_vs_spot():
     # 无愿卖/成本时仅看 spot
     assert call_strike_min(None, None) is None
     assert is_otm_call(101, spot) is True
+
+
+def _in_near_otm_scan(strike: float, side: str, spot: float = 100.0) -> bool:
+    """触线链:现价附近窗口 ∩ 严格虚值。深度实值与远端整链都不进快照。"""
+    lo, hi = near_otm_strike_bounds(
+        spot, side, range_down=0.20, range_up=0.10, otm_only=True,
+    )
+    if strike < lo or strike > hi:
+        return False
+    if side == "PUT":
+        return is_otm_put(strike, spot)
+    return is_otm_call(strike, spot)
+
+
+def test_near_otm_window_drops_deep_itm_and_far_wing():
+    # Put: [80, 100) 虚值;Call: (100, 110]
+    assert _in_near_otm_scan(90, "PUT") is True
+    assert _in_near_otm_scan(80, "PUT") is True
+    assert _in_near_otm_scan(100, "PUT") is False  # ATM
+    assert _in_near_otm_scan(130, "PUT") is False  # 深度实值
+    assert _in_near_otm_scan(70, "PUT") is False  # 远端虚值,不是整条链
+    assert _in_near_otm_scan(105, "CALL") is True
+    assert _in_near_otm_scan(110, "CALL") is True
+    assert _in_near_otm_scan(100, "CALL") is False
+    assert _in_near_otm_scan(50, "CALL") is False  # 深度实值
+    assert _in_near_otm_scan(140, "CALL") is False
 
 
 def test_put_itm_atm_excluded_matrix():

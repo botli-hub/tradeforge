@@ -40,6 +40,7 @@ class BackendConfigIn(BaseModel):
     wheel_profiles: Optional[Dict[str, Any]] = None
     wheel_iv_regime: Optional[Dict[str, Any]] = None
     chan_alerts: Optional[Dict[str, Any]] = None
+    monitor_universe: Optional[Dict[str, Any]] = None
     sim_wheel: Optional[Dict[str, Any]] = None
     notion: Optional[Dict[str, Any]] = None
     google_sheets: Optional[Dict[str, Any]] = None
