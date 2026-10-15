@@ -739,7 +739,7 @@ def process_position_alerts(
 def scan_session_allows(mode: str = "eod", now: Optional[datetime] = None) -> bool:
     """机会推送是否在允许会话窗口。
 
-    always: 总是; rth: 美股盘中; eod: 收盘后约 2h 窗口(UTC 21–23 宽松)
+    always: 总是; rth: 美股 RTH(America/New_York 09:30–16:00); eod: 收盘后+周末
     """
     mode = (mode or "always").lower()
     if mode == "always":

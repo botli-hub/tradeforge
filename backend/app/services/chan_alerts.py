@@ -141,6 +141,7 @@ def resolve_universe(
 
 
 def is_us_rth(now: Optional[datetime] = None) -> bool:
+    """True 当且仅当美股 RTH(America/New_York 09:30–16:00,工作日)。"""
     try:
         from app.core.wheel_today import us_session_phase
         return us_session_phase(now) == "open"

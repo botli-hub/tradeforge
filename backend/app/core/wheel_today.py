@@ -50,37 +50,56 @@ def load_positions_cache(max_age_min: float = 120) -> Optional[Dict[str, Any]]:
         return None
 
 
-def us_session_phase(now: Optional[datetime] = None) -> str:
-    """粗分: pre | open | after | closed。按美东近似用本地−不足时用本地钟点启发式。
+# 美股权益交易日 / RTH。无 exchange_calendars 依赖时用 weekday + NY tz；
+# 节假日按普通工作日处理(半日市仍算同一交易日)。
+# 钟点是 America/New_York 墙上时间,由 zoneinfo 处理 EDT/EST,不用固定 UTC。
+_NY = ZoneInfo("America/New_York")
+_PRE_OPEN = time(4, 0)  # 美股盘前(常见 04:00 ET)
+_RTH_OPEN = time(9, 30)
+_RTH_CLOSE = time(16, 0)
+_AFTER_CLOSE = time(20, 0)  # 美股盘后至 20:00 ET
 
-    简化:本地 21:30–04:00 当 open(夏令常见),否则用配置或 closed。
-    更稳妥:用 weekday + UTC 小时判断美股 RTH。
+
+def _to_ny(now: Optional[datetime] = None) -> datetime:
+    """转到 America/New_York。None = 当前美东时间。
+
+    带 tz 的 datetime 按绝对时刻转换(UTC / 上海 / 美东均可)。
+    无 tz 的 datetime 按主机本地钟解释再转美东,这样 ``datetime.now()``
+    在 CST 主机上仍对应真实 NY session,而不会把 21:30 当成 ET 墙上时间。
+    单测请注入带 tz 的时刻。
     """
-    now = now or datetime.now()
-    # 用 UTC 判美东 RTH 约 14:30–21:00 UTC(夏) / 15:30–22:00(冬) — 取宽松 14–21
-    try:
-        utc = datetime.utcnow()
-    except Exception:
-        utc = now
-    if utc.weekday() >= 5:
+    if now is None:
+        return datetime.now(tz=_NY)
+    if now.tzinfo is None:
+        return now.astimezone(_NY)
+    return now.astimezone(_NY)
+
+
+def us_session_phase(now: Optional[datetime] = None) -> str:
+    """美股权益时段: pre | open | after | closed。
+
+    工作日 America/New_York 墙上时间(EDT/EST 由 zoneinfo 切换):
+    - pre:   04:00–09:30 ET
+    - open:  09:30–16:00 ET  (RTH; session_only / is_us_rth / scan rth)
+    - after: 16:00–20:00 ET
+    - closed: 其余,以及周末
+
+    不要用固定 UTC 14:30–21:00:那是冬令 EST 开盘,夏令 EDT 真实开盘是 13:30 UTC
+    (21:30 Asia/Shanghai)。``now`` 建议带 tz;无 tz 按主机本地钟转换。
+    """
+    now_ny = _to_ny(now)
+    if now_ny.weekday() >= 5:
         return "closed"
-    h, m = utc.hour, utc.minute
-    mins = h * 60 + m
-    # 预:13:00–14:30 UTC; 盘中 14:30–21:00; 盘后 21:00–01:00
-    if 13 * 60 <= mins < 14 * 60 + 30:
+    clock = now_ny.timetz().replace(tzinfo=None, microsecond=0)
+    if clock < _PRE_OPEN:
+        return "closed"
+    if clock < _RTH_OPEN:
         return "pre"
-    if 14 * 60 + 30 <= mins < 21 * 60:
+    if clock < _RTH_CLOSE:
         return "open"
-    if 21 * 60 <= mins or mins < 2 * 60:
+    if clock < _AFTER_CLOSE:
         return "after"
     return "closed"
-
-
-
-# 美股权益交易日(信号桶冷却用)。无 exchange_calendars 依赖时用 weekday + NY tz；
-# 节假日按普通工作日处理(半日市仍算同一交易日)。
-_NY = ZoneInfo("America/New_York")
-_RTH_OPEN = time(9, 30)
 
 
 def _prev_weekday(d: date) -> date:
