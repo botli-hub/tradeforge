@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from app.core.wheel_expiries import DEFAULT_MONTHLY_MONTHS, DEFAULT_WEEKLY_WEEKS
 from app.core.wheel_timing_klines import (
     CALL_SCAN_TIMEFRAMES,
     TIMEFRAME_HOUR,
@@ -101,8 +102,8 @@ def scan_call_touches(
         level_map = call_level_map(call_tf, wheel_timing=wt)
         if str(getattr(monitor, "expiry_mode", "") or "") == "near_weekly_monthly":
             dte_label = (
-                f"weekly≤{getattr(monitor, 'weekly_weeks', 3)}w"
-                f"+monthly×{getattr(monitor, 'monthly_months', 3)}"
+                f"weekly≤{getattr(monitor, 'weekly_weeks', DEFAULT_WEEKLY_WEEKS)}w"
+                f"+monthly×{getattr(monitor, 'monthly_months', DEFAULT_MONTHLY_MONTHS)}"
             )
         else:
             dte_label = f"{dte_lo}-{dte_hi}"

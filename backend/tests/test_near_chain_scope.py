@@ -1,4 +1,4 @@
-"""触线拉链:近 3 周周权 + 近 3 个月月权,且只快照现价附近虚值。"""
+"""触线拉链:近 4 周周五周权 + 近 3 个月月权,且只快照现价附近虚值。"""
 from __future__ import annotations
 
 import sys
@@ -26,6 +26,8 @@ def test_fetch_scans_near_weeklies_monthlies_and_near_otm_only():
         if d.weekday() == 4:
             kind = "MONTH" if 15 <= d.day <= 21 else "WEEK"
             rows.append((d.isoformat(), kind))
+        elif d.weekday() in (0, 2):
+            rows.append((d.isoformat(), "WEEK"))
         d += timedelta(days=1)
     # 明确的远月 LEAP,即使标成月权也不进近 3 个月
     leap = today + timedelta(days=200)
@@ -34,11 +36,12 @@ def test_fetch_scans_near_weeklies_monthlies_and_near_otm_only():
     expirations = [r[0] for r in rows]
     cycles = {r[0]: r[1] for r in rows}
     expected, _skipped = select_near_term_expiries(
-        expirations, today=today, cycles=cycles, weekly_weeks=3, monthly_months=3,
+        expirations, today=today, cycles=cycles, weekly_weeks=4, monthly_months=3,
     )
     expected_dates = [str(e[0])[:10] for e in expected]
     assert expected_dates, "fixture should yield at least one near expiry"
-    assert all(e[1] <= 21 for e in expected if e[2] == "weekly")
+    assert all(e[1] <= 28 for e in expected if e[2] == "weekly")
+    assert all(date.fromisoformat(str(e[0])[:10]).weekday() == 4 for e in expected)
     assert sum(1 for e in expected if e[2] == "monthly") <= 3
     assert leap.isoformat() not in expected_dates
 
@@ -92,7 +95,7 @@ def test_fetch_scans_near_weeklies_monthlies_and_near_otm_only():
         "signal": {"contract_max_per_symbol": 0, "strike_range_pct": 0.20},
     })
     mon.expiry_mode = "near_weekly_monthly"
-    mon.weekly_weeks = 3
+    mon.weekly_weeks = 4
     mon.monthly_months = 3
 
     with patch("app.core.leaps_monitor._throttle", lambda *a, **k: None):

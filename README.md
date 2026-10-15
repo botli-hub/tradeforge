@@ -48,7 +48,7 @@
 轮子列表 **平仓 / 管理** → 先开**决策弹窗**（接货/买回/Roll 三列数字），再决定登记。点差过宽不能按 ask 宣称止盈。
 
 ### 机会流
-- **触线时机**：Put 合约日K / Call 合约 1h 穿 EMA50/200；Call 发现以此为准
+- **触线时机**：Put 合约日K / Call 合约 1h 穿 EMA50/200；Call 发现以此为准。到期日默认 `wheel_timing.expiry_mode=near_weekly_monthly`：未来约 `weekly_weeks=4` 周的**周五**周权 + 最近 `monthly_months=3` 张标准月权（不含 Mon/Wed 周期权）
 - **全池高分扫描**：年化 × 流动性 × 趋势 × 财报 × IV × POP 等
 - 统一机会流：双轨对齐、档位（优先/可排/观察）、组合闸门
 

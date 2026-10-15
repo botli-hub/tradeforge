@@ -1,6 +1,6 @@
 """到期日选取:核心 DTE 优先,覆盖 21–45 舒适区。
 
-触线扫描另有近端范围:约 3 周周权 + 约 3 个月月权。
+触线扫描另有近端范围:约 4 周周五周权 + 约 3 个月月权(不含 Mon/Wed 周期权)。
 从 leaps_monitor 抽出,避免测试/建议扫描依赖 OpenD/pandas。
 """
 from __future__ import annotations
@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 # 触线期权链:近端周权 + 近端月权。LEAPS / 旧 DTE 窗走 dte_window。
 NEAR_WEEKLY_MONTHLY = "near_weekly_monthly"
 DTE_WINDOW = "dte_window"
+DEFAULT_WEEKLY_WEEKS = 4
+DEFAULT_MONTHLY_MONTHS = 3
+WEEKLY_WEEKDAY = 4  # Friday; Python weekday() Mon=0. Mon/Wed weeklies are not scanned.
 
 
 def select_expiries(
@@ -139,24 +142,25 @@ def select_near_term_expiries(
     *,
     today: Optional[date] = None,
     cycles: Optional[Mapping[str, Any]] = None,
-    weekly_weeks: int = 3,
-    monthly_months: int = 3,
+    weekly_weeks: int = DEFAULT_WEEKLY_WEEKS,
+    monthly_months: int = DEFAULT_MONTHLY_MONTHS,
     min_dte: int = 1,
 ) -> Tuple[List[Tuple[Any, int, str]], List[Tuple[Any, int, str]]]:
-    """触线扫描到期日:近 weekly_weeks 周的周权 + 近 monthly_months 张月权。
+    """触线扫描到期日:近 weekly_weeks 周的周五周权 + 近 monthly_months 张月权。
 
-    月权不重复计入周权。返回 (selected, skipped),元素为 (raw, dte, kind)。
+    周权只收周五到期(排除 Mon/Wed 周期权)。月权不重复计入周权。
+    返回 (selected, skipped),元素为 (raw, dte, kind)。
     月权 DTE 上限约为 monthly_months 个日历月(31*N+7),避免把 LEAP 误当近月。
     """
     today = today or date.today()
-    weeks = max(1, int(weekly_weeks or 3))
-    months = max(1, int(monthly_months or 3))
+    weeks = max(1, int(weekly_weeks or DEFAULT_WEEKLY_WEEKS))
+    months = max(1, int(monthly_months or DEFAULT_MONTHLY_MONTHS))
     weekly_hi = weeks * 7
     monthly_hi = months * 31 + 7
     floor = max(0, int(min_dte))
     cycles = cycles or {}
 
-    parsed: List[Tuple[Any, int, str, str]] = []
+    parsed: List[Tuple[Any, int, str, str, date]] = []
     seen = set()
     for exp in expirations or []:
         exp_date = _expiry_date(exp)
@@ -173,12 +177,15 @@ def select_near_term_expiries(
         if cycle is None:
             cycle = cycles.get(str(exp)[:10])
         kind = classify_expiry_cycle(cycle, exp_date)
-        parsed.append((exp, dte, kind, label))
+        parsed.append((exp, dte, kind, label, exp_date))
 
-    weeklies = [p for p in parsed if p[2] == "weekly" and p[1] <= weekly_hi]
+    weeklies = [
+        p for p in parsed
+        if p[2] == "weekly" and p[1] <= weekly_hi and p[4].weekday() == WEEKLY_WEEKDAY
+    ]
     monthlies = [p for p in parsed if p[2] == "monthly" and p[1] <= monthly_hi]
     monthlies = sorted(monthlies, key=lambda p: p[1])[:months]
-    chosen = {(p[3]) for p in weeklies} | {p[3] for p in monthlies}
+    chosen = {p[3] for p in weeklies} | {p[3] for p in monthlies}
     selected = [(p[0], p[1], p[2]) for p in sorted(weeklies + monthlies, key=lambda p: p[1])]
     skipped = [(p[0], p[1], p[2]) for p in parsed if p[3] not in chosen]
     skipped.sort(key=lambda p: p[1])
@@ -186,7 +193,7 @@ def select_near_term_expiries(
 
 
 def chain_scope_kwargs(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """从 wheel_timing 读触线期权链范围。缺省=近 3 周周权 + 近 3 个月月权。"""
+    """从 wheel_timing 读触线期权链范围。缺省=近 4 周周五周权 + 近 3 个月月权。"""
     wt = {}
     if isinstance(cfg, dict):
         raw = cfg.get("wheel_timing") or {}
@@ -194,13 +201,13 @@ def chain_scope_kwargs(cfg: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             wt = raw
     mode = str(wt.get("expiry_mode") or NEAR_WEEKLY_MONTHLY).strip() or NEAR_WEEKLY_MONTHLY
     try:
-        weeks = int(wt["weekly_weeks"]) if wt.get("weekly_weeks") is not None else 3
+        weeks = int(wt["weekly_weeks"]) if wt.get("weekly_weeks") is not None else DEFAULT_WEEKLY_WEEKS
     except (TypeError, ValueError):
-        weeks = 3
+        weeks = DEFAULT_WEEKLY_WEEKS
     try:
-        months = int(wt["monthly_months"]) if wt.get("monthly_months") is not None else 3
+        months = int(wt["monthly_months"]) if wt.get("monthly_months") is not None else DEFAULT_MONTHLY_MONTHS
     except (TypeError, ValueError):
-        months = 3
+        months = DEFAULT_MONTHLY_MONTHS
     return {
         "expiry_mode": mode,
         "weekly_weeks": max(1, weeks),

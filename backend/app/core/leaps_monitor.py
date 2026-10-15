@@ -22,6 +22,8 @@ import pandas as pd
 from app.data import leaps_repository as repo
 from app.core.monitor_universe import touch_scan_targets
 from app.core.wheel_expiries import (  # noqa: F401
+    DEFAULT_MONTHLY_MONTHS,
+    DEFAULT_WEEKLY_WEEKS,
     NEAR_WEEKLY_MONTHLY,
     chain_scope_kwargs,
     pick_windowed_expiries,
@@ -114,7 +116,7 @@ class WheelTimingMonitor:
     合约价触及自身均线 EMA50(一级)或 EMA200(强)即为卖出时机。
     PUT / CALL 均扫 1h+1d(K_60M / K_DAY);档案按 timeframe 分桶。
     标的宇宙 = wheel enabled 减去 monitor_universe.touch_exclude(不停用轮子)。
-    期权链默认只扫近 3 周周权 + 近 3 个月月权,且仅现价附近虚值。
+    期权链默认只扫近 4 周周五周权 + 近 3 个月月权,且仅现价附近虚值。
 
     卖 Put 时机(标的可开新轮:无活跃轮或有 IDLE 轮):
       - 标的现价 > 接货底线价
@@ -164,7 +166,7 @@ class WheelTimingMonitor:
         # 标的级并行(默认 4,硬顶 8);OpenD 全局限频仍走 _throttle≈3.2s
         self.scan_max_workers = resolve_scan_max_workers(cfg.get("scan_max_workers"))
         self.monitor.scan_max_workers = self.scan_max_workers
-        # 触线期权链范围(与 LEAPS 的 DTE 窗分开;默认近 3 周周权 + 近 3 个月月权)
+        # 触线期权链范围(与 LEAPS 的 DTE 窗分开;默认近 4 周周五周权 + 近 3 个月月权)
         scope = chain_scope_kwargs(config)
         self.expiry_mode = scope["expiry_mode"]
         self.monitor.expiry_mode = scope["expiry_mode"]
@@ -497,8 +499,8 @@ class LeapsMonitor:
         )
         # None = 按 DTE 窗选到期日(LEAPS)。Wheel 触线在 WheelTimingMonitor 里改成近端周/月权。
         self.expiry_mode = None
-        self.weekly_weeks = 3
-        self.monthly_months = 3
+        self.weekly_weeks = DEFAULT_WEEKLY_WEEKS
+        self.monthly_months = DEFAULT_MONTHLY_MONTHS
 
     def scan_all(self, is_intraday: bool = False) -> List[LeapsSignal]:
         """标的级并行扫描 LEAPS 观察池;每标的复用 QuoteSession;限频全局共享。"""
@@ -1078,8 +1080,8 @@ class LeapsMonitor:
                     [exp for exp, _row_dte, _cyc in parsed_rows],
                     cycles=cycles,
                     today=date.today(),
-                    weekly_weeks=int(getattr(self, "weekly_weeks", 3) or 3),
-                    monthly_months=int(getattr(self, "monthly_months", 3) or 3),
+                    weekly_weeks=int(getattr(self, "weekly_weeks", DEFAULT_WEEKLY_WEEKS) or DEFAULT_WEEKLY_WEEKS),
+                    monthly_months=int(getattr(self, "monthly_months", DEFAULT_MONTHLY_MONTHS) or DEFAULT_MONTHLY_MONTHS),
                 )
                 exp_slice = [(e[0], e[1]) for e in selected]
                 exp_skipped = [(e[0], e[1]) for e in skipped]
