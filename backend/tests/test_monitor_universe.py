@@ -29,7 +29,7 @@ def test_default_excludes_tsll_spch_from_touch_and_chan():
     assert monitor_exclude(DEFAULT_CONFIG, "touch") == ["TSLL", "SPCH"]
     assert monitor_exclude(DEFAULT_CONFIG, "chan") == ["TSLL", "SPCH"]
     assert DEFAULT_CONFIG["wheel_timing"]["expiry_mode"] == "near_weekly_monthly"
-    assert DEFAULT_CONFIG["wheel_timing"]["weekly_weeks"] == 3
+    assert DEFAULT_CONFIG["wheel_timing"]["weekly_weeks"] == 4
     assert DEFAULT_CONFIG["wheel_timing"]["monthly_months"] == 3
 
 
@@ -91,7 +91,7 @@ def test_scan_all_skips_excluded_keeps_other_enabled():
 
     wt = WheelTimingMonitor(DEFAULT_CONFIG)
     assert wt.monitor.expiry_mode == "near_weekly_monthly"
-    assert wt.monitor.weekly_weeks == 3
+    assert wt.monitor.weekly_weeks == 4
     assert wt.monitor.monthly_months == 3
     seen = []
 

@@ -133,25 +133,32 @@ def _fridays(start: date, days: int):
     return out
 
 
-def test_near_term_three_weeks_weekly_and_three_monthlies():
-    """2026-10-13(周二): 3 周内周权 + 接下来 3 张月权;更远周权与第 4 张月权不扫。"""
+def test_near_term_friday_weeklies_four_weeks_and_three_monthlies():
+    """2026-10-13(周二): 4 周内周五周权 + 接下来 3 张月权;Mon/Wed 与更远到期不扫。"""
     today = date(2026, 10, 13)
     assert today.weekday() == 1
-    expirations = _fridays(today, 120)
-    sel, skip = select_near_term_expiries(expirations, today=today, weekly_weeks=3, monthly_months=3)
+    midweek = ["2026-10-19", "2026-10-21", "2026-10-26", "2026-10-28"]
+    expirations = sorted(set(_fridays(today, 120) + midweek))
+    sel, skip = select_near_term_expiries(expirations, today=today)
     chosen = {str(e[0])[:10]: e[2] for e in sel}
     # 10-16 是第三个周五 → 月权,不占周权名额
     assert chosen["2026-10-16"] == "monthly"
     assert chosen["2026-10-23"] == "weekly"
     assert chosen["2026-10-30"] == "weekly"
+    assert chosen["2026-11-06"] == "weekly"  # 第 4 周周五
     assert chosen["2026-11-20"] == "monthly"
     assert chosen["2026-12-18"] == "monthly"
-    assert "2026-11-06" not in chosen  # 第 4 周周权
+    assert "2026-11-13" not in chosen  # 第 5 周周五
     assert "2027-01-15" not in chosen  # 第 4 张月权
+    for d in midweek:
+        assert d not in chosen
     skipped = {str(e[0])[:10] for e in skip}
-    assert "2026-11-06" in skipped
+    assert "2026-11-13" in skipped
     assert "2027-01-15" in skipped
-    assert all(e[1] <= 21 for e in sel if e[2] == "weekly")
+    for d in midweek:
+        assert d in skipped
+    assert all(e[1] <= 28 for e in sel if e[2] == "weekly")
+    assert all(date.fromisoformat(str(e[0])[:10]).weekday() == 4 for e in sel if e[2] == "weekly")
     assert sum(1 for e in sel if e[2] == "monthly") == 3
 
 
@@ -162,8 +169,6 @@ def test_cycle_overrides_third_friday_heuristic():
         expirations,
         today=today,
         cycles={"2026-10-16": "ExpirationCycle.WEEK"},
-        weekly_weeks=3,
-        monthly_months=3,
     )
     kinds = {str(e[0])[:10]: e[2] for e in sel}
     assert kinds["2026-10-16"] == "weekly"
@@ -173,7 +178,7 @@ def test_cycle_overrides_third_friday_heuristic():
 
 def test_chain_scope_defaults_and_dte_window_override():
     scope = chain_scope_kwargs({})
-    assert scope == {"expiry_mode": "near_weekly_monthly", "weekly_weeks": 3, "monthly_months": 3}
+    assert scope == {"expiry_mode": "near_weekly_monthly", "weekly_weeks": 4, "monthly_months": 3}
     override = chain_scope_kwargs({
         "wheel_timing": {"expiry_mode": "dte_window", "weekly_weeks": 2, "monthly_months": "4"},
     })

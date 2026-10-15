@@ -73,10 +73,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # 触线只扫现价附近虚值,不扫深度实值、不扫整条链。
         # 窗口 [spot×(1−down), spot×(1+up)],再按方向收到严格 OTM(PUT strike<spot / CALL strike>spot)。
         "strike_range_down": 0.20, "strike_range_up": 0.10,
-        # 触线期权链到期日: near_weekly_monthly=近 weekly_weeks 周周权 + 近 monthly_months 张月权。
+        # 触线期权链到期日: near_weekly_monthly=近 weekly_weeks 周的周五周权
+        # + 近 monthly_months 张标准月权(第三个周五)。不含 Mon/Wed 周期权。
         # dte_window=旧逻辑(标的 dte_min/max + max_expiries)。LEAPS 不读此键。
         "expiry_mode": "near_weekly_monthly",
-        "weekly_weeks": 3,
+        "weekly_weeks": 4,
         "monthly_months": 3,
         # 每标的最多扫几个到期日(仅 expiry_mode=dte_window;周期权密时避免漏掉 21–45 舒适区)
         "max_expiries": 6,
